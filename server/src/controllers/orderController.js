@@ -12,7 +12,11 @@ export async function receiveOrder(req, res) {
       return res.status(400).json({ error: 'Invalid payload: header.orderNo and lines[] required' });
     }
 
-    await Order.upsert(req.companyId, header, lines);
+    const inserted = await Order.upsert(req.companyId, header, lines);
+    if (!inserted) {
+      logger.info('Order already exists — skipped', { company: req.companyId, orderNo: header.orderNo });
+      return res.status(200).json({ message: 'Order already exists', orderNo: header.orderNo });
+    }
     await Order.audit(req.companyId, 'OrderReceived', header.orderNo, 'Order', 'BC', 'Business Central', { lineCount: lines.length });
 
     logger.info('Order received from BC', { company: req.companyId, orderNo: header.orderNo });

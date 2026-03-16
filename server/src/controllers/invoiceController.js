@@ -8,7 +8,7 @@ import logger from '../services/logger.js';
 /** POST /api/webhook/invoices  – called by Business Central with ETIMS data */
 export async function receiveInvoice(req, res) {
   try {
-    const { orderNo, invoiceNo, invoicedAt, etimsInvoiceNo, etimsData, qrcodeUrl, lines } = req.body;
+    const { orderNo, invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId, etimsInvoiceNo, etimsData, qrcodeUrl, lines } = req.body;
     if (!invoiceNo || !invoicedAt) {
       return res.status(400).json({ error: 'invoiceNo and invoicedAt are required' });
     }
@@ -16,7 +16,8 @@ export async function receiveInvoice(req, res) {
     if (orderNo) {
       // Move order to invoice (deduplication: order leaves SalesHeader)
       await Order.moveToInvoice(req.companyId, orderNo, {
-        invoiceNo, invoicedAt, etimsInvoiceNo, etimsData, qrcodeUrl,
+        invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
+        etimsInvoiceNo, etimsData, qrcodeUrl,
       });
       await Invoice.audit(req.companyId, 'InvoiceReceived', invoiceNo, 'Invoice', 'BC', 'Business Central', {
         orderNo, etimsInvoiceNo,

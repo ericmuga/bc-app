@@ -143,15 +143,18 @@ async function seedCompany(companyId) {
     const orderDate = daysAgo(rand(1, 90));
     const orderNo   = nextOrderNo(prefix);
 
+    const bcUser = pick(USERS);
     const header = {
       orderNo,
-      customerNo:      customer.no,
-      customerName:    customer.name,
-      salespersonCode: pick(SALESPERSONS),
-      routeCode:       pick(ROUTES),
-      sectorCode:      pick(SECTORS),
-      orderDate:       isoDate(orderDate),
-      postingDate:     null,
+      customerNo:       customer.no,
+      customerName:     customer.name,
+      salespersonCode:  pick(SALESPERSONS),
+      routeCode:        pick(ROUTES),
+      sectorCode:       pick(SECTORS),
+      orderDate:        isoDate(orderDate),
+      postingDate:      null,
+      printingDatetime: new Date(orderDate.getTime() + rand(0, 30) * 60000).toISOString(),
+      bcUserId:         bcUser.id,
     };
     const lines = buildLines(orderNo);
 
@@ -189,11 +192,16 @@ async function seedCompany(companyId) {
       ? `https://etims.kra.go.ke/common/link/etims/receipt/indexEtimsReceiptData?Data=${randAlphaNum(40)}`
       : null;
 
+    const invPrintDatetime = new Date(invoicedAt.getTime() + rand(0, 15) * 60000);
+
     await Order.moveToInvoice(companyId, orderNo, {
       invoiceNo,
-      invoicedAt:     invoicedAt.toISOString(),
-      etimsInvoiceNo: etimsNo,
-      etimsData:      hasETIMS ? { cu: `CU${rand(1000,9999)}`, vscu: `VSCU${rand(100,999)}` } : null,
+      invoicedAt:       invoicedAt.toISOString(),
+      postingDate:      isoDate(invoicedAt),
+      printingDatetime: invPrintDatetime.toISOString(),
+      bcUserId:         header.bcUserId,
+      etimsInvoiceNo:   etimsNo,
+      etimsData:        hasETIMS ? { cu: `CU${rand(1000,9999)}`, vscu: `VSCU${rand(100,999)}` } : null,
       qrcodeUrl,
     });
     await Invoice.audit(companyId, 'INVOICE_CREATED', invoiceNo, 'Invoice', SYSTEM_USER.id, SYSTEM_USER.name, { originalOrderNo: orderNo });

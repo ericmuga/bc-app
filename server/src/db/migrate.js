@@ -107,14 +107,27 @@ async function migrate(companyId) {
       [SalespersonCode] NVARCHAR(20)     NULL,
       [RouteCode]       NVARCHAR(20)     NULL,
       [SectorCode]      NVARCHAR(20)     NULL,
-      [OrderDate]       DATE             NOT NULL,
-      [PostingDate]     DATE             NULL,
-      [Status]          NVARCHAR(20)     NOT NULL DEFAULT 'Open',
-      [ConfirmedAt]     DATETIME2        NULL,
-      [ConfirmedBy]     NVARCHAR(100)    NULL,
-      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
-      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+      [OrderDate]        DATE             NOT NULL,
+      [PostingDate]      DATE             NULL,
+      [PrintingDatetime] DATETIME2        NULL,
+      [BCUserId]         NVARCHAR(100)    NULL,
+      [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'Open',
+      [ConfirmedAt]      DATETIME2        NULL,
+      [ConfirmedBy]      NVARCHAR(100)    NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
+  `);
+  // Upgrade guards for existing SalesHeader tables
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[${s}].[SalesHeader]') AND name='PrintingDatetime')
+      ALTER TABLE [${s}].[SalesHeader] ADD [PrintingDatetime] DATETIME2 NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[${s}].[SalesHeader]') AND name='BCUserId')
+      ALTER TABLE [${s}].[SalesHeader] ADD [BCUserId] NVARCHAR(100) NULL
   `);
   console.log(`  [${s}].[SalesHeader] OK`);
 
@@ -157,23 +170,36 @@ async function migrate(companyId) {
       [SectorCode]      NVARCHAR(20)     NULL,
       [OrderDate]       DATE             NOT NULL,
       [PostingDate]     DATE             NULL,
-      [InvoicedAt]      DATETIME2        NOT NULL,
-      [ETIMSInvoiceNo]  NVARCHAR(60)     NULL,
-      [ETIMSData]       NVARCHAR(MAX)    NULL,
-      [QRCodeUrl]       NVARCHAR(500)    NULL,
-      [Status]          NVARCHAR(20)     NOT NULL DEFAULT 'Invoiced',
-      [ConfirmedAt]     DATETIME2        NULL,
-      [ConfirmedBy]     NVARCHAR(100)    NULL,
-      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
-      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+      [InvoicedAt]       DATETIME2        NOT NULL,
+      [PrintingDatetime] DATETIME2        NULL,
+      [BCUserId]         NVARCHAR(100)    NULL,
+      [ETIMSInvoiceNo]   NVARCHAR(60)     NULL,
+      [ETIMSData]        NVARCHAR(MAX)    NULL,
+      [QRCodeUrl]        NVARCHAR(500)    NULL,
+      [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'Invoiced',
+      [ConfirmedAt]      DATETIME2        NULL,
+      [ConfirmedBy]      NVARCHAR(100)    NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
-  console.log(`  [${s}].[InvoiceHeader] OK`);
+  // Upgrade guards for existing InvoiceHeader tables
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.columns
                    WHERE object_id=OBJECT_ID('[${s}].[InvoiceHeader]') AND name='QRCodeUrl')
       ALTER TABLE [${s}].[InvoiceHeader] ADD [QRCodeUrl] NVARCHAR(500) NULL
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[${s}].[InvoiceHeader]') AND name='PrintingDatetime')
+      ALTER TABLE [${s}].[InvoiceHeader] ADD [PrintingDatetime] DATETIME2 NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[${s}].[InvoiceHeader]') AND name='BCUserId')
+      ALTER TABLE [${s}].[InvoiceHeader] ADD [BCUserId] NVARCHAR(100) NULL
+  `);
+  console.log(`  [${s}].[InvoiceHeader] OK`);
 
   // ── [s].[InvoiceLine] ─────────────────────────────────────────────────────
   await run(`
