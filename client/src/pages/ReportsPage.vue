@@ -1,0 +1,446 @@
+<template>
+  <div class="page">
+    <div class="page-header flex justify-between items-center">
+      <div>
+        <h2 class="page-title">Reports</h2>
+        <p class="text-muted text-sm">Confirmed order &amp; invoice summaries with drill-down</p>
+      </div>
+    </div>
+
+    <!-- Controls bar -->
+    <div class="bc-card controls-bar">
+      <!-- Source toggle -->
+      <div class="source-toggle">
+        <button
+          class="toggle-btn" :class="{ active: source === 'orders' }"
+          @click="source = 'orders'; load()"
+        >Orders</button>
+        <button
+          class="toggle-btn" :class="{ active: source === 'invoices' }"
+          @click="source = 'invoices'; load()"
+        >Invoices</button>
+      </div>
+
+      <Select
+        v-model="groupBy"
+        :options="groupOptions"
+        option-label="label"
+        option-value="value"
+        style="width:200px"
+        @change="load"
+      />
+
+      <DatePicker v-model="dateFrom" placeholder="From" date-format="yy-mm-dd" show-icon @date-select="load" />
+      <DatePicker v-model="dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon @date-select="load" />
+
+      <Button label="Run" icon="pi pi-play" @click="load" :loading="loading" />
+      <Button label="Clear" icon="pi pi-times" text @click="clearFilters" />
+    </div>
+
+    <!-- KPI strip -->
+    <div class="kpi-strip" v-if="rows.length">
+      <div class="kpi-card">
+        <span class="kpi-label">Groups</span>
+        <span class="kpi-val mono">{{ rows.length }}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Documents</span>
+        <span class="kpi-val mono">{{ totalDocs }}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Total Qty</span>
+        <span class="kpi-val mono">{{ fmt(totalQty) }}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Total Qty Base</span>
+        <span class="kpi-val mono">{{ fmt(totalQtyBase) }}</span>
+      </div>
+      <div class="kpi-card highlight">
+        <span class="kpi-label">Total Amount</span>
+        <span class="kpi-val mono">{{ fmtCurrency(totalAmount) }}</span>
+      </div>
+    </div>
+
+    <!-- Summary table -->
+    <div class="bc-card mt-4" style="padding:0;overflow:hidden" v-if="rows.length || loading">
+      <DataTable
+        :value="rows"
+        :loading="loading"
+        dataKey="GroupKey"
+        row-hover
+        sort-field="TotalLineAmount"
+        :sort-order="-1"
+        class="summary-table"
+      >
+        <template #empty>
+          <div class="table-empty">No data — adjust filters and click Run</div>
+        </template>
+
+        <Column field="GroupKey" :header="groupLabel" sortable>
+          <template #body="{ data }">
+            <span class="group-key">{{ data.GroupKey || '(blank)' }}</span>
+          </template>
+        </Column>
+
+        <Column field="DocumentCount" header="Docs" sortable style="width:80px;text-align:right">
+          <template #body="{ data }">
+            <span class="mono">{{ data.DocumentCount }}</span>
+          </template>
+        </Column>
+
+        <Column field="TotalQuantity" header="Total Qty" sortable style="width:120px;text-align:right">
+          <template #body="{ data }">
+            <span class="mono">{{ fmt(data.TotalQuantity) }}</span>
+          </template>
+        </Column>
+
+        <Column field="TotalQuantityBase" header="Qty Base" sortable style="width:120px;text-align:right">
+          <template #body="{ data }">
+            <span class="mono">{{ fmt(data.TotalQuantityBase) }}</span>
+          </template>
+        </Column>
+
+        <Column field="TotalLineAmount" header="Amount" sortable style="width:160px;text-align:right">
+          <template #body="{ data }">
+            <span class="mono amount">{{ fmtCurrency(data.TotalLineAmount) }}</span>
+          </template>
+        </Column>
+
+        <!-- Amount bar -->
+        <Column header="" style="width:140px">
+          <template #body="{ data }">
+            <div class="amount-bar-wrap">
+              <div
+                class="amount-bar"
+                :style="{ width: pct(data.TotalLineAmount) + '%' }"
+              />
+            </div>
+          </template>
+        </Column>
+
+        <!-- Drill-down -->
+        <Column header="" style="width:110px">
+          <template #body="{ data }">
+            <Button
+              label="Show lines"
+              icon="pi pi-chevron-right"
+              text size="small"
+              @click="drillDown(data.GroupKey)"
+            />
+          </template>
+        </Column>
+      </DataTable>
+    </div>
+
+    <!-- Empty state -->
+    <div v-else class="bc-card mt-4 empty-state">
+      <i class="pi pi-chart-bar" style="font-size:40px;color:var(--bc-text-muted)" />
+      <p>Select filters and click <strong>Run</strong> to generate a report.</p>
+    </div>
+
+    <!-- Drill-down drawer: all documents for the selected group -->
+    <Drawer
+      v-model:visible="drawerVisible"
+      position="right"
+      style="width:740px"
+      :header="`${groupLabel}: ${selectedGroup}`"
+    >
+      <div class="drawer-controls">
+        <span class="text-muted text-sm">{{ drawerRows.length }} document(s)</span>
+      </div>
+
+      <DataTable
+        :value="drawerRows"
+        :loading="drawerLoading"
+        :dataKey="docNoField"
+        size="small"
+        row-hover
+        class="drawer-table"
+      >
+        <template #empty><div class="table-empty">No documents</div></template>
+
+        <Column :field="docNoField" :header="source === 'orders' ? 'Order No' : 'Invoice No'" style="width:150px">
+          <template #body="{ data }">
+            <span class="mono link" @click="openScan(data)">{{ data[docNoField] }}</span>
+          </template>
+        </Column>
+        <Column field="CustomerName"  header="Customer" />
+        <Column field="OrderDate"     header="Date"        style="width:100px">
+          <template #body="{ data }">{{ fmtDay(data.OrderDate) }}</template>
+        </Column>
+        <Column field="Status"        header="Status"      style="width:110px">
+          <template #body="{ data }"><StatusBadge :status="data.Status" /></template>
+        </Column>
+
+        <!-- Expand lines inline -->
+        <Column header="" style="width:90px">
+          <template #body="{ data }">
+            <Button
+              icon="pi pi-list"
+              text size="small"
+              @click="loadLines(data[docNoField])"
+              v-tooltip="'View lines'"
+            />
+          </template>
+        </Column>
+      </DataTable>
+
+      <!-- Inline lines panel -->
+      <div v-if="linesDocNo" class="lines-panel">
+        <div class="lines-header">
+          Lines for <span class="mono">{{ linesDocNo }}</span>
+          <Button icon="pi pi-times" text size="small" @click="linesDocNo = null" style="margin-left:auto" />
+        </div>
+        <div v-if="linesLoading">
+          <Skeleton height="18px" class="mb-2" v-for="i in 3" :key="i" />
+        </div>
+        <DocumentLines v-else :lines="currentLines" />
+      </div>
+    </Drawer>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import DataTable  from 'primevue/datatable'
+import Column     from 'primevue/column'
+import Button     from 'primevue/button'
+import Select     from 'primevue/select'
+import DatePicker from 'primevue/datepicker'
+import Drawer     from 'primevue/drawer'
+import Skeleton   from 'primevue/skeleton'
+import StatusBadge   from '@/components/base/StatusBadge.vue'
+import DocumentLines from '@/components/base/DocumentLines.vue'
+import { ordersApi, invoicesApi } from '@/services/api.js'
+
+const router = useRouter()
+
+// ── State ──────────────────────────────────────────────────────────────────
+const source  = ref('orders')
+const groupBy = ref('CustomerNo')
+const dateFrom = ref(null)
+const dateTo   = ref(null)
+const rows     = ref([])
+const loading  = ref(false)
+
+// Drawer
+const drawerVisible  = ref(false)
+const drawerRows     = ref([])
+const drawerLoading  = ref(false)
+const selectedGroup  = ref('')
+const linesDocNo     = ref(null)
+const currentLines   = ref([])
+const linesLoading   = ref(false)
+
+// ── Options ────────────────────────────────────────────────────────────────
+const groupOptions = [
+  { label: 'Customer No',    value: 'CustomerNo' },
+  { label: 'Customer Name',  value: 'CustomerName' },
+  { label: 'Salesperson',    value: 'SalespersonCode' },
+  { label: 'Route',          value: 'RouteCode' },
+  { label: 'Sector',         value: 'SectorCode' },
+  { label: 'Date',           value: 'OrderDate' },
+]
+
+const groupLabel = computed(() => groupOptions.find(o => o.value === groupBy.value)?.label ?? groupBy.value)
+const docNoField = computed(() => source.value === 'orders' ? 'OrderNo' : 'InvoiceNo')
+const api        = computed(() => source.value === 'orders' ? ordersApi : invoicesApi)
+
+// ── Computed totals ────────────────────────────────────────────────────────
+const totalDocs    = computed(() => rows.value.reduce((s, r) => s + (+r.DocumentCount  || 0), 0))
+const totalQty     = computed(() => rows.value.reduce((s, r) => s + (+r.TotalQuantity  || 0), 0))
+const totalQtyBase = computed(() => rows.value.reduce((s, r) => s + (+r.TotalQuantityBase || 0), 0))
+const totalAmount  = computed(() => rows.value.reduce((s, r) => s + (+r.TotalLineAmount || 0), 0))
+const maxAmount    = computed(() => Math.max(...rows.value.map(r => +r.TotalLineAmount || 0), 1))
+
+// ── Actions ────────────────────────────────────────────────────────────────
+async function load() {
+  loading.value = true
+  try {
+    const params = {
+      groupBy: groupBy.value,
+      ...(dateFrom.value ? { dateFrom: fmtParam(dateFrom.value) } : {}),
+      ...(dateTo.value   ? { dateTo:   fmtParam(dateTo.value) }   : {}),
+    }
+    const { data } = await api.value.summary(params)
+    rows.value = data
+  } catch (err) {
+    console.error(err)
+  } finally {
+    loading.value = false
+  }
+}
+
+function clearFilters() {
+  dateFrom.value = null; dateTo.value = null
+  rows.value = []
+}
+
+async function drillDown(groupKey) {
+  selectedGroup.value  = groupKey
+  drawerVisible.value  = true
+  drawerLoading.value  = true
+  linesDocNo.value     = null
+  currentLines.value   = []
+  try {
+    // Map groupBy dimension to the correct query param the API accepts
+    const groupParamMap = {
+      CustomerNo:      'customerNo',
+      CustomerName:    'q',
+      SalespersonCode: 'salesperson',
+      RouteCode:       'route',
+      SectorCode:      'sector',
+      OrderDate:       'dateFrom',
+    }
+    const paramKey = groupParamMap[groupBy.value] ?? 'q'
+    const params = {
+      [paramKey]: groupKey,
+      status: 'Confirmed',
+      ...(dateFrom.value ? { dateFrom: fmtParam(dateFrom.value) } : {}),
+      ...(dateTo.value   ? { dateTo:   fmtParam(dateTo.value) }   : {}),
+    }
+    // For date groupBy, also set dateTo = dateFrom to get just that day
+    if (groupBy.value === 'OrderDate') params.dateTo = groupKey
+
+    const { data } = await api.value.list(params)
+    drawerRows.value = data
+  } finally {
+    drawerLoading.value = false
+  }
+}
+
+async function loadLines(docNo) {
+  linesDocNo.value  = docNo
+  linesLoading.value = true
+  currentLines.value = []
+  try {
+    const { data } = await api.value.get(docNo)
+    currentLines.value = data.lines
+  } finally {
+    linesLoading.value = false
+  }
+}
+
+function openScan(row) {
+  const no = row[docNoField.value]
+  if (source.value === 'orders') {
+    router.push({ name: 'OrderScan', query: { no } })
+  } else {
+    router.push({ name: 'InvoiceScan', query: { no } })
+  }
+}
+
+// ── Formatters ─────────────────────────────────────────────────────────────
+const fmt         = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtCurrency = (v) => `KES ${fmt(v)}`
+const fmtDay      = (v) => v ? new Date(v).toLocaleDateString('en-KE') : '—'
+const fmtParam    = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : v
+const pct         = (v) => totalAmount.value ? Math.round((+v / maxAmount.value) * 100) : 0
+</script>
+
+<style scoped>
+.page-header { margin-bottom: 20px; }
+.page-title  { font-size: 22px; font-weight: 700; margin-bottom: 2px; }
+
+.controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.source-toggle {
+  display: flex;
+  border: 1px solid var(--bc-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.toggle-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  color: var(--bc-text-muted);
+  transition: all 0.15s;
+}
+.toggle-btn.active {
+  background: var(--bc-primary);
+  color: #fff;
+}
+
+.kpi-strip {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.kpi-card {
+  background: var(--bc-surface-card);
+  border: 1px solid var(--bc-border);
+  border-radius: 10px;
+  padding: 10px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+}
+.kpi-card.highlight { border-color: var(--bc-primary); }
+.kpi-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--bc-text-muted); }
+.kpi-val   { font-size: 20px; font-weight: 700; color: var(--bc-text); }
+.kpi-card.highlight .kpi-val { color: var(--bc-primary-light); }
+
+.summary-table { font-size: 13px; }
+.table-empty   { text-align: center; padding: 40px; color: var(--bc-text-muted); }
+.group-key     { font-weight: 600; }
+.amount        { font-weight: 700; color: var(--bc-primary-light); }
+.link          { cursor: pointer; color: var(--bc-primary-light); text-decoration: underline; text-decoration-style: dotted; }
+
+.amount-bar-wrap {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.amount-bar {
+  height: 100%;
+  background: var(--bc-primary-light);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 60px;
+  text-align: center;
+  color: var(--bc-text-muted);
+}
+
+/* Drawer internals */
+.drawer-controls { margin-bottom: 12px; }
+.drawer-table    { font-size: 13px; }
+
+.lines-panel {
+  margin-top: 20px;
+  border: 1px solid var(--bc-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.lines-header {
+  padding: 10px 14px;
+  background: var(--bc-surface-raised);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bc-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--bc-border);
+}
+</style>
