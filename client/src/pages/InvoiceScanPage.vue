@@ -64,6 +64,8 @@
               <span class="text-sm">{{ fmtDate(doc.header.InvoicedAt) }}</span>
               <span class="text-muted text-sm">E-TIMS No</span>
               <span class="text-sm mono">{{ doc.header.ETIMSInvoiceNo || '—' }}</span>
+              <span v-if="doc.header.QRCodeUrl" class="text-muted text-sm">QR Code URL</span>
+              <span v-if="doc.header.QRCodeUrl" class="text-sm mono qrcode-url">{{ doc.header.QRCodeUrl }}</span>
               <span class="text-muted text-sm">Salesperson</span>
               <span class="text-sm">{{ doc.header.SalespersonCode || '—' }}</span>
               <span class="text-muted text-sm">Route</span>
@@ -121,6 +123,7 @@ import StatusBadge   from '@/components/base/StatusBadge.vue'
 import AuditLog      from '@/components/base/AuditLog.vue'
 import { invoicesApi } from '@/services/api.js'
 import { useConfirmDocument } from '@/composables/useConfirmDocument.js'
+import { watchDebounced }     from '@/composables/useDebounce.js'
 
 const route     = useRoute()
 const query     = ref('')
@@ -136,6 +139,9 @@ const { confirming, isCopy, copyDetails, auditLog, confirm, loadAudit, reset } =
     'Invoice'
   )
 
+// Auto-trigger lookup 50ms after query changes (supports barcode scanners)
+watchDebounced(query, (val) => { if (val.trim()) lookup() }, 50)
+
 onMounted(() => {
   if (route.query.no) {
     query.value = String(route.query.no)
@@ -144,16 +150,19 @@ onMounted(() => {
 })
 
 async function lookup() {
-  const no = query.value.trim()
-  if (!no) return
+  const raw = query.value.trim()
+  if (!raw) return
   searching.value = true
   notFound.value  = false
   doc.value       = null
   reset()
   try {
-    const { data } = await invoicesApi.get(no)
+    const isUrl = raw.startsWith('http')
+    const { data } = isUrl
+      ? await invoicesApi.getByQRCode(raw)
+      : await invoicesApi.get(raw)
     doc.value = data
-    await loadAudit(no)
+    await loadAudit(data.header.InvoiceNo)
   } catch (e) {
     if (e.response?.status === 404) notFound.value = true
   } finally {
@@ -196,5 +205,6 @@ const fmtDate = (v) => v ? new Date(v).toLocaleString('en-KE')    : '—'
 .doc-customer { font-size: 16px; margin-top: 4px; }
 .doc-meta     { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 .meta-grid    { display: grid; grid-template-columns: auto auto; gap: 4px 16px; text-align: right; }
+.qrcode-url   { word-break: break-all; max-width: 280px; color: var(--bc-text-muted); user-select: all; }
 .actions      { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 </style>

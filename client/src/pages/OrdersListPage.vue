@@ -99,12 +99,15 @@ import AuditLog      from '@/components/base/AuditLog.vue'
 import { ordersApi } from '@/services/api.js'
 import { useDocumentList }    from '@/composables/useDocumentList.js'
 import { useConfirmDocument } from '@/composables/useConfirmDocument.js'
+import { watchDebounced }     from '@/composables/useDebounce.js'
 
 const router = useRouter()
 
 // list.rows and list.loading are plain refs - no extra .value in template
 const list = useDocumentList(ordersApi.list)
 list.load()
+
+watchDebounced(() => list.filters.q, () => list.load(), 50)
 
 const statuses = [
   { label: 'Open',      value: 'Open' },

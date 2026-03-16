@@ -22,6 +22,7 @@
 
 html, body, #app {
   height: 100%;
+  color-scheme: dark;
   background: var(--bc-surface);
   color: var(--bc-text);
   font-family: var(--bc-font);
@@ -85,7 +86,12 @@ html, body, #app {
 .text-danger  { color: var(--bc-danger); }
 .w-full { width: 100%; }
 
-/* Override PrimeVue for dark theme harmony */
+/* Override PrimeVue for dark theme — force all colours so Chrome dark mode can't invert them */
+.p-datatable {
+  color-scheme: dark;
+  background: transparent;
+  color: var(--bc-text);
+}
 .p-datatable .p-datatable-thead > tr > th {
   background: var(--bc-surface-raised);
   color: var(--bc-text-muted);
@@ -97,9 +103,38 @@ html, body, #app {
 }
 .p-datatable .p-datatable-tbody > tr {
   background: transparent;
+  color: var(--bc-text);
   border-color: var(--bc-border);
   transition: background 0.15s;
 }
-.p-datatable .p-datatable-tbody > tr:hover {
+.p-datatable .p-datatable-tbody > tr > td {
+  background: transparent;
+  color: var(--bc-text);
+  border-color: var(--bc-border);
+}
+.p-datatable .p-datatable-tbody > tr:hover,
+.p-datatable .p-datatable-tbody > tr:hover > td {
   background: var(--bc-surface-raised);
+  color: var(--bc-text);
+}
+.p-datatable .p-datatable-tfoot > tr > td {
+  background: var(--bc-surface-raised);
+  color: var(--bc-text);
+  border-color: var(--bc-border);
+}
+.p-datatable .p-paginator {
+  background: var(--bc-surface-raised);
+  color: var(--bc-text-muted);
+  border-color: var(--bc-border);
+}
+.p-datatable .p-paginator .p-paginator-page,
+.p-datatable .p-paginator .p-paginator-prev,
+.p-datatable .p-paginator .p-paginator-next,
+.p-datatable .p-paginator .p-paginator-first,
+.p-datatable .p-paginator .p-paginator-last {
+  color: var(--bc-text-muted);
+}
+.p-datatable .p-paginator .p-paginator-page.p-highlight {
+  background: var(--bc-primary);
+  color: #fff;
 }

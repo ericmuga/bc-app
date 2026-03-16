@@ -116,6 +116,7 @@ import StatusBadge   from '@/components/base/StatusBadge.vue'
 import AuditLog      from '@/components/base/AuditLog.vue'
 import { ordersApi } from '@/services/api.js'
 import { useConfirmDocument } from '@/composables/useConfirmDocument.js'
+import { watchDebounced }     from '@/composables/useDebounce.js'
 
 const route    = useRoute()
 const query    = ref('')
@@ -130,6 +131,9 @@ const { confirming, isCopy, copyDetails, auditLog, confirm, loadAudit, reset } =
     (no) => ordersApi.audit(no),
     'Order'
   )
+
+// Auto-trigger lookup 50ms after query changes (supports barcode scanners)
+watchDebounced(query, (val) => { if (val.trim()) lookup() }, 50)
 
 onMounted(() => {
   if (route.query.no) {

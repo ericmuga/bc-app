@@ -42,11 +42,12 @@ export const ordersApi = {
 
 // ── Invoices ──────────────────────────────────────────────────────────────────
 export const invoicesApi = {
-  list:    (params) => api.get('/invoices', { params }),
-  get:     (no)     => api.get(`/invoices/${no}`),
-  confirm: (no)     => api.post(`/invoices/${no}/confirm`),
-  audit:   (no)     => api.get(`/invoices/${no}/audit`),
-  summary: (params) => api.get('/invoices/summary', { params }),
+  list:       (params) => api.get('/invoices', { params }),
+  get:        (no)     => api.get(`/invoices/${no}`),
+  getByQRCode:(url)    => api.get('/invoices/by-qrcode', { params: { url } }),
+  confirm:    (no)     => api.post(`/invoices/${no}/confirm`),
+  audit:      (no)     => api.get(`/invoices/${no}/audit`),
+  summary:    (params) => api.get('/invoices/summary', { params }),
 }
 
 export default api

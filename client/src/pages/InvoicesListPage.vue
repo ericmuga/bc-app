@@ -116,10 +116,13 @@ import DocumentLines from '@/components/base/DocumentLines.vue'
 import AuditLog      from '@/components/base/AuditLog.vue'
 import { invoicesApi } from '@/services/api.js'
 import { useDocumentList } from '@/composables/useDocumentList.js'
+import { watchDebounced }  from '@/composables/useDebounce.js'
 
 const router = useRouter()
 const list   = useDocumentList(invoicesApi.list)
 list.load()
+
+watchDebounced(() => list.filters.q, () => list.load(), 50)
 
 const statuses = [
   { label: 'Invoiced',  value: 'Invoiced' },
@@ -127,9 +130,9 @@ const statuses = [
 ]
 
 // Grand totals are computed from header rows (no line detail needed in list)
-const grandQty     = computed(() => list.rows.value.reduce((s, r) => s + (+r.TotalQuantity     || 0), 0))
-const grandQtyBase = computed(() => list.rows.value.reduce((s, r) => s + (+r.TotalQuantityBase || 0), 0))
-const grandAmount  = computed(() => list.rows.value.reduce((s, r) => s + (+r.TotalLineAmount   || 0), 0))
+const grandQty     = computed(() => list.rows.reduce((s, r) => s + (+r.TotalQuantity     || 0), 0))
+const grandQtyBase = computed(() => list.rows.reduce((s, r) => s + (+r.TotalQuantityBase || 0), 0))
+const grandAmount  = computed(() => list.rows.reduce((s, r) => s + (+r.TotalLineAmount   || 0), 0))
 
 // Drawer
 const drawerVisible = ref(false)

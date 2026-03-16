@@ -44,5 +44,5 @@ export function useDocumentList(listFn) {
     load()
   }
 
-  return { rows, loading, error, filters, load, reset }
+  return reactive({ rows, loading, error, filters, load, reset })
 }

@@ -13,22 +13,22 @@
     </Column>
     <Column field="Description" header="Description" />
     <Column field="UnitOfMeasure" header="UOM" style="width: 70px" />
-    <Column field="Quantity" header="Qty" style="width: 90px; text-align:right">
+    <Column field="Quantity" header="Qty" style="width: 90px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
         <span class="mono">{{ fmt(data.Quantity) }}</span>
       </template>
     </Column>
-    <Column field="QuantityBase" header="Qty Base" style="width: 100px; text-align:right">
+    <Column field="QuantityBase" header="Qty Base" style="width: 100px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
         <span class="mono">{{ fmt(data.QuantityBase) }}</span>
       </template>
     </Column>
-    <Column field="UnitPrice" header="Unit Price" style="width: 110px; text-align:right">
+    <Column field="UnitPrice" header="Unit Price" style="width: 110px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
         <span class="mono">{{ fmtCurrency(data.UnitPrice) }}</span>
       </template>
     </Column>
-    <Column field="LineAmount" header="Amount" style="width: 120px; text-align:right">
+    <Column field="LineAmount" header="Amount" style="width: 120px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
         <span class="mono" style="font-weight:600">{{ fmtCurrency(data.LineAmount) }}</span>
       </template>
