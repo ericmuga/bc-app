@@ -112,10 +112,14 @@ async function migrate(companyId) {
       UnitPrice     DECIMAL(18,4)    NOT NULL DEFAULT 0,
       LineAmount    DECIMAL(18,4)    NOT NULL DEFAULT 0,
       UnitOfMeasure NVARCHAR(20)     NULL,
-      CreatedAt     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
-      CONSTRAINT [FK_SalesLine_${s}] FOREIGN KEY (OrderNo)
-        REFERENCES [${s}].[SalesHeader](OrderNo)
+      CreatedAt     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name='FK_SalesLine_${s}')
+      ALTER TABLE [${s}].[SalesLine]
+        ADD CONSTRAINT [FK_SalesLine_${s}]
+        FOREIGN KEY (OrderNo) REFERENCES [${s}].[SalesHeader](OrderNo)
   `);
   console.log(`  [${s}].[SalesLine] OK`);
 
@@ -156,10 +160,14 @@ async function migrate(companyId) {
       QuantityBase  DECIMAL(18,4)    NOT NULL DEFAULT 0,
       UnitPrice     DECIMAL(18,4)    NOT NULL DEFAULT 0,
       LineAmount    DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      UnitOfMeasure NVARCHAR(20)     NULL,
-      CONSTRAINT [FK_InvoiceLine_${s}] FOREIGN KEY (InvoiceNo)
-        REFERENCES [${s}].[InvoiceHeader](InvoiceNo)
+      UnitOfMeasure NVARCHAR(20)     NULL
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name='FK_InvoiceLine_${s}')
+      ALTER TABLE [${s}].[InvoiceLine]
+        ADD CONSTRAINT [FK_InvoiceLine_${s}]
+        FOREIGN KEY (InvoiceNo) REFERENCES [${s}].[InvoiceHeader](InvoiceNo)
   `);
   console.log(`  [${s}].[InvoiceLine] OK`);
 
