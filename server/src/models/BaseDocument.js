@@ -38,7 +38,7 @@ export class BaseDocument {
   }
 
   /** Search / list documents */
-  async search(companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector } = {}) {
+  async search(companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = {}) {
     return db.query(companyId, async (pool, schema) => {
       const req = pool.request();
       const conditions = ['1=1'];
@@ -74,6 +74,10 @@ export class BaseDocument {
       if (status) {
         req.input('Status', sql.NVarChar(20), status);
         conditions.push('[Status] = @Status');
+      }
+      if (postingGroup) {
+        req.input('PostingGroup', sql.NVarChar(50), postingGroup);
+        conditions.push(`EXISTS (SELECT 1 FROM ${schema}.[${this.lineTable}] ln WHERE ln.[${this.noField}] = [${this.noField}] AND ln.[PostingGroup] = @PostingGroup)`);
       }
 
       const result = await req.query(
@@ -138,8 +142,12 @@ export class BaseDocument {
 
   /** Summary: group by a dimension with line amount/qty totals */
   async summary(companyId, { groupBy = 'CustomerNo', dateFrom, dateTo } = {}) {
-    const allowedGroups = ['CustomerNo', 'CustomerName', 'SalespersonCode', 'RouteCode', 'SectorCode', 'OrderDate'];
-    const safeGroup = allowedGroups.includes(groupBy) ? groupBy : 'CustomerNo';
+    const headerGroups = ['CustomerNo', 'CustomerName', 'SalespersonCode', 'RouteCode', 'SectorCode', 'OrderDate'];
+    const lineGroups   = ['PostingGroup'];
+    const allAllowed   = [...headerGroups, ...lineGroups];
+    const safeGroup    = allAllowed.includes(groupBy) ? groupBy : 'CustomerNo';
+    const isLineGroup  = lineGroups.includes(safeGroup);
+    const groupExpr    = isLineGroup ? `l.[${safeGroup}]` : `h.[${safeGroup}]`;
 
     return db.query(companyId, async (pool, schema) => {
       const req = pool.request();
@@ -156,7 +164,7 @@ export class BaseDocument {
 
       const result = await req.query(`
         SELECT
-          h.[${safeGroup}]                        AS GroupKey,
+          ${groupExpr}                             AS GroupKey,
           COUNT(DISTINCT h.[${this.noField}])     AS DocumentCount,
           SUM(l.[Quantity])                        AS TotalQuantity,
           SUM(l.[QuantityBase])                    AS TotalQuantityBase,
@@ -164,7 +172,7 @@ export class BaseDocument {
         FROM ${schema}.[${this.headerTable}] h
         JOIN ${schema}.[${this.lineTable}]   l ON h.[${this.noField}] = l.[${this.noField}]
         WHERE ${conditions.join(' AND ')}
-        GROUP BY h.[${safeGroup}]
+        GROUP BY ${groupExpr}
         ORDER BY TotalLineAmount DESC
       `);
       return result.recordset;

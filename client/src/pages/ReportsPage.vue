@@ -18,8 +18,11 @@
       <button class="tab-btn" :class="{ active: tab === 'route' }"       @click="switchTab('route')">
         <i class="pi pi-map-marker" /> By Route
       </button>
-      <button class="tab-btn" :class="{ active: tab === 'sector' }"      @click="switchTab('sector')">
+      <button class="tab-btn" :class="{ active: tab === 'sector' }"        @click="switchTab('sector')">
         <i class="pi pi-tag" /> By Sector
+      </button>
+      <button class="tab-btn" :class="{ active: tab === 'postingGroup' }" @click="switchTab('postingGroup')">
+        <i class="pi pi-tag" /> By Posting Group
       </button>
     </div>
 
@@ -39,6 +42,8 @@
         <DatePicker v-model="dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon @date-select="load" />
         <Button label="Run"   icon="pi pi-play"  @click="load" :loading="loading" />
         <Button label="Clear" icon="pi pi-times" text @click="clearFilters" />
+        <Button icon="pi pi-download" text severity="secondary" v-tooltip="'Export to CSV'"
+          :disabled="!rows.length" @click="exportSummary" />
       </div>
 
       <!-- KPI strip -->
@@ -120,6 +125,8 @@
         <DatePicker v-model="analysisTo"   placeholder="To"   date-format="yy-mm-dd" show-icon />
         <Button label="Apply" icon="pi pi-filter" @click="loadAnalysis" :loading="analysisLoading" />
         <Button label="Clear" icon="pi pi-times"  text @click="clearAnalysis" />
+        <Button icon="pi pi-download" text severity="secondary" v-tooltip="'Export to CSV'"
+          :disabled="!analysisOrders.length && !analysisInvoices.length" @click="exportAnalysis" />
       </div>
 
       <!-- Two panels side by side -->
@@ -128,7 +135,7 @@
         <div class="analysis-panel bc-card">
           <div class="panel-title">
             <i class="pi pi-list" />
-            Orders (Confirmed) — {{ tab === 'salesperson' ? 'By Salesperson' : tab === 'route' ? 'By Route' : 'By Sector' }}
+            Orders (Confirmed) — {{ tab === 'salesperson' ? 'By Salesperson' : tab === 'route' ? 'By Route' : tab === 'sector' ? 'By Sector' : 'By Posting Group' }}
             <span class="panel-count text-muted text-sm">{{ analysisOrders.length }} groups</span>
           </div>
           <div v-if="analysisLoading" class="panel-loading">
@@ -148,14 +155,20 @@
                   :style="{ width: analysisPct(row.TotalLineAmount, maxAnalysisOrders) + '%' }"
                 />
               </div>
-              <div class="bar-value mono">{{ fmtCurrency(row.TotalLineAmount) }}</div>
+              <div class="bar-value">
+                <span class="mono">{{ fmtCurrency(row.TotalLineAmount) }}</span>
+                <span class="text-muted text-sm">{{ fmt(row.TotalQuantityBase) }} qty</span>
+              </div>
             </div>
           </div>
           <div class="panel-footer" v-if="analysisOrders.length">
             <span class="text-muted text-sm">Total</span>
-            <span class="mono" style="font-weight:700;color:var(--bc-primary-light)">
-              {{ fmtCurrency(analysisOrders.reduce((s, r) => s + (+r.TotalLineAmount || 0), 0)) }}
-            </span>
+            <div style="display:flex;gap:12px;align-items:center">
+              <span class="mono text-muted text-sm">{{ fmt(analysisOrders.reduce((s, r) => s + (+r.TotalQuantityBase || 0), 0)) }} qty</span>
+              <span class="mono" style="font-weight:700;color:var(--bc-primary-light)">
+                {{ fmtCurrency(analysisOrders.reduce((s, r) => s + (+r.TotalLineAmount || 0), 0)) }}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -163,7 +176,7 @@
         <div class="analysis-panel bc-card">
           <div class="panel-title">
             <i class="pi pi-file-check" />
-            Invoices (Confirmed) — {{ tab === 'salesperson' ? 'By Salesperson' : tab === 'route' ? 'By Route' : 'By Sector' }}
+            Invoices (Confirmed) — {{ tab === 'salesperson' ? 'By Salesperson' : tab === 'route' ? 'By Route' : tab === 'sector' ? 'By Sector' : 'By Posting Group' }}
             <span class="panel-count text-muted text-sm">{{ analysisInvoices.length }} groups</span>
           </div>
           <div v-if="analysisLoading" class="panel-loading">
@@ -183,14 +196,20 @@
                   :style="{ width: analysisPct(row.TotalLineAmount, maxAnalysisInvoices) + '%' }"
                 />
               </div>
-              <div class="bar-value mono">{{ fmtCurrency(row.TotalLineAmount) }}</div>
+              <div class="bar-value">
+                <span class="mono">{{ fmtCurrency(row.TotalLineAmount) }}</span>
+                <span class="text-muted text-sm">{{ fmt(row.TotalQuantityBase) }} qty</span>
+              </div>
             </div>
           </div>
           <div class="panel-footer" v-if="analysisInvoices.length">
             <span class="text-muted text-sm">Total</span>
-            <span class="mono" style="font-weight:700;color:var(--bc-primary-light)">
-              {{ fmtCurrency(analysisInvoices.reduce((s, r) => s + (+r.TotalLineAmount || 0), 0)) }}
-            </span>
+            <div style="display:flex;gap:12px;align-items:center">
+              <span class="mono text-muted text-sm">{{ fmt(analysisInvoices.reduce((s, r) => s + (+r.TotalQuantityBase || 0), 0)) }} qty</span>
+              <span class="mono" style="font-weight:700;color:var(--bc-primary-light)">
+                {{ fmtCurrency(analysisInvoices.reduce((s, r) => s + (+r.TotalLineAmount || 0), 0)) }}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -251,6 +270,7 @@ import Skeleton   from 'primevue/skeleton'
 import StatusBadge   from '@/components/base/StatusBadge.vue'
 import DocumentLines from '@/components/base/DocumentLines.vue'
 import { ordersApi, invoicesApi } from '@/services/api.js'
+import { exportCsv, todayStr } from '@/utils/exportCsv.js'
 
 const router = useRouter()
 
@@ -266,12 +286,13 @@ const rows     = ref([])
 const loading  = ref(false)
 
 const groupOptions = [
-  { label: 'Customer No',   value: 'CustomerNo' },
-  { label: 'Customer Name', value: 'CustomerName' },
-  { label: 'Salesperson',   value: 'SalespersonCode' },
-  { label: 'Route',         value: 'RouteCode' },
-  { label: 'Sector',        value: 'SectorCode' },
-  { label: 'Date',          value: 'OrderDate' },
+  { label: 'Customer No',    value: 'CustomerNo' },
+  { label: 'Customer Name',  value: 'CustomerName' },
+  { label: 'Salesperson',    value: 'SalespersonCode' },
+  { label: 'Route',          value: 'RouteCode' },
+  { label: 'Sector',         value: 'SectorCode' },
+  { label: 'Posting Group',  value: 'PostingGroup' },
+  { label: 'Date',           value: 'OrderDate' },
 ]
 
 const groupLabel = computed(() => groupOptions.find(o => o.value === groupBy.value)?.label ?? groupBy.value)
@@ -315,8 +336,9 @@ const analysisOrders   = ref([])
 const analysisInvoices = ref([])
 
 const analysisGroupBy = computed(() => {
-  if (tab.value === 'salesperson') return 'SalespersonCode'
-  if (tab.value === 'sector')      return 'SectorCode'
+  if (tab.value === 'salesperson')  return 'SalespersonCode'
+  if (tab.value === 'sector')       return 'SectorCode'
+  if (tab.value === 'postingGroup') return 'PostingGroup'
   return 'RouteCode'
 })
 const maxAnalysisOrders   = computed(() => Math.max(...analysisOrders.value.map(r => +r.TotalLineAmount || 0), 1))
@@ -434,6 +456,29 @@ function openScanFromDrawer(row) {
   } else {
     router.push({ name: 'InvoiceScan', query: { no } })
   }
+}
+
+// ── Exports ──────────────────────────────────────────────────────────────────
+
+const summaryColumns = [
+  { key: 'GroupKey',          label: 'Group' },
+  { key: 'DocumentCount',     label: 'Documents' },
+  { key: 'TotalQuantity',     label: 'Total Qty' },
+  { key: 'TotalQuantityBase', label: 'Total Qty Base' },
+  { key: 'TotalLineAmount',   label: 'Amount' },
+]
+
+function exportSummary() {
+  const label = groupLabel.value.replace(/\s+/g, '-').toLowerCase()
+  exportCsv(`${source.value}-summary-${label}-${todayStr()}.csv`, rows.value, summaryColumns)
+}
+
+function exportAnalysis() {
+  const dim = analysisGroupBy.value.replace(/Code$/, '').toLowerCase()
+  if (analysisOrders.value.length)
+    exportCsv(`orders-analysis-${dim}-${todayStr()}.csv`, analysisOrders.value, summaryColumns)
+  if (analysisInvoices.value.length)
+    exportCsv(`invoices-analysis-${dim}-${todayStr()}.csv`, analysisInvoices.value, summaryColumns)
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────
@@ -607,8 +652,11 @@ const analysisPct = (v, max) => max ? Math.round((+v / max) * 100) : 0
 .bar-invoices { background: linear-gradient(90deg, #7c3aed 0%, #a78bfa 100%); }
 
 .bar-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
   font-size: 12px;
-  text-align: right;
   color: var(--bc-text);
   white-space: nowrap;
 }

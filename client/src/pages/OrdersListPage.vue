@@ -15,8 +15,10 @@
       <DatePicker v-model="list.filters.dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon />
       <Select v-model="list.filters.status" :options="statuses" option-label="label" option-value="value"
         placeholder="All statuses" style="width:150px" show-clear />
+      <InputText v-model="list.filters.postingGroup" placeholder="Posting group" style="width:150px" @keyup.enter="list.load()" />
       <Button label="Filter" icon="pi pi-filter" @click="list.load()" />
       <Button label="Clear"  icon="pi pi-times"  text @click="list.reset()" />
+      <Button icon="pi pi-download" text severity="secondary" @click="doExport" v-tooltip="'Export to CSV'" />
     </div>
 
     <!-- Table -->
@@ -99,6 +101,7 @@ import AuditLog      from '@/components/base/AuditLog.vue'
 import { ordersApi } from '@/services/api.js'
 import { useDocumentList }    from '@/composables/useDocumentList.js'
 import { useConfirmDocument } from '@/composables/useConfirmDocument.js'
+import { exportCsv, todayStr } from '@/utils/exportCsv.js'
 import { watchDebounced }     from '@/composables/useDebounce.js'
 
 const router = useRouter()
@@ -113,6 +116,19 @@ const statuses = [
   { label: 'Open',      value: 'Open' },
   { label: 'Confirmed', value: 'Confirmed' },
 ]
+
+function doExport() {
+  exportCsv(`orders-${todayStr()}.csv`, list.rows, [
+    { key: 'OrderNo',         label: 'Order No' },
+    { key: 'CustomerNo',      label: 'Customer No' },
+    { key: 'CustomerName',    label: 'Customer' },
+    { key: 'SalespersonCode', label: 'Salesperson' },
+    { key: 'RouteCode',       label: 'Route' },
+    { key: 'SectorCode',      label: 'Sector' },
+    { key: 'OrderDate',       label: 'Order Date' },
+    { key: 'Status',          label: 'Status' },
+  ])
+}
 
 // Drawer state
 const drawerVisible = ref(false)

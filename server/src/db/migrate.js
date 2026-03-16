@@ -62,8 +62,14 @@ async function migrate(companyId) {
       [CompanyId]   NVARCHAR(60)  NOT NULL PRIMARY KEY,
       [CompanyName] NVARCHAR(200) NOT NULL,
       [IsActive]    BIT           NOT NULL DEFAULT 1,
-      [CreatedAt]   DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+      [CreatedAt]   DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]   DATETIME2     NOT NULL DEFAULT GETUTCDATE()
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Companies]') AND name='UpdatedAt')
+      ALTER TABLE [dbo].[Companies] ADD [UpdatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
   `);
   console.log('  [dbo].[Companies] OK');
 
@@ -79,7 +85,8 @@ async function migrate(companyId) {
       [Role]         NVARCHAR(20)     NOT NULL DEFAULT 'user',
       [AuthProvider] NVARCHAR(20)     NOT NULL DEFAULT 'local',
       [IsActive]     BIT              NOT NULL DEFAULT 1,
-      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
   console.log('  [dbo].[Users] OK');
@@ -95,6 +102,11 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='AuthProvider')
       ALTER TABLE [dbo].[Users] ADD [AuthProvider] NVARCHAR(20) NOT NULL DEFAULT 'local'
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='UpdatedAt')
+      ALTER TABLE [dbo].[Users] ADD [UpdatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+  `);
 
   // ── [s].[SalesHeader] ─────────────────────────────────────────────────────
   await run(`
@@ -107,6 +119,12 @@ async function migrate(companyId) {
       [SalespersonCode] NVARCHAR(20)     NULL,
       [RouteCode]       NVARCHAR(20)     NULL,
       [SectorCode]      NVARCHAR(20)     NULL,
+      [ShipmentDate]    DATE             NULL,
+      [ShipToCode]      NVARCHAR(20)     NULL,
+      [ShipToName]      NVARCHAR(200)    NULL,
+      [PaymentTerms]    NVARCHAR(30)     NULL,
+      [ExternalDocNo]   NVARCHAR(50)     NULL,
+      [QuoteNo]         NVARCHAR(30)     NULL,
       [OrderDate]        DATE             NOT NULL,
       [PostingDate]      DATE             NULL,
       [PrintingDatetime] DATETIME2        NULL,
@@ -129,23 +147,45 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[${s}].[SalesHeader]') AND name='BCUserId')
       ALTER TABLE [${s}].[SalesHeader] ADD [BCUserId] NVARCHAR(100) NULL
   `);
+  for (const [col, def] of [
+    ['ShipmentDate', 'DATE          NULL'],
+    ['ShipToCode',   'NVARCHAR(20)  NULL'],
+    ['ShipToName',   'NVARCHAR(200) NULL'],
+    ['PaymentTerms', 'NVARCHAR(30)  NULL'],
+    ['ExternalDocNo','NVARCHAR(50)  NULL'],
+    ['QuoteNo',      'NVARCHAR(30)  NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[${s}].[SalesHeader]') AND name='${col}')
+        ALTER TABLE [${s}].[SalesHeader] ADD [${col}] ${def}
+    `);
+  }
   console.log(`  [${s}].[SalesHeader] OK`);
 
   // ── [s].[SalesLine] ───────────────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesLine' AND schema_id=SCHEMA_ID('${s}'))
     CREATE TABLE [${s}].[SalesLine] (
-      [Id]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-      [OrderNo]       NVARCHAR(30)     NOT NULL,
-      [LineNo]        INT              NOT NULL,
-      [ItemNo]        NVARCHAR(30)     NOT NULL,
-      [Description]   NVARCHAR(200)    NOT NULL,
-      [Quantity]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [QuantityBase]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [UnitPrice]     DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [LineAmount]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [UnitOfMeasure] NVARCHAR(20)     NULL,
-      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+      [Id]             UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [OrderNo]        NVARCHAR(30)     NOT NULL,
+      [LineNo]         INT              NOT NULL,
+      [ItemNo]         NVARCHAR(30)     NOT NULL,
+      [Description]    NVARCHAR(200)    NOT NULL,
+      [Quantity]       DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [QuantityBase]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitPrice]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [LineAmount]     DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [AmountInclVat]  DECIMAL(18,4)    NULL,
+      [VatPct]         DECIMAL(18,4)    NULL,
+      [QtyAssigned]    DECIMAL(18,4)    NULL,
+      [QtyExecuted]    DECIMAL(18,4)    NULL,
+      [CustomerSpec]   NVARCHAR(200)    NULL,
+      [Barcode]        NVARCHAR(100)    NULL,
+      [UnitOfMeasure]  NVARCHAR(20)     NULL,
+      [PostingGroup]   NVARCHAR(50)     NULL,
+      [CreatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
   await run(`
@@ -154,6 +194,22 @@ async function migrate(companyId) {
         ADD CONSTRAINT [FK_SalesLine_${s}]
         FOREIGN KEY ([OrderNo]) REFERENCES [${s}].[SalesHeader]([OrderNo])
   `);
+  for (const [col, def] of [
+    ['PostingGroup',  'NVARCHAR(50)  NULL'],
+    ['AmountInclVat', 'DECIMAL(18,4) NULL'],
+    ['VatPct',        'DECIMAL(18,4) NULL'],
+    ['QtyAssigned',   'DECIMAL(18,4) NULL'],
+    ['QtyExecuted',   'DECIMAL(18,4) NULL'],
+    ['CustomerSpec',  'NVARCHAR(200) NULL'],
+    ['Barcode',       'NVARCHAR(100) NULL'],
+    ['UpdatedAt',     'DATETIME2     NOT NULL DEFAULT GETUTCDATE()'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[${s}].[SalesLine]') AND name='${col}')
+        ALTER TABLE [${s}].[SalesLine] ADD [${col}] ${def}
+    `);
+  }
   console.log(`  [${s}].[SalesLine] OK`);
 
   // ── [s].[InvoiceHeader] ───────────────────────────────────────────────────
@@ -165,14 +221,25 @@ async function migrate(companyId) {
       [OriginalOrderNo] NVARCHAR(30)     NOT NULL,
       [CustomerNo]      NVARCHAR(30)     NOT NULL,
       [CustomerName]    NVARCHAR(200)    NOT NULL,
+      [CustomerPin]     NVARCHAR(50)     NULL,
       [SalespersonCode] NVARCHAR(20)     NULL,
+      [SalespersonName] NVARCHAR(200)    NULL,
       [RouteCode]       NVARCHAR(20)     NULL,
       [SectorCode]      NVARCHAR(20)     NULL,
+      [ShipToName]      NVARCHAR(200)    NULL,
+      [ShipmentMethod]  NVARCHAR(30)     NULL,
+      [PaymentTerms]    NVARCHAR(30)     NULL,
+      [ExternalDocNo]   NVARCHAR(50)     NULL,
+      [CompanyName]     NVARCHAR(200)    NULL,
+      [CompanyPin]      NVARCHAR(50)     NULL,
+      [CompanyEmail]    NVARCHAR(200)    NULL,
+      [CompanyVatReg]   NVARCHAR(50)     NULL,
       [OrderDate]       DATE             NOT NULL,
       [PostingDate]     DATE             NULL,
       [InvoicedAt]       DATETIME2        NOT NULL,
       [PrintingDatetime] DATETIME2        NULL,
       [BCUserId]         NVARCHAR(100)    NULL,
+      [NoPrinted]        INT              NULL,
       [ETIMSInvoiceNo]   NVARCHAR(60)     NULL,
       [ETIMSData]        NVARCHAR(MAX)    NULL,
       [QRCodeUrl]        NVARCHAR(500)    NULL,
@@ -199,24 +266,65 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[${s}].[InvoiceHeader]') AND name='BCUserId')
       ALTER TABLE [${s}].[InvoiceHeader] ADD [BCUserId] NVARCHAR(100) NULL
   `);
+  for (const [col, def] of [
+    ['CustomerPin',    'NVARCHAR(50)  NULL'],
+    ['SalespersonName','NVARCHAR(200) NULL'],
+    ['ShipToName',     'NVARCHAR(200) NULL'],
+    ['ShipmentMethod', 'NVARCHAR(30)  NULL'],
+    ['PaymentTerms',   'NVARCHAR(30)  NULL'],
+    ['ExternalDocNo',  'NVARCHAR(50)  NULL'],
+    ['CompanyName',    'NVARCHAR(200) NULL'],
+    ['CompanyPin',     'NVARCHAR(50)  NULL'],
+    ['CompanyEmail',   'NVARCHAR(200) NULL'],
+    ['CompanyVatReg',  'NVARCHAR(50)  NULL'],
+    ['NoPrinted',      'INT           NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[${s}].[InvoiceHeader]') AND name='${col}')
+        ALTER TABLE [${s}].[InvoiceHeader] ADD [${col}] ${def}
+    `);
+  }
   console.log(`  [${s}].[InvoiceHeader] OK`);
 
   // ── [s].[InvoiceLine] ─────────────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceLine' AND schema_id=SCHEMA_ID('${s}'))
     CREATE TABLE [${s}].[InvoiceLine] (
-      [Id]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-      [InvoiceNo]     NVARCHAR(30)     NOT NULL,
-      [LineNo]        INT              NOT NULL,
-      [ItemNo]        NVARCHAR(30)     NOT NULL,
-      [Description]   NVARCHAR(200)    NOT NULL,
-      [Quantity]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [QuantityBase]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [UnitPrice]     DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [LineAmount]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
-      [UnitOfMeasure] NVARCHAR(20)     NULL
+      [Id]                UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [InvoiceNo]         NVARCHAR(30)     NOT NULL,
+      [LineNo]            INT              NOT NULL,
+      [ItemNo]            NVARCHAR(30)     NOT NULL,
+      [Description]       NVARCHAR(200)    NOT NULL,
+      [Quantity]          DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [QuantityBase]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitPrice]         DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [LineAmount]        DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [LineAmountInclVat] DECIMAL(18,4)    NULL,
+      [VatPct]            DECIMAL(18,4)    NULL,
+      [VatIdentifier]     NVARCHAR(50)     NULL,
+      [UnitsPerParcel]    DECIMAL(18,4)    NULL,
+      [UnitOfMeasure]     NVARCHAR(20)     NULL,
+      [PostingGroup]      NVARCHAR(50)     NULL,
+      [CreatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
+  for (const [col, def] of [
+    ['PostingGroup',      'NVARCHAR(50)  NULL'],
+    ['LineAmountInclVat', 'DECIMAL(18,4) NULL'],
+    ['VatPct',            'DECIMAL(18,4) NULL'],
+    ['VatIdentifier',     'NVARCHAR(50)  NULL'],
+    ['UnitsPerParcel',    'DECIMAL(18,4) NULL'],
+    ['CreatedAt',         'DATETIME2     NOT NULL DEFAULT GETUTCDATE()'],
+    ['UpdatedAt',         'DATETIME2     NOT NULL DEFAULT GETUTCDATE()'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[${s}].[InvoiceLine]') AND name='${col}')
+        ALTER TABLE [${s}].[InvoiceLine] ADD [${col}] ${def}
+    `);
+  }
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name='FK_InvoiceLine_${s}')
       ALTER TABLE [${s}].[InvoiceLine]
@@ -236,9 +344,18 @@ async function migrate(companyId) {
       [UserId]       NVARCHAR(100)    NULL,
       [UserName]     NVARCHAR(200)    NULL,
       [Metadata]     NVARCHAR(MAX)    NULL,
-      [OccurredAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+      [OccurredAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
+  for (const col of ['CreatedAt', 'UpdatedAt']) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[${s}].[AuditLog]') AND name='${col}')
+        ALTER TABLE [${s}].[AuditLog] ADD [${col}] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    `);
+  }
   console.log(`  [${s}].[AuditLog] OK`);
 
   console.log(`\n  ✓ [${s}] migration complete.`);

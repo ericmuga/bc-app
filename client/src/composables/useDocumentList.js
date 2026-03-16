@@ -14,17 +14,18 @@ export function useDocumentList(listFn) {
   const rows    = ref([])
   const loading = ref(false)
   const error   = ref(null)
-  const filters = reactive({ q: '', dateFrom: null, dateTo: null, status: '' })
+  const filters = reactive({ q: '', dateFrom: null, dateTo: null, status: '', postingGroup: '' })
 
   async function load(extra = {}) {
     loading.value = true
     error.value   = null
     try {
       const params = {}
-      if (filters.q)        params.q        = filters.q
-      if (filters.dateFrom) params.dateFrom  = toISO(filters.dateFrom)
-      if (filters.dateTo)   params.dateTo    = toISO(filters.dateTo)
-      if (filters.status)   params.status    = filters.status
+      if (filters.q)            params.q            = filters.q
+      if (filters.dateFrom)     params.dateFrom      = toISO(filters.dateFrom)
+      if (filters.dateTo)       params.dateTo        = toISO(filters.dateTo)
+      if (filters.status)       params.status        = filters.status
+      if (filters.postingGroup) params.postingGroup  = filters.postingGroup
       Object.assign(params, extra)
 
       const { data } = await listFn(params)
@@ -37,10 +38,11 @@ export function useDocumentList(listFn) {
   }
 
   function reset() {
-    filters.q        = ''
-    filters.dateFrom = null
-    filters.dateTo   = null
-    filters.status   = ''
+    filters.q            = ''
+    filters.dateFrom     = null
+    filters.dateTo       = null
+    filters.status       = ''
+    filters.postingGroup = ''
     load()
   }
 

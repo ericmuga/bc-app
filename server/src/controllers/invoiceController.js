@@ -8,17 +8,30 @@ import logger from '../services/logger.js';
 /** POST /api/webhook/invoices  – called by Business Central with ETIMS data */
 export async function receiveInvoice(req, res) {
   try {
-    const { orderNo, invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId, etimsInvoiceNo, etimsData, qrcodeUrl, lines } = req.body;
+    const {
+      orderNo, invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
+      etimsInvoiceNo, etimsData, qrcodeUrl, lines,
+      customerPin, salespersonName, shipToName, shipmentMethod, paymentTerms, externalDocNo,
+      companyName, companyPin, companyEmail, companyVatReg, noPrinted,
+    } = req.body;
     if (!invoiceNo || !invoicedAt) {
       return res.status(400).json({ error: 'invoiceNo and invoicedAt are required' });
     }
 
+    const invoiceFields = {
+      invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
+      etimsInvoiceNo, etimsData, qrcodeUrl,
+      customerPin, salespersonName, shipToName, shipmentMethod, paymentTerms, externalDocNo,
+      companyName, companyPin, companyEmail, companyVatReg, noPrinted,
+    };
+
     if (orderNo) {
-      // Move order to invoice (deduplication: order leaves SalesHeader)
-      await Order.moveToInvoice(req.companyId, orderNo, {
-        invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
-        etimsInvoiceNo, etimsData, qrcodeUrl,
-      });
+      // Move order to invoice (idempotent — skips silently if invoice already exists)
+      const created = await Order.moveToInvoice(req.companyId, orderNo, invoiceFields, Array.isArray(lines) ? lines : null);
+      if (!created) {
+        logger.info('Invoice already exists — duplicate webhook ignored', { company: req.companyId, invoiceNo });
+        return res.status(200).json({ message: 'Invoice already exists', invoiceNo, orderNo });
+      }
       await Invoice.audit(req.companyId, 'InvoiceReceived', invoiceNo, 'Invoice', 'BC', 'Business Central', {
         orderNo, etimsInvoiceNo,
       });
@@ -26,8 +39,17 @@ export async function receiveInvoice(req, res) {
       return res.status(201).json({ message: 'Invoice created from order', invoiceNo, orderNo });
     }
 
-    // Standalone invoice (no order reference)
-    return res.status(400).json({ error: 'orderNo is required to match existing order' });
+    // Standalone invoice — no matching order, insert directly without touching SalesHeader
+    const { customerNo, customerName, salespersonCode, routeCode, sectorCode, orderDate } = req.body;
+    await Invoice.insertDirect(req.companyId, {
+      ...invoiceFields,
+      customerNo, customerName, salespersonCode, routeCode, sectorCode, orderDate,
+    }, Array.isArray(lines) ? lines : []);
+    await Invoice.audit(req.companyId, 'InvoiceReceived', invoiceNo, 'Invoice', 'BC', 'Business Central', {
+      standalone: true, etimsInvoiceNo,
+    });
+    logger.info('Standalone invoice stored', { company: req.companyId, invoiceNo });
+    return res.status(201).json({ message: 'Standalone invoice stored', invoiceNo });
   } catch (err) {
     logger.error('receiveInvoice error', { error: err.message });
     return res.status(500).json({ error: err.message });

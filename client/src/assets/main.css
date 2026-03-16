@@ -138,3 +138,33 @@ html, body, #app {
   background: var(--bc-primary);
   color: #fff;
 }
+
+/* Drawer (right-side panel) — dark background matching app surface */
+.p-drawer {
+  background: var(--bc-surface-card);
+  color: var(--bc-text);
+  border-left: 1px solid var(--bc-border);
+}
+.p-drawer .p-drawer-header {
+  background: var(--bc-surface-raised);
+  color: var(--bc-text);
+  border-bottom: 1px solid var(--bc-border);
+  padding: 14px 18px;
+}
+.p-drawer .p-drawer-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--bc-text);
+}
+.p-drawer .p-drawer-close-button {
+  color: var(--bc-text-muted);
+}
+.p-drawer .p-drawer-close-button:hover {
+  background: var(--bc-surface-card);
+  color: var(--bc-text);
+}
+.p-drawer .p-drawer-content {
+  background: var(--bc-surface-card);
+  color: var(--bc-text);
+  padding: 16px 18px;
+}

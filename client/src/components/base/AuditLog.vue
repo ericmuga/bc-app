@@ -1,9 +1,19 @@
 <template>
-  <div v-if="log.length" class="audit-wrap">
+  <div v-if="log.length || hasPrintInfo" class="audit-wrap">
     <div class="audit-title">
       <i class="pi pi-history" />
       Audit trail
     </div>
+
+    <!-- Printed by / printing time row (from BC) -->
+    <div v-if="hasPrintInfo" class="audit-entry audit-entry--print">
+      <div class="audit-event">
+        <span class="audit-badge badge badge-print">Printed</span>
+        <span class="text-muted text-sm">{{ header.BCUserId || '—' }}</span>
+      </div>
+      <div class="text-muted text-sm">{{ header.PrintingDatetime ? fmtDate(header.PrintingDatetime) : '—' }}</div>
+    </div>
+
     <div
       v-for="entry in log"
       :key="entry.Id"
@@ -20,7 +30,14 @@
 </template>
 
 <script setup>
-defineProps({ log: { type: Array, default: () => [] } })
+import { computed } from 'vue'
+
+const props = defineProps({
+  log:    { type: Array,  default: () => [] },
+  header: { type: Object, default: null },
+})
+
+const hasPrintInfo = computed(() => props.header && (props.header.BCUserId || props.header.PrintingDatetime))
 
 const labels = {
   OrderReceived:    'Received',
@@ -76,6 +93,8 @@ function fmtDate(v) {
   gap: 12px;
   font-size: 13px;
 }
-.audit-entry--copy { background: var(--bc-warning-bg); }
+.audit-entry--copy  { background: var(--bc-warning-bg); }
+.audit-entry--print { background: var(--bc-surface-raised); }
 .audit-event { display: flex; align-items: center; gap: 10px; }
+.badge-print { background: var(--bc-primary); color: #fff; }
 </style>

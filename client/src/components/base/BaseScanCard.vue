@@ -57,7 +57,7 @@
       </div>
 
       <!-- Audit log -->
-      <AuditLog v-if="auditLog.length" :log="auditLog" />
+      <AuditLog v-if="auditLog.length || doc.header.BCUserId || doc.header.PrintingDatetime" :log="auditLog" :header="doc.header" />
 
       <!-- Action bar -->
       <div class="action-bar">

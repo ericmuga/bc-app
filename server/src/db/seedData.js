@@ -21,6 +21,13 @@ const ROUTES = ['RT-NBI', 'RT-MSA', 'RT-KSM', 'RT-NKR', 'RT-ELD'];
 
 const SECTORS = ['RETAIL', 'WHOLESALE', 'HORECA'];
 
+const POSTING_GROUPS  = ['DOMESTIC', 'EXPORT', 'VAT-EXEMPT', 'ZERO-RATED'];
+const VAT_RATES = [
+  { pct: 16, identifier: 'VAT16' },
+  { pct: 8,  identifier: 'VAT8'  },
+  { pct: 0,  identifier: 'EXEMPT'},
+];
+
 const CUSTOMERS = [
   { no: 'C001', name: 'Sunrise Supermarket Ltd' },
   { no: 'C002', name: 'Westlands Grocers' },
@@ -99,16 +106,24 @@ function buildLines(orderNo) {
   const count = rand(1, 5);
   const chosen = [...ITEMS].sort(() => Math.random() - 0.5).slice(0, count);
   return chosen.map((item, i) => {
-    const qty = rand(1, 20);
+    const qty        = rand(1, 20);
+    const lineAmount = qty * item.price;
+    const vat        = pick(VAT_RATES);
+    const inclVat    = Math.round(lineAmount * (1 + vat.pct / 100) * 100) / 100;
     return {
-      lineNo:        (i + 1) * 10000,
-      itemNo:        item.no,
-      description:   item.desc,
-      quantity:      qty,
-      quantityBase:  qty,
-      unitPrice:     item.price,
-      lineAmount:    qty * item.price,
-      unitOfMeasure: item.uom,
+      lineNo:            (i + 1) * 10000,
+      itemNo:            item.no,
+      description:       item.desc,
+      quantity:          qty,
+      quantityBase:      qty,
+      unitPrice:         item.price,
+      lineAmount,
+      amountInclVat:     inclVat,
+      vatPct:            vat.pct,
+      vatIdentifier:     vat.identifier,
+      unitsPerParcel:    rand(1, 24),
+      unitOfMeasure:     item.uom,
+      postingGroup:      pick(POSTING_GROUPS),
     };
   });
 }

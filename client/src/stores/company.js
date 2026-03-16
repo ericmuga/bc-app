@@ -8,7 +8,7 @@ export const useCompanyStore = defineStore('company', () => {
     JSON.parse(localStorage.getItem('bc_companies') || '[]')
   )
   const currentCompanyId = ref(
-    localStorage.getItem('bc_current_company') || (companies.value[0]?.CompanyId ?? 'COMPANY_001')
+    localStorage.getItem('bc_current_company') || (companies.value[0]?.CompanyId ?? 'FCL')
   )
 
   const currentCompany = computed(() =>

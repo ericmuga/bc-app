@@ -15,8 +15,10 @@
       <DatePicker v-model="list.filters.dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon />
       <Select v-model="list.filters.status" :options="statuses" option-label="label" option-value="value"
         placeholder="All statuses" style="width:150px" show-clear />
+      <InputText v-model="list.filters.postingGroup" placeholder="Posting group" style="width:150px" @keyup.enter="list.load()" />
       <Button label="Filter" icon="pi pi-filter" @click="list.load()" />
       <Button label="Clear"  icon="pi pi-times"  text @click="list.reset()" />
+      <Button icon="pi pi-download" text severity="secondary" @click="doExport" v-tooltip="'Export to CSV'" />
     </div>
 
     <!-- Totals strip -->
@@ -117,6 +119,7 @@ import AuditLog      from '@/components/base/AuditLog.vue'
 import { invoicesApi } from '@/services/api.js'
 import { useDocumentList } from '@/composables/useDocumentList.js'
 import { watchDebounced }  from '@/composables/useDebounce.js'
+import { exportCsv, todayStr } from '@/utils/exportCsv.js'
 
 const router = useRouter()
 const list   = useDocumentList(invoicesApi.list)
@@ -128,6 +131,23 @@ const statuses = [
   { label: 'Invoiced',  value: 'Invoiced' },
   { label: 'Confirmed', value: 'Confirmed' },
 ]
+
+function doExport() {
+  exportCsv(`invoices-${todayStr()}.csv`, list.rows, [
+    { key: 'InvoiceNo',       label: 'Invoice No' },
+    { key: 'OriginalOrderNo', label: 'Order No' },
+    { key: 'CustomerNo',      label: 'Customer No' },
+    { key: 'CustomerName',    label: 'Customer' },
+    { key: 'ETIMSInvoiceNo',  label: 'E-TIMS No' },
+    { key: 'SalespersonCode', label: 'Salesperson' },
+    { key: 'RouteCode',       label: 'Route' },
+    { key: 'SectorCode',      label: 'Sector' },
+    { key: 'InvoicedAt',      label: 'Invoiced At' },
+    { key: 'Status',          label: 'Status' },
+    { key: 'TotalQuantityBase', label: 'Qty Base' },
+    { key: 'TotalLineAmount',   label: 'Amount' },
+  ])
+}
 
 // Grand totals are computed from header rows (no line detail needed in list)
 const grandQty     = computed(() => list.rows.reduce((s, r) => s + (+r.TotalQuantity     || 0), 0))

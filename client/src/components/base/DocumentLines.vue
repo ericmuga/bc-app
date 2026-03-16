@@ -13,6 +13,11 @@
     </Column>
     <Column field="Description" header="Description" />
     <Column field="UnitOfMeasure" header="UOM" style="width: 70px" />
+    <Column field="PostingGroup" header="Post. Group" style="width: 110px">
+      <template #body="{ data }">
+        <span class="text-muted text-sm">{{ data.PostingGroup || '—' }}</span>
+      </template>
+    </Column>
     <Column field="Quantity" header="Qty" style="width: 90px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
         <span class="mono">{{ fmt(data.Quantity) }}</span>
@@ -28,19 +33,25 @@
         <span class="mono">{{ fmtCurrency(data.UnitPrice) }}</span>
       </template>
     </Column>
-    <Column field="LineAmount" header="Amount" style="width: 120px; text-align:right" header-style="text-align:right">
+    <Column field="LineAmount" header="Amt (Ex VAT)" style="width: 120px; text-align:right" header-style="text-align:right">
       <template #body="{ data }">
-        <span class="mono" style="font-weight:600">{{ fmtCurrency(data.LineAmount) }}</span>
+        <span class="mono">{{ fmtCurrency(data.LineAmount) }}</span>
+      </template>
+    </Column>
+    <Column field="LineAmountInclVat" header="Amt (Incl VAT)" style="width: 130px; text-align:right" header-style="text-align:right">
+      <template #body="{ data }">
+        <span class="mono" style="font-weight:600">{{ data.LineAmountInclVat != null ? fmtCurrency(data.LineAmountInclVat) : '—' }}</span>
       </template>
     </Column>
 
     <ColumnGroup type="footer">
       <Row>
-        <Column footer="Totals" :colspan="4" footerStyle="text-align:left;font-weight:700" />
-        <Column :footer="fmt(totalQty)" footerStyle="text-align:right;font-family:var(--bc-mono)" />
+        <Column footer="Totals" :colspan="5" footerStyle="text-align:left;font-weight:700" />
+        <Column :footer="fmt(totalQty)"     footerStyle="text-align:right;font-family:var(--bc-mono)" />
         <Column :footer="fmt(totalQtyBase)" footerStyle="text-align:right;font-family:var(--bc-mono)" />
         <Column footer="" />
-        <Column :footer="fmtCurrency(totalAmount)" footerStyle="text-align:right;font-family:var(--bc-mono);font-weight:700;color:var(--bc-primary-light)" />
+        <Column :footer="fmtCurrency(totalAmount)"    footerStyle="text-align:right;font-family:var(--bc-mono);font-weight:700" />
+        <Column :footer="fmtCurrency(totalInclVat)"   footerStyle="text-align:right;font-family:var(--bc-mono);font-weight:700;color:var(--bc-primary-light)" />
       </Row>
     </ColumnGroup>
   </DataTable>
@@ -55,12 +66,13 @@ import Row from 'primevue/row'
 
 const props = defineProps({ lines: { type: Array, default: () => [] } })
 
-const totalQty     = computed(() => props.lines.reduce((s, l) => s + +l.Quantity, 0))
-const totalQtyBase = computed(() => props.lines.reduce((s, l) => s + +l.QuantityBase, 0))
-const totalAmount  = computed(() => props.lines.reduce((s, l) => s + +l.LineAmount, 0))
+const totalQty      = computed(() => props.lines.reduce((s, l) => s + +l.Quantity, 0))
+const totalQtyBase  = computed(() => props.lines.reduce((s, l) => s + +l.QuantityBase, 0))
+const totalAmount   = computed(() => props.lines.reduce((s, l) => s + +l.LineAmount, 0))
+const totalInclVat  = computed(() => props.lines.reduce((s, l) => s + +(l.LineAmountInclVat ?? l.LineAmount ?? 0), 0))
 
 const fmt         = (v) => Number(v).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtCurrency = (v) => `KES ${fmt(v)}`
+const fmtCurrency = (v) => fmt(v)
 </script>
 
 <style scoped>
