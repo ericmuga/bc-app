@@ -16,9 +16,17 @@ async function isValidCompany(companyId) {
     const pool = await db.getPool();
     const req = pool.request();
     req.input('CompanyId', sql.NVarChar(60), companyId);
-    const result = await req.query(
-      `SELECT 1 FROM [dbo].[Companies] WHERE CompanyId = @CompanyId AND IsActive = 1`
-    );
+    // Accept companies registered in dbo.Companies OR detected via migrated schema
+    const result = await req.query(`
+      SELECT 1
+      FROM [dbo].[Companies]
+      WHERE CompanyId = @CompanyId AND IsActive = 1
+      UNION
+      SELECT 1
+      FROM sys.schemas s
+      JOIN sys.tables  t ON t.schema_id = s.schema_id AND t.name = 'SalesHeader'
+      WHERE s.name = @CompanyId
+    `);
     const valid = result.recordset.length > 0;
     cache.set(companyId, { valid, ts: Date.now() });
     return valid;

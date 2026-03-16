@@ -4,15 +4,23 @@
 import { db, sql } from '../db/pool.js'
 import logger from '../services/logger.js'
 
-export async function listCompanies(req, res) {
+export async function listCompanies(_req, res) {
   try {
     const pool = await db.getPool()
-    const result = await pool.request().query(
-      `SELECT CompanyId, CompanyName, IsActive, CreatedAt
-       FROM [dbo].[Companies]
-       WHERE IsActive = 1
-       ORDER BY CompanyName`
-    )
+    // Return all schemas that have been migrated (have SalesHeader table),
+    // using CompanyName from dbo.Companies if registered, otherwise the schema name.
+    const result = await pool.request().query(`
+      SELECT
+        s.name                              AS CompanyId,
+        COALESCE(c.CompanyName, s.name)     AS CompanyName,
+        COALESCE(c.IsActive, 1)             AS IsActive,
+        COALESCE(c.CreatedAt, GETUTCDATE()) AS CreatedAt
+      FROM sys.schemas s
+      JOIN sys.tables  t ON t.schema_id = s.schema_id AND t.name = 'SalesHeader'
+      LEFT JOIN [dbo].[Companies] c ON c.CompanyId = s.name
+      WHERE (c.IsActive = 1 OR c.CompanyId IS NULL)
+      ORDER BY CompanyName
+    `)
     return res.json(result.recordset)
   } catch (err) {
     logger.error('listCompanies error', { error: err.message })

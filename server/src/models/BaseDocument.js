@@ -24,14 +24,14 @@ export class BaseDocument {
       req.input('DocNo', sql.NVarChar(30), docNo);
 
       const headerResult = await req.query(
-        `SELECT * FROM ${schema}.[${this.headerTable}] WHERE ${this.noField} = @DocNo`
+        `SELECT * FROM ${schema}.[${this.headerTable}] WHERE [${this.noField}] = @DocNo`
       );
       if (!headerResult.recordset.length) return null;
 
       const lReq = pool.request();
       lReq.input('DocNo', sql.NVarChar(30), docNo);
       const linesResult = await lReq.query(
-        `SELECT * FROM ${schema}.[${this.lineTable}] WHERE ${this.noField} = @DocNo ORDER BY LineNo`
+        `SELECT * FROM ${schema}.[${this.lineTable}] WHERE [${this.noField}] = @DocNo ORDER BY [LineNo]`
       );
       return { header: headerResult.recordset[0], lines: linesResult.recordset };
     });
@@ -45,41 +45,41 @@ export class BaseDocument {
 
       if (q) {
         req.input('Q', sql.NVarChar(200), `%${q}%`);
-        conditions.push(`(${this.noField} LIKE @Q OR CustomerName LIKE @Q OR CustomerNo LIKE @Q)`);
+        conditions.push(`([${this.noField}] LIKE @Q OR [CustomerName] LIKE @Q OR [CustomerNo] LIKE @Q)`);
       }
       if (customerNo) {
         req.input('CustomerNo', sql.NVarChar(30), customerNo);
-        conditions.push('CustomerNo = @CustomerNo');
+        conditions.push('[CustomerNo] = @CustomerNo');
       }
       if (salesperson) {
         req.input('Salesperson', sql.NVarChar(20), salesperson);
-        conditions.push('SalespersonCode = @Salesperson');
+        conditions.push('[SalespersonCode] = @Salesperson');
       }
       if (route) {
         req.input('Route', sql.NVarChar(20), route);
-        conditions.push('RouteCode = @Route');
+        conditions.push('[RouteCode] = @Route');
       }
       if (sector) {
         req.input('Sector', sql.NVarChar(20), sector);
-        conditions.push('SectorCode = @Sector');
+        conditions.push('[SectorCode] = @Sector');
       }
       if (dateFrom) {
         req.input('DateFrom', sql.Date, new Date(dateFrom));
-        conditions.push('OrderDate >= @DateFrom');
+        conditions.push('[OrderDate] >= @DateFrom');
       }
       if (dateTo) {
         req.input('DateTo', sql.Date, new Date(dateTo));
-        conditions.push('OrderDate <= @DateTo');
+        conditions.push('[OrderDate] <= @DateTo');
       }
       if (status) {
         req.input('Status', sql.NVarChar(20), status);
-        conditions.push('Status = @Status');
+        conditions.push('[Status] = @Status');
       }
 
       const result = await req.query(
         `SELECT * FROM ${schema}.[${this.headerTable}]
          WHERE ${conditions.join(' AND ')}
-         ORDER BY CreatedAt DESC`
+         ORDER BY [CreatedAt] DESC`
       );
       return result.recordset;
     });
@@ -95,8 +95,8 @@ export class BaseDocument {
 
       const result = await req.query(`
         UPDATE ${schema}.[${this.headerTable}]
-        SET Status = 'Confirmed', ConfirmedAt = @Now, ConfirmedBy = @UserName, UpdatedAt = @Now
-        WHERE ${this.noField} = @DocNo AND Status != 'Confirmed'
+        SET [Status] = 'Confirmed', [ConfirmedAt] = @Now, [ConfirmedBy] = @UserName, [UpdatedAt] = @Now
+        WHERE [${this.noField}] = @DocNo AND [Status] != 'Confirmed'
       `);
       return result.rowsAffected[0] > 0;
     });
@@ -106,16 +106,16 @@ export class BaseDocument {
   async audit(companyId, eventType, documentNo, documentType, userId, userName, metadata = null) {
     return db.query(companyId, async (pool, schema) => {
       const req = pool.request();
-      req.input('EventType',    sql.NVarChar(30),           eventType);
-      req.input('DocumentNo',   sql.NVarChar(30),           documentNo);
-      req.input('DocumentType', sql.NVarChar(20),           documentType);
-      req.input('UserId',       sql.NVarChar(100),          userId   || null);
-      req.input('UserName',     sql.NVarChar(200),          userName || null);
-      req.input('Metadata',     sql.NVarChar(sql.MAX),      metadata ? JSON.stringify(metadata) : null);
+      req.input('EventType',    sql.NVarChar(30),      eventType);
+      req.input('DocumentNo',   sql.NVarChar(30),      documentNo);
+      req.input('DocumentType', sql.NVarChar(20),      documentType);
+      req.input('UserId',       sql.NVarChar(100),     userId   || null);
+      req.input('UserName',     sql.NVarChar(200),     userName || null);
+      req.input('Metadata',     sql.NVarChar(sql.MAX), metadata ? JSON.stringify(metadata) : null);
 
       await req.query(`
         INSERT INTO ${schema}.[AuditLog]
-          (EventType, DocumentNo, DocumentType, UserId, UserName, Metadata)
+          ([EventType], [DocumentNo], [DocumentType], [UserId], [UserName], [Metadata])
         VALUES
           (@EventType, @DocumentNo, @DocumentType, @UserId, @UserName, @Metadata)
       `);
@@ -129,8 +129,8 @@ export class BaseDocument {
       req.input('DocNo', sql.NVarChar(30), documentNo);
       const result = await req.query(
         `SELECT * FROM ${schema}.[AuditLog]
-         WHERE DocumentNo = @DocNo
-         ORDER BY OccurredAt DESC`
+         WHERE [DocumentNo] = @DocNo
+         ORDER BY [OccurredAt] DESC`
       );
       return result.recordset;
     });
@@ -143,28 +143,28 @@ export class BaseDocument {
 
     return db.query(companyId, async (pool, schema) => {
       const req = pool.request();
-      const conditions = ["h.Status = 'Confirmed'"];
+      const conditions = ["h.[Status] = 'Confirmed'"];
 
       if (dateFrom) {
         req.input('DateFrom', sql.Date, new Date(dateFrom));
-        conditions.push('h.OrderDate >= @DateFrom');
+        conditions.push('h.[OrderDate] >= @DateFrom');
       }
       if (dateTo) {
         req.input('DateTo', sql.Date, new Date(dateTo));
-        conditions.push('h.OrderDate <= @DateTo');
+        conditions.push('h.[OrderDate] <= @DateTo');
       }
 
       const result = await req.query(`
         SELECT
-          h.${safeGroup}                    AS GroupKey,
-          COUNT(DISTINCT h.${this.noField}) AS DocumentCount,
-          SUM(l.Quantity)                   AS TotalQuantity,
-          SUM(l.QuantityBase)               AS TotalQuantityBase,
-          SUM(l.LineAmount)                 AS TotalLineAmount
+          h.[${safeGroup}]                        AS GroupKey,
+          COUNT(DISTINCT h.[${this.noField}])     AS DocumentCount,
+          SUM(l.[Quantity])                        AS TotalQuantity,
+          SUM(l.[QuantityBase])                    AS TotalQuantityBase,
+          SUM(l.[LineAmount])                      AS TotalLineAmount
         FROM ${schema}.[${this.headerTable}] h
-        JOIN ${schema}.[${this.lineTable}]   l ON h.${this.noField} = l.${this.noField}
+        JOIN ${schema}.[${this.lineTable}]   l ON h.[${this.noField}] = l.[${this.noField}]
         WHERE ${conditions.join(' AND ')}
-        GROUP BY h.${safeGroup}
+        GROUP BY h.[${safeGroup}]
         ORDER BY TotalLineAmount DESC
       `);
       return result.recordset;

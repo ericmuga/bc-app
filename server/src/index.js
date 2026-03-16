@@ -6,9 +6,11 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import swaggerUi from 'swagger-ui-express';
 import { db } from './db/pool.js';
 import routes from './routes/index.js';
 import logger from './services/logger.js';
+import swaggerSpec from './docs/swagger.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +26,11 @@ app.use('/api', rateLimit({ windowMs: 60_000, max: 200 }));
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.use('/api', routes);
 
+// ── Swagger UI ───────────────────────────────────────────────────────────────
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: 'BC Sales Console API',
+}));
+
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
   try {
@@ -36,7 +43,7 @@ app.get('/health', async (_req, res) => {
 });
 
 // ── Error handler ────────────────────────────────────────────────────────────
-app.use((err, req, res, _next) => {
+app.use((err, _req, res, _next) => {
   logger.error('Unhandled error', { error: err.message, stack: err.stack });
   res.status(500).json({ error: 'Internal server error' });
 });

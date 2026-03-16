@@ -8,7 +8,7 @@ import logger from '../services/logger.js';
 /** POST /api/webhook/invoices  – called by Business Central with ETIMS data */
 export async function receiveInvoice(req, res) {
   try {
-    const { orderNo, invoiceNo, invoicedAt, etimsInvoiceNo, etimsData, lines } = req.body;
+    const { orderNo, invoiceNo, invoicedAt, etimsInvoiceNo, etimsData, qrcodeUrl, lines } = req.body;
     if (!invoiceNo || !invoicedAt) {
       return res.status(400).json({ error: 'invoiceNo and invoicedAt are required' });
     }
@@ -16,7 +16,7 @@ export async function receiveInvoice(req, res) {
     if (orderNo) {
       // Move order to invoice (deduplication: order leaves SalesHeader)
       await Order.moveToInvoice(req.companyId, orderNo, {
-        invoiceNo, invoicedAt, etimsInvoiceNo, etimsData,
+        invoiceNo, invoicedAt, etimsInvoiceNo, etimsData, qrcodeUrl,
       });
       await Invoice.audit(req.companyId, 'InvoiceReceived', invoiceNo, 'Invoice', 'BC', 'Business Central', {
         orderNo, etimsInvoiceNo,
@@ -91,6 +91,20 @@ export async function getInvoiceAudit(req, res) {
     const log = await Invoice.getAuditLog(req.companyId, req.params.invoiceNo);
     return res.json(log);
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/invoices/by-qrcode?url=... */
+export async function getByQRCode(req, res) {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'url query param required' });
+    const doc = await Invoice.findByQRCode(req.companyId, url);
+    if (!doc) return res.status(404).json({ error: 'Invoice not found for this QR code' });
+    return res.json(doc);
+  } catch (err) {
+    logger.error('getByQRCode error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 }

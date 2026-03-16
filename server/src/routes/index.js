@@ -32,6 +32,7 @@ router.get( '/orders/:orderNo/audit',    authMiddleware, company, orderCtrl.getO
 // ── Invoice routes (App UI) ──────────────────────────────────────────────────
 router.get( '/invoices',                   authMiddleware, company, invoiceCtrl.listInvoices);
 router.get( '/invoices/summary',           authMiddleware, company, invoiceCtrl.invoiceSummary);
+router.get( '/invoices/by-qrcode',         authMiddleware, company, invoiceCtrl.getByQRCode);
 router.get( '/invoices/:invoiceNo',        authMiddleware, company, invoiceCtrl.getInvoice);
 router.post('/invoices/:invoiceNo/confirm',authMiddleware, company, invoiceCtrl.confirmInvoice);
 router.get( '/invoices/:invoiceNo/audit',  authMiddleware, company, invoiceCtrl.getInvoiceAudit);
