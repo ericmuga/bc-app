@@ -12,20 +12,21 @@ import logger from '../services/logger.js';
 dotenv.config();
 
 const config = {
-  server: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT) || 1433,
-  user: process.env.DB_USER,
+  server:   process.env.DB_HOST,
+  port:     parseInt(process.env.DB_PORT) || 1433,
+  database: process.env.DB_NAME || 'BCApp',
+  user:     process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   options: {
-    encrypt: process.env.DB_ENCRYPT === 'true',
+    encrypt:                process.env.DB_ENCRYPT === 'true',
     trustServerCertificate: process.env.DB_TRUST_CERT === 'true',
-    enableArithAbort: true,
+    enableArithAbort:       true,
   },
   pool: {
-    min: parseInt(process.env.DB_POOL_MIN) || 2,
-    max: parseInt(process.env.DB_POOL_MAX) || 20,
-    idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT) || 30000,
-    acquireTimeoutMillis: parseInt(process.env.DB_POOL_ACQUIRE_TIMEOUT) || 60000,
+    min:                   parseInt(process.env.DB_POOL_MIN)              || 2,
+    max:                   parseInt(process.env.DB_POOL_MAX)              || 20,
+    idleTimeoutMillis:     parseInt(process.env.DB_POOL_IDLE_TIMEOUT)     || 30000,
+    acquireTimeoutMillis:  parseInt(process.env.DB_POOL_ACQUIRE_TIMEOUT)  || 60000,
   },
 };
 

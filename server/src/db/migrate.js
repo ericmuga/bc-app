@@ -1,8 +1,8 @@
 /**
  * db/migrate.js
  * Run once per company to create all required tables.
- * Usage: node src/db/migrate.js COMPANY_001
- *        node src/db/migrate.js COMPANY_001 COMPANY_002
+ * Usage: node src/db/migrate.js FCL1
+ *        node src/db/migrate.js FCL1 CM3
  */
 import { db, sql } from './pool.js';
 import dotenv from 'dotenv';
@@ -10,154 +10,181 @@ dotenv.config();
 
 const companies = process.argv.slice(2);
 if (!companies.length) {
-  console.error('Usage: node migrate.js COMPANY_001 [COMPANY_002 ...]');
+  console.error('Usage: node src/db/migrate.js COMPANY_001 [COMPANY_002 ...]');
   process.exit(1);
 }
 
-async function migrate(companyId) {
-  const schema = companyId.replace(/[^a-zA-Z0-9_]/g, '');
-  console.log(`\nMigrating schema: [${schema}]`);
-  const pool = await db.connect();
-  const req = pool.request();
+async function run(query) {
+  const pool = await db.getPool();
+  await pool.request().query(query);
+}
 
-  // CREATE SCHEMA must run alone in its own batch — check existence separately
-  const schemaCheck = await pool.request().query(
-    `SELECT 1 FROM sys.schemas WHERE name = '${schema}'`
+async function migrate(companyId) {
+  const s = companyId.replace(/[^a-zA-Z0-9_]/g, '');
+  console.log(`\nMigrating schema: [${s}]`);
+
+  await db.connect();
+
+  // ── Schema (must be alone in its batch) ──────────────────────────────────
+  const pool = await db.getPool();
+  const schemaExists = await pool.request().query(
+    `SELECT 1 FROM sys.schemas WHERE name = '${s}'`
   );
-  if (!schemaCheck.recordset.length) {
-    await pool.request().query(`CREATE SCHEMA [${schema}]`);
-    console.log(`  Schema [${schema}] created.`);
+  if (!schemaExists.recordset.length) {
+    await pool.request().query(`CREATE SCHEMA [${s}]`);
+    console.log(`  [${s}] schema created.`);
   } else {
-    console.log(`  Schema [${schema}] already exists.`);
+    console.log(`  [${s}] schema already exists.`);
   }
 
-  const tables = `
-  -- Companies registry (lives in [dbo] – shared)
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='Companies' AND schema_id=SCHEMA_ID('dbo'))
-  CREATE TABLE [dbo].[Companies] (
-    CompanyId   NVARCHAR(60)  NOT NULL PRIMARY KEY,
-    CompanyName NVARCHAR(200) NOT NULL,
-    IsActive    BIT           NOT NULL DEFAULT 1,
-    CreatedAt   DATETIME2     NOT NULL DEFAULT GETUTCDATE()
-  );
+  // ── Shared tables (dbo) ───────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='Companies' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[Companies] (
+      CompanyId   NVARCHAR(60)  NOT NULL PRIMARY KEY,
+      CompanyName NVARCHAR(200) NOT NULL,
+      IsActive    BIT           NOT NULL DEFAULT 1,
+      CreatedAt   DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[Companies] OK');
 
-  -- Users table (lives in [dbo] – shared across all companies)
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='Users' AND schema_id=SCHEMA_ID('dbo'))
-  CREATE TABLE [dbo].[Users] (
-    UserId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    Username     NVARCHAR(100) NOT NULL UNIQUE,
-    PasswordHash NVARCHAR(200) NOT NULL DEFAULT '',
-    DisplayName  NVARCHAR(200) NOT NULL,
-    Email        NVARCHAR(200) NULL,
-    Role         NVARCHAR(20)  NOT NULL DEFAULT 'user',        -- user | admin
-    AuthProvider NVARCHAR(20)  NOT NULL DEFAULT 'local',       -- local | AD
-    IsActive     BIT           NOT NULL DEFAULT 1,
-    CreatedAt    DATETIME2     NOT NULL DEFAULT GETUTCDATE()
-  );
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='Users' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[Users] (
+      UserId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      Username     NVARCHAR(100)    NOT NULL UNIQUE,
+      PasswordHash NVARCHAR(200)    NOT NULL DEFAULT '',
+      DisplayName  NVARCHAR(200)    NOT NULL,
+      Email        NVARCHAR(200)    NULL,
+      Role         NVARCHAR(20)     NOT NULL DEFAULT 'user',
+      AuthProvider NVARCHAR(20)     NOT NULL DEFAULT 'local',
+      IsActive     BIT              NOT NULL DEFAULT 1,
+      CreatedAt    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[Users] OK');
 
-  -- Add columns to Users if upgrading from a previous version
-  IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='Email')
-    ALTER TABLE [dbo].[Users] ADD Email NVARCHAR(200) NULL;
-  IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='AuthProvider')
-    ALTER TABLE [dbo].[Users] ADD AuthProvider NVARCHAR(20) NOT NULL DEFAULT 'local';
+  // Upgrade guards — add columns if upgrading from older schema
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='Email')
+      ALTER TABLE [dbo].[Users] ADD Email NVARCHAR(200) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='AuthProvider')
+      ALTER TABLE [dbo].[Users] ADD AuthProvider NVARCHAR(20) NOT NULL DEFAULT 'local'
+  `);
 
-  -- Sales Header (orders received from BC)
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesHeader' AND schema_id=SCHEMA_ID('${schema}'))
-  CREATE TABLE [${schema}].[SalesHeader] (
-    Id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    OrderNo       NVARCHAR(30)  NOT NULL UNIQUE,
-    CustomerNo    NVARCHAR(30)  NOT NULL,
-    CustomerName  NVARCHAR(200) NOT NULL,
-    SalespersonCode NVARCHAR(20) NULL,
-    RouteCode     NVARCHAR(20)  NULL,
-    SectorCode    NVARCHAR(20)  NULL,
-    OrderDate     DATE          NOT NULL,
-    PostingDate   DATE          NULL,
-    Status        NVARCHAR(20)  NOT NULL DEFAULT 'Open',  -- Open | Confirmed
-    ConfirmedAt   DATETIME2     NULL,
-    ConfirmedBy   NVARCHAR(100) NULL,
-    CreatedAt     DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-    UpdatedAt     DATETIME2     NOT NULL DEFAULT GETUTCDATE()
-  );
+  // ── Company schema tables ─────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesHeader' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[SalesHeader] (
+      Id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      OrderNo         NVARCHAR(30)     NOT NULL UNIQUE,
+      CustomerNo      NVARCHAR(30)     NOT NULL,
+      CustomerName    NVARCHAR(200)    NOT NULL,
+      SalespersonCode NVARCHAR(20)     NULL,
+      RouteCode       NVARCHAR(20)     NULL,
+      SectorCode      NVARCHAR(20)     NULL,
+      OrderDate       DATE             NOT NULL,
+      PostingDate     DATE             NULL,
+      Status          NVARCHAR(20)     NOT NULL DEFAULT 'Open',
+      ConfirmedAt     DATETIME2        NULL,
+      ConfirmedBy     NVARCHAR(100)    NULL,
+      CreatedAt       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      UpdatedAt       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log(`  [${s}].[SalesHeader] OK`);
 
-  -- Sales Lines
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesLine' AND schema_id=SCHEMA_ID('${schema}'))
-  CREATE TABLE [${schema}].[SalesLine] (
-    Id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    OrderNo       NVARCHAR(30)  NOT NULL,
-    LineNo        INT           NOT NULL,
-    ItemNo        NVARCHAR(30)  NOT NULL,
-    Description   NVARCHAR(200) NOT NULL,
-    Quantity      DECIMAL(18,4) NOT NULL DEFAULT 0,
-    QuantityBase  DECIMAL(18,4) NOT NULL DEFAULT 0,
-    UnitPrice     DECIMAL(18,4) NOT NULL DEFAULT 0,
-    LineAmount    DECIMAL(18,4) NOT NULL DEFAULT 0,
-    UnitOfMeasure NVARCHAR(20)  NULL,
-    CreatedAt     DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT FK_SalesLine_Header FOREIGN KEY (OrderNo) REFERENCES [${schema}].[SalesHeader](OrderNo)
-  );
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesLine' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[SalesLine] (
+      Id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      OrderNo       NVARCHAR(30)     NOT NULL,
+      LineNo        INT              NOT NULL,
+      ItemNo        NVARCHAR(30)     NOT NULL,
+      Description   NVARCHAR(200)    NOT NULL,
+      Quantity      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      QuantityBase  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      UnitPrice     DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      LineAmount    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      UnitOfMeasure NVARCHAR(20)     NULL,
+      CreatedAt     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_SalesLine_${s}] FOREIGN KEY (OrderNo)
+        REFERENCES [${s}].[SalesHeader](OrderNo)
+    )
+  `);
+  console.log(`  [${s}].[SalesLine] OK`);
 
-  -- Invoice Header (moved from Orders when invoiced)
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceHeader' AND schema_id=SCHEMA_ID('${schema}'))
-  CREATE TABLE [${schema}].[InvoiceHeader] (
-    Id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    InvoiceNo       NVARCHAR(30)  NOT NULL UNIQUE,
-    OriginalOrderNo NVARCHAR(30)  NOT NULL,
-    CustomerNo      NVARCHAR(30)  NOT NULL,
-    CustomerName    NVARCHAR(200) NOT NULL,
-    SalespersonCode NVARCHAR(20)  NULL,
-    RouteCode       NVARCHAR(20)  NULL,
-    SectorCode      NVARCHAR(20)  NULL,
-    OrderDate       DATE          NOT NULL,
-    PostingDate     DATE          NULL,
-    InvoicedAt      DATETIME2     NOT NULL,
-    ETIMSInvoiceNo  NVARCHAR(60)  NULL,
-    ETIMSData       NVARCHAR(MAX) NULL,  -- JSON blob
-    Status          NVARCHAR(20)  NOT NULL DEFAULT 'Invoiced', -- Invoiced | Confirmed
-    ConfirmedAt     DATETIME2     NULL,
-    ConfirmedBy     NVARCHAR(100) NULL,
-    CreatedAt       DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
-    UpdatedAt       DATETIME2     NOT NULL DEFAULT GETUTCDATE()
-  );
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceHeader' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[InvoiceHeader] (
+      Id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      InvoiceNo       NVARCHAR(30)     NOT NULL UNIQUE,
+      OriginalOrderNo NVARCHAR(30)     NOT NULL,
+      CustomerNo      NVARCHAR(30)     NOT NULL,
+      CustomerName    NVARCHAR(200)    NOT NULL,
+      SalespersonCode NVARCHAR(20)     NULL,
+      RouteCode       NVARCHAR(20)     NULL,
+      SectorCode      NVARCHAR(20)     NULL,
+      OrderDate       DATE             NOT NULL,
+      PostingDate     DATE             NULL,
+      InvoicedAt      DATETIME2        NOT NULL,
+      ETIMSInvoiceNo  NVARCHAR(60)     NULL,
+      ETIMSData       NVARCHAR(MAX)    NULL,
+      Status          NVARCHAR(20)     NOT NULL DEFAULT 'Invoiced',
+      ConfirmedAt     DATETIME2        NULL,
+      ConfirmedBy     NVARCHAR(100)    NULL,
+      CreatedAt       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      UpdatedAt       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log(`  [${s}].[InvoiceHeader] OK`);
 
-  -- Invoice Lines
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceLine' AND schema_id=SCHEMA_ID('${schema}'))
-  CREATE TABLE [${schema}].[InvoiceLine] (
-    Id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    InvoiceNo     NVARCHAR(30)  NOT NULL,
-    LineNo        INT           NOT NULL,
-    ItemNo        NVARCHAR(30)  NOT NULL,
-    Description   NVARCHAR(200) NOT NULL,
-    Quantity      DECIMAL(18,4) NOT NULL DEFAULT 0,
-    QuantityBase  DECIMAL(18,4) NOT NULL DEFAULT 0,
-    UnitPrice     DECIMAL(18,4) NOT NULL DEFAULT 0,
-    LineAmount    DECIMAL(18,4) NOT NULL DEFAULT 0,
-    UnitOfMeasure NVARCHAR(20)  NULL,
-    CONSTRAINT FK_InvoiceLine_Header FOREIGN KEY (InvoiceNo) REFERENCES [${schema}].[InvoiceHeader](InvoiceNo)
-  );
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceLine' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[InvoiceLine] (
+      Id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      InvoiceNo     NVARCHAR(30)     NOT NULL,
+      LineNo        INT              NOT NULL,
+      ItemNo        NVARCHAR(30)     NOT NULL,
+      Description   NVARCHAR(200)    NOT NULL,
+      Quantity      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      QuantityBase  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      UnitPrice     DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      LineAmount    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      UnitOfMeasure NVARCHAR(20)     NULL,
+      CONSTRAINT [FK_InvoiceLine_${s}] FOREIGN KEY (InvoiceNo)
+        REFERENCES [${s}].[InvoiceHeader](InvoiceNo)
+    )
+  `);
+  console.log(`  [${s}].[InvoiceLine] OK`);
 
-  -- Audit Log (confirmations + duplicate scan events)
-  IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='AuditLog' AND schema_id=SCHEMA_ID('${schema}'))
-  CREATE TABLE [${schema}].[AuditLog] (
-    Id          UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    EventType   NVARCHAR(30)  NOT NULL, -- OrderConfirmed | OrderCopy | InvoiceConfirmed | InvoiceCopy | InvoiceReceived | OrderReceived
-    DocumentNo  NVARCHAR(30)  NOT NULL,
-    DocumentType NVARCHAR(20) NOT NULL, -- Order | Invoice
-    UserId      NVARCHAR(100) NULL,
-    UserName    NVARCHAR(200) NULL,
-    Metadata    NVARCHAR(MAX) NULL,  -- JSON
-    OccurredAt  DATETIME2     NOT NULL DEFAULT GETUTCDATE()
-  );
-  `;
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='AuditLog' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[AuditLog] (
+      Id           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      EventType    NVARCHAR(30)     NOT NULL,
+      DocumentNo   NVARCHAR(30)     NOT NULL,
+      DocumentType NVARCHAR(20)     NOT NULL,
+      UserId       NVARCHAR(100)    NULL,
+      UserName     NVARCHAR(200)    NULL,
+      Metadata     NVARCHAR(MAX)    NULL,
+      OccurredAt   DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log(`  [${s}].[AuditLog] OK`);
 
-  await req.query(tables);
-  console.log(`  [${schema}] tables ready.`);
+  console.log(`\n  ✓ [${s}] migration complete.`);
 }
 
 (async () => {
   try {
     for (const c of companies) await migrate(c);
-    console.log('\nMigration complete.');
+    console.log('\nAll migrations complete.');
   } catch (err) {
     console.error('Migration failed:', err.message);
   } finally {
