@@ -20,8 +20,16 @@ async function migrate(companyId) {
   const pool = await db.connect();
   const req = pool.request();
 
-  await req.query(`IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '${schema}')
-    EXEC('CREATE SCHEMA [${schema}]')`);
+  // CREATE SCHEMA must run alone in its own batch — check existence separately
+  const schemaCheck = await pool.request().query(
+    `SELECT 1 FROM sys.schemas WHERE name = '${schema}'`
+  );
+  if (!schemaCheck.recordset.length) {
+    await pool.request().query(`CREATE SCHEMA [${schema}]`);
+    console.log(`  Schema [${schema}] created.`);
+  } else {
+    console.log(`  Schema [${schema}] already exists.`);
+  }
 
   const tables = `
   -- Companies registry (lives in [dbo] – shared)
