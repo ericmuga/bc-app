@@ -51,6 +51,10 @@
             <i class="pi pi-chart-bar" />
             <span>Reports</span>
           </RouterLink>
+          <RouterLink v-if="canViewBcReports" to="/bc-reports" class="nav-item" active-class="active">
+            <i class="pi pi-database" />
+            <span>BC Reports</span>
+          </RouterLink>
         </div>
       </nav>
 
@@ -86,7 +90,8 @@ const auth    = useAuthStore()
 const company = useCompanyStore()
 const router  = useRouter()
 
-const userInitial = computed(() => auth.user?.userName?.[0]?.toUpperCase() ?? 'U')
+const userInitial    = computed(() => auth.user?.userName?.[0]?.toUpperCase() ?? 'U')
+const canViewBcReports = computed(() => ['admin', 'analyst'].includes(auth.user?.role))
 
 const companyOptions = computed(() =>
   company.companies.length
@@ -215,5 +220,11 @@ function logout() { auth.logout(); router.push('/login') }
   overflow-y: auto;
   background: var(--bc-surface);
   padding: 24px 28px;
+}
+
+/* BC Reports page manages its own internal layout — remove shell padding */
+.main-content:has(.bc-reports-layout) {
+  padding: 0;
+  overflow: hidden;
 }
 </style>

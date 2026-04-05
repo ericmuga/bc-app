@@ -14,6 +14,7 @@ const routes = [
       { path: 'invoices/scan',  name: 'InvoiceScan',  component: () => import('@/pages/InvoiceScanPage.vue') },
       { path: 'invoices',       name: 'Invoices',     component: () => import('@/pages/InvoicesListPage.vue') },
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue') },
+      { path: 'bc-reports',    name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: ['admin', 'analyst'] } },
     ]
   },
 

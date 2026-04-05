@@ -95,6 +95,17 @@ export async function getOrderAudit(req, res) {
   }
 }
 
+/** GET /api/orders/lines?<same filters as list> */
+export async function exportOrderLines(req, res) {
+  try {
+    const { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = req.query;
+    const rows = await Order.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup });
+    return res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 /** GET /api/orders/summary?groupBy=CustomerNo&dateFrom=&dateTo= */
 export async function orderSummary(req, res) {
   try {

@@ -19,6 +19,7 @@
       <Button label="Filter" icon="pi pi-filter" @click="list.load()" />
       <Button label="Clear"  icon="pi pi-times"  text @click="list.reset()" />
       <Button icon="pi pi-download" text severity="secondary" @click="doExport" v-tooltip="'Export to CSV'" />
+      <Button icon="pi pi-file-excel" text severity="secondary" @click="doExportXlsx" :loading="xlsxLoading" v-tooltip="'Export to Excel'" />
     </div>
 
     <!-- Totals strip -->
@@ -120,6 +121,7 @@ import { invoicesApi } from '@/services/api.js'
 import { useDocumentList } from '@/composables/useDocumentList.js'
 import { watchDebounced }  from '@/composables/useDebounce.js'
 import { exportCsv, todayStr } from '@/utils/exportCsv.js'
+import { exportXlsx, INVOICE_HEADER_COLS, INVOICE_LINE_COLS } from '@/utils/exportXlsx.js'
 
 const router = useRouter()
 const list   = useDocumentList(invoicesApi.list)
@@ -147,6 +149,27 @@ function doExport() {
     { key: 'TotalQuantityBase', label: 'Qty Base' },
     { key: 'TotalLineAmount',   label: 'Amount' },
   ])
+}
+
+const xlsxLoading = ref(false)
+async function doExportXlsx() {
+  xlsxLoading.value = true
+  try {
+    const params = {
+      q:            list.filters.q           || undefined,
+      status:       list.filters.status      || undefined,
+      postingGroup: list.filters.postingGroup|| undefined,
+      dateFrom:     list.filters.dateFrom instanceof Date ? list.filters.dateFrom.toISOString().slice(0,10) : list.filters.dateFrom || undefined,
+      dateTo:       list.filters.dateTo   instanceof Date ? list.filters.dateTo.toISOString().slice(0,10)   : list.filters.dateTo   || undefined,
+    }
+    const { data: lines } = await invoicesApi.exportLines(params)
+    exportXlsx(`invoices-${todayStr()}.xlsx`, [
+      { name: 'Invoices', rows: list.rows, columns: INVOICE_HEADER_COLS },
+      { name: 'Lines',    rows: lines,     columns: INVOICE_LINE_COLS   },
+    ])
+  } finally {
+    xlsxLoading.value = false
+  }
 }
 
 // Grand totals are computed from header rows (no line detail needed in list)
