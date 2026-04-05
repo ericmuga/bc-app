@@ -90,11 +90,26 @@ const FOREIGN_GEN_BUS = `'FOREIGN','B FOREIGN'`;
  *   foreign → IN ('FOREIGN','B FOREIGN')
  *   local   → NOT IN ('FOREIGN','B FOREIGN')
  */
-function buildGenBusWhere(genBusMode) {
-  if (!genBusMode || genBusMode === 'all') return '';
-  if (genBusMode === 'foreign') return `AND h.[Gen_ Bus_ Posting Group] IN (${FOREIGN_GEN_BUS})`;
-  if (genBusMode === 'local')   return `AND h.[Gen_ Bus_ Posting Group] NOT IN (${FOREIGN_GEN_BUS})`;
-  return '';
+function buildGenBusFilter(genBusMode, sourceType, tables) {
+  if (!genBusMode || genBusMode === 'all') {
+    return { join: '', where: '' };
+  }
+
+  const inClause = genBusMode === 'foreign'
+    ? `IN (${FOREIGN_GEN_BUS})`
+    : `NOT IN (${FOREIGN_GEN_BUS})`;
+
+  if (sourceType === 'pda') {
+    return {
+      join: `LEFT JOIN ${tables.customer} cgb ON cgb.[No_] = h.[Sell-to Customer No_]`,
+      where: `AND cgb.[Gen_ Bus_ Posting Group] ${inClause}`,
+    };
+  }
+
+  return {
+    join: '',
+    where: `AND h.[Gen_ Bus_ Posting Group] ${inClause}`,
+  };
 }
 
 // ── Block builders ─────────────────────────────────────────────────────────────
@@ -103,7 +118,8 @@ function makeBlock(docLabel, sign, hTable, lTable, dateField, joinLine, extraFil
   return (companyId, dim, tables, rf) => {
     const itemJoin   = buildItemJoin(tables, rf.thirdParty);
     const itemWhere  = buildItemWhere(tables, rf.thirdParty);
-    const genBusWhere = buildGenBusWhere(rf.genBusMode);
+    const sourceType = lTable === 'pdal' ? 'pda' : 'sales';
+    const genBusFilter = buildGenBusFilter(rf.genBusMode, sourceType, tables);
     const lineType   = lTable === 'pdal' ? '' : 'AND l.[Type] = 2';
     const docTypeFilter = lTable === 'sl'
       ? `AND h.[Document Type] IN (1, 2)` : '';
@@ -120,9 +136,10 @@ function makeBlock(docLabel, sign, hTable, lTable, dateField, joinLine, extraFil
                               ${lTable === 'sl' ? 'AND l.[Document Type] = h.[Document Type]' : ''}
     ${dim.extraJoin}
     ${itemJoin}
+    ${genBusFilter.join}
     WHERE  h.[${dateField}] BETWEEN @DateFrom AND @DateTo
       ${docTypeFilter}
-      ${genBusWhere}
+      ${genBusFilter.where}
       ${itemWhere}
     GROUP BY ${dim.groupByExpr}`;
   };
@@ -151,6 +168,7 @@ function buildUnionQuery(companies, docTypes, reportType, rf) {
       sl:      bcTable(companyId, 'Sales Line'),
       pdah:    bcTable(companyId, 'PDA Order Header Archive', { ext: true }),
       pdal:    bcTable(companyId, 'PDA Order Line Archive',   { ext: true }),
+      customer: bcTable(companyId, 'Customer'),
       itemExt: bcTable(companyId, 'Item', { coreExt: true }),
     };
 
