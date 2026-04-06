@@ -3,10 +3,12 @@ node_modules/
 
 # Build output
 dist/
-
+.claude/
+.codex
 # Environment — never commit real credentials
 .env
 .env.example
+/logs
 
 # Logs (keep directory, ignore log files)
 server/logs/*.log

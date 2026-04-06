@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(cat F:/applications/bc-app/server/src/middleware/*.js)",
+      "Bash(ls F:/applications/bc-app/*.env F:/applications/bc-app/server/*.env)",
+      "Bash(node --input-type=module)"
     ]
   }
 }

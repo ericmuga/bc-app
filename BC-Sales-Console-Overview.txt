@@ -1,0 +1,165 @@
+================================================================================
+  BC SALES CONSOLE — BUSINESS OVERVIEW
+  For: Business Analysts / Key Users
+  Date: March 2026
+================================================================================
+
+
+1. WHAT IS IT?
+--------------
+The BC Sales Console is a web application that sits alongside Microsoft Business
+Central (BC). Its primary purpose is to give warehouse and dispatch teams a fast,
+reliable way to verify and confirm that the right goods have been picked and
+dispatched against a Sales Order or Invoice — without needing access to BC itself.
+
+It also serves as a real-time audit trail for every document that passes through
+the warehouse, including who confirmed it and when.
+
+
+2. WHO USES IT?
+---------------
+- Warehouse supervisors / dispatch staff  — scan and confirm orders & invoices
+- Sales coordinators                       — monitor order and invoice status
+- Finance / compliance team               — verify E-TIMS invoice numbers and
+                                            KRA QR codes
+- Management                              — view analysis and summaries
+
+
+3. HOW IT FITS INTO THE BUSINESS PROCESS
+-----------------------------------------
+
+  Business Central (BC)
+        |
+        |  Sends order/invoice data automatically via webhook
+        v
+  BC Sales Console (this app)
+        |
+        |  Warehouse staff scan the document barcode or enter the number
+        |  System shows the document details and line items
+        |  Staff clicks "Confirm" to log that goods have been dispatched
+        v
+  Audit trail recorded — document marked Confirmed
+
+
+Step-by-step:
+
+  1. A Sales Order is created or updated in BC.
+     BC immediately sends the order details to this app (webhook).
+     The order appears in the Orders list with status "Open".
+
+  2. A warehouse user opens the app, scans or types the Order No.
+     The app shows all line items, quantities, customer details,
+     salesperson, route, sector, and printing information.
+
+  3. The user confirms the order. The system records who confirmed it
+     and at what time. Status changes to "Confirmed".
+
+  4. When BC posts the Sales Invoice (after E-TIMS signing by KRA),
+     BC sends the invoice details to this app.
+     The matching order is automatically converted into an Invoice record.
+     The invoice carries the E-TIMS Invoice Number, KRA QR code URL,
+     VAT breakdown per line, and company PIN details.
+
+  5. A warehouse or finance user can confirm the invoice separately,
+     creating a second audit event.
+
+  6. If the same document is scanned again after confirmation, the system
+     logs it as a COPY scan (flagged in amber) but does not allow a second
+     confirmation — preventing duplicates.
+
+
+4. KEY FEATURES
+---------------
+
+DOCUMENT SCANNING
+  - Search by Order No. or Invoice No. (typed or barcode-scanned)
+  - Shows full document header: customer, salesperson, route, sector,
+    ship-to name, payment terms, external doc no., E-TIMS no., QR code
+  - Shows all line items: item, description, qty, UOM, unit price,
+    amount excl. VAT, amount incl. VAT, VAT %, posting group
+  - COPY detection: alerts if a document was already confirmed
+
+AUDIT TRAIL
+  - Every action is logged: received from BC, confirmed by user, copy scan
+  - Shows who did what and when (full datetime)
+  - Printing information from BC (printed by, printing time) is shown at
+    the top of the audit trail
+
+INVOICE VERIFICATION
+  - E-TIMS Invoice Number from KRA is displayed on every invoice
+  - KRA QR code URL is stored and accessible
+  - VAT amounts per line and totals are visible
+  - Company KRA PIN and VAT registration number are stored on the invoice
+
+LISTS & FILTERS
+  - Orders list: filter by status, customer, salesperson, route, sector,
+    posting group, date range; export to CSV
+  - Invoices list: same filters; shows totals strip (count, qty, amount)
+  - Both lists show live grand totals (qty, qty base, total amount)
+
+ANALYSIS (Reports page)
+  - Bar chart summaries grouped by: Salesperson, Route, Sector,
+    Customer, Posting Group, Date
+  - Shows document count, total qty (base), and total amount per group
+  - Date range filter; export to CSV
+
+MULTI-COMPANY SUPPORT
+  - The app supports multiple BC companies simultaneously
+  - Each company's data is fully isolated (separate database schema)
+  - Users select their company on login; the app switches context accordingly
+
+SECURITY
+  - Login via Active Directory (Windows domain credentials)
+  - All API calls are authenticated with a JWT token
+  - BC webhooks are authenticated with a shared secret key
+  - Role-based access: admin users can create other users
+
+
+5. DATA THAT COMES FROM BUSINESS CENTRAL
+-----------------------------------------
+
+With every Sales Order:
+  Header — Order No., Customer No./Name, Salesperson, Route (Location),
+           Sector (Posting Group), Ship-to Name/Code, Payment Terms,
+           External Doc No., Quote No., Order Date, Shipment Date,
+           Printed By (BC User ID), Printing Time
+
+  Lines  — Line No., Item No., Description, Qty (Order & Base), Unit Price,
+           Amount Incl. VAT, VAT %, Qty Assigned, Qty Executed,
+           Customer Spec, Barcode, UOM, Posting Group
+
+With every Sales Invoice:
+  Header — All of the above PLUS: Invoice No., Posted At, E-TIMS Invoice No.,
+           KRA QR Code URL, Customer KRA PIN, Salesperson Name,
+           Shipment Method, Company Name/PIN/Email/VAT Reg, No. Printed
+
+  Lines  — All order line fields PLUS: Amount Excl. VAT, Amount Incl. VAT,
+           VAT Identifier, Units per Parcel
+
+
+6. WHAT IS NOT IN THIS APP
+---------------------------
+- Stock management or inventory levels
+- Pricing or discount management
+- Customer master data maintenance
+- Any posting or financial entries back to BC
+- Purchase orders or supplier management
+
+All financial entries remain exclusively in Business Central.
+This app is read-only with respect to BC data — it only adds confirmation
+and audit information on its own side.
+
+
+7. TECHNICAL SUMMARY (non-technical version)
+---------------------------------------------
+- Web application — runs in any modern browser (Chrome, Edge, Firefox)
+- No installation required for end users
+- Hosted on a company server; accessed via internal network or VPN
+- Login uses existing Windows/Active Directory credentials (no new passwords)
+- Data is stored in a SQL Server database on the same server as BC
+- BC communicates with the app automatically in the background
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
