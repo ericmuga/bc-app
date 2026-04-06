@@ -13,12 +13,16 @@ export const bcReportsApi = {
   run: (type, f) => api.get('/bc-reports/run', {
     params: {
       type,
+      dimension:   f.dimension,
       dateFrom:    f.dateFrom,
       dateTo:      f.dateTo,
       companies:   csv(f.companies),
       docTypes:    csv(f.docTypes),
+      daysOfWeek:  csv(f.daysOfWeek),
       thirdParty:  f.thirdParty ?? '',
       genBusMode:  f.genBusMode || 'all',
+      customerQuery: f.customerQuery || '',
+      itemQuery:     f.itemQuery || '',
     },
   }),
 };
