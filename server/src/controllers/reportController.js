@@ -7,7 +7,8 @@ import * as BcReport from '../models/BcReport.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 
-const VALID_REPORT_TYPES = ['postingGroup', 'sector', 'salesperson', 'route'];
+const VALID_REPORT_TYPES = ['postingGroup', 'sector', 'salesperson', 'route', 'weekOnWeek', 'productPerformance'];
+const VALID_WEEK_DIMENSIONS = ['postingGroup', 'sector'];
 
 export function listCompanies(_req, res) {
   return res.json(ALL_COMPANIES.map(id => ({ id, label: id })));
@@ -36,6 +37,12 @@ export async function runReport(req, res) {
     }
 
     const splitCSV = (v) => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const dimension = VALID_WEEK_DIMENSIONS.includes(req.query.dimension)
+      ? req.query.dimension
+      : 'postingGroup';
+    const daysOfWeek = splitCSV(req.query.daysOfWeek)
+      .map((d) => parseInt(d, 10))
+      .filter((d) => d >= 1 && d <= 7);
 
     const thirdPartyRaw = req.query.thirdParty;
     const thirdParty = thirdPartyRaw != null && thirdPartyRaw !== ''
@@ -45,16 +52,20 @@ export async function runReport(req, res) {
     const genBusMode = ['foreign','local'].includes(req.query.genBusMode)
       ? req.query.genBusMode : 'all';
 
-    const rows = await BcReport.runReport(type, {
+    const result = await BcReport.runReport(type, {
       companies:  splitCSV(req.query.companies),
       dateFrom,
       dateTo,
       docTypes:   splitCSV(req.query.docTypes),
+      dimension,
+      daysOfWeek,
       thirdParty,
       genBusMode,
+      customerQuery: req.query.customerQuery?.trim() || '',
+      itemQuery: req.query.itemQuery?.trim() || '',
     });
 
-    return res.json(rows);
+    return res.json(result);
   } catch (err) {
     logger.error('bc-reports/run error', { error: err.message });
     return res.status(500).json({ error: err.message });
