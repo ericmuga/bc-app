@@ -19,6 +19,20 @@ export function authMiddleware(req, res, next) {
   }
 }
 
+/**
+ * Role-based access guard. Must be used after authMiddleware.
+ * Usage: requireRole('admin', 'analyst')
+ */
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+}
+
 /** For BC webhook endpoints – validate HMAC header instead of JWT */
 export function webhookAuth(req, res, next) {
   const secret = process.env.BC_WEBHOOK_SECRET;

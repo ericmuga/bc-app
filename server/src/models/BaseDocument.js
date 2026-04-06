@@ -140,6 +140,73 @@ export class BaseDocument {
     });
   }
 
+  /**
+   * Export: flat rows of lines joined with header (for Excel export).
+   * Accepts same filters as search().
+   */
+  async exportLines(companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = {}) {
+    return db.query(companyId, async (pool, schema) => {
+      const req = pool.request();
+      const conditions = ['1=1'];
+
+      if (q) {
+        req.input('Q', sql.NVarChar(200), `%${q}%`);
+        conditions.push(`(h.[${this.noField}] LIKE @Q OR h.[CustomerName] LIKE @Q OR h.[CustomerNo] LIKE @Q)`);
+      }
+      if (customerNo) {
+        req.input('CustomerNo', sql.NVarChar(30), customerNo);
+        conditions.push('h.[CustomerNo] = @CustomerNo');
+      }
+      if (salesperson) {
+        req.input('Salesperson', sql.NVarChar(20), salesperson);
+        conditions.push('h.[SalespersonCode] = @Salesperson');
+      }
+      if (route) {
+        req.input('Route', sql.NVarChar(20), route);
+        conditions.push('h.[RouteCode] = @Route');
+      }
+      if (sector) {
+        req.input('Sector', sql.NVarChar(20), sector);
+        conditions.push('h.[SectorCode] = @Sector');
+      }
+      if (dateFrom) {
+        req.input('DateFrom', sql.Date, new Date(dateFrom));
+        conditions.push('h.[OrderDate] >= @DateFrom');
+      }
+      if (dateTo) {
+        req.input('DateTo', sql.Date, new Date(dateTo));
+        conditions.push('h.[OrderDate] <= @DateTo');
+      }
+      if (status) {
+        req.input('Status', sql.NVarChar(20), status);
+        conditions.push('h.[Status] = @Status');
+      }
+      if (postingGroup) {
+        req.input('PostingGroup', sql.NVarChar(50), postingGroup);
+        conditions.push('l.[PostingGroup] = @PostingGroup');
+      }
+
+      const result = await req.query(`
+        SELECT
+          h.[${this.noField}], h.[CustomerNo], h.[CustomerName],
+          h.[SalespersonCode], h.[RouteCode], h.[SectorCode],
+          h.[OrderDate], h.[PostingDate], h.[Status],
+          h.[ConfirmedAt], h.[ConfirmedBy], h.[BCUserId], h.[PrintingDatetime],
+          l.[LineNo], l.[ItemNo], l.[Description],
+          l.[Quantity], l.[QuantityBase], l.[UnitOfMeasure],
+          l.[UnitPrice], l.[LineAmount], l.[LineAmountInclVat],
+          l.[VatPct], l.[VatIdentifier], l.[UnitsPerParcel],
+          l.[PostingGroup], l.[CustomerSpec], l.[Barcode],
+          l.[QtyAssigned], l.[QtyExecuted], l.[AmountInclVat]
+        FROM ${schema}.[${this.headerTable}] h
+        JOIN ${schema}.[${this.lineTable}]   l ON l.[${this.noField}] = h.[${this.noField}]
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY h.[CreatedAt] DESC, l.[LineNo]
+      `);
+      return result.recordset;
+    });
+  }
+
   /** Summary: group by a dimension with line amount/qty totals */
   async summary(companyId, { groupBy = 'CustomerNo', dateFrom, dateTo } = {}) {
     const headerGroups = ['CustomerNo', 'CustomerName', 'SalespersonCode', 'RouteCode', 'SectorCode', 'OrderDate'];

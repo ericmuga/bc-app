@@ -132,6 +132,17 @@ export async function getByQRCode(req, res) {
   }
 }
 
+/** GET /api/invoices/lines?<same filters as list> */
+export async function exportInvoiceLines(req, res) {
+  try {
+    const { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = req.query;
+    const rows = await Invoice.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup });
+    return res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 /** GET /api/invoices/summary?groupBy=&dateFrom=&dateTo= */
 export async function invoiceSummary(req, res) {
   try {

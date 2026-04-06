@@ -142,6 +142,10 @@ export async function createUser(req, res) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin role required' });
   }
+  const VALID_ROLES = ['admin', 'analyst', 'user'];
+  if (!VALID_ROLES.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
+  }
   try {
     const hash    = password ? await bcrypt.hash(password, 12) : '';
     const pool    = await db.getPool();

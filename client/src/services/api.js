@@ -33,21 +33,23 @@ export const companiesApi = {
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 export const ordersApi = {
-  list:    (params) => api.get('/orders', { params }),
-  get:     (no)     => api.get(`/orders/${no}`),
-  confirm: (no)     => api.post(`/orders/${no}/confirm`),
-  audit:   (no)     => api.get(`/orders/${no}/audit`),
-  summary: (params) => api.get('/orders/summary', { params }),
+  list:        (params) => api.get('/orders', { params }),
+  get:         (no)     => api.get(`/orders/${no}`),
+  confirm:     (no)     => api.post(`/orders/${no}/confirm`),
+  audit:       (no)     => api.get(`/orders/${no}/audit`),
+  summary:     (params) => api.get('/orders/summary', { params }),
+  exportLines: (params) => api.get('/orders/lines', { params }),
 }
 
 // ── Invoices ──────────────────────────────────────────────────────────────────
 export const invoicesApi = {
-  list:       (params) => api.get('/invoices', { params }),
-  get:        (no)     => api.get(`/invoices/${no}`),
-  getByQRCode:(url)    => api.get('/invoices/by-qrcode', { params: { url } }),
-  confirm:    (no)     => api.post(`/invoices/${no}/confirm`),
-  audit:      (no)     => api.get(`/invoices/${no}/audit`),
-  summary:    (params) => api.get('/invoices/summary', { params }),
+  list:        (params) => api.get('/invoices', { params }),
+  get:         (no)     => api.get(`/invoices/${no}`),
+  getByQRCode: (url)    => api.get('/invoices/by-qrcode', { params: { url } }),
+  confirm:     (no)     => api.post(`/invoices/${no}/confirm`),
+  audit:       (no)     => api.get(`/invoices/${no}/audit`),
+  summary:     (params) => api.get('/invoices/summary', { params }),
+  exportLines: (params) => api.get('/invoices/lines', { params }),
 }
 
 export default api
