@@ -4,6 +4,7 @@
 import Invoice from '../models/Invoice.js';
 import Order from '../models/Order.js';
 import logger from '../services/logger.js';
+import { getOrSet } from '../services/reportCache.js';
 
 /** POST /api/webhook/invoices  – called by Business Central with ETIMS data */
 export async function receiveInvoice(req, res) {
@@ -136,8 +137,12 @@ export async function getByQRCode(req, res) {
 export async function exportInvoiceLines(req, res) {
   try {
     const { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = req.query;
-    const rows = await Invoice.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup });
-    return res.json(rows);
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const cacheQuery = { ...req.query };
+    delete cacheQuery.refresh;
+    const { value, cached } = await getOrSet('invoices-lines', { companyId: req.companyId, query: cacheQuery }, () => Invoice.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup }), { ttlMs: 5 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -147,8 +152,12 @@ export async function exportInvoiceLines(req, res) {
 export async function invoiceSummary(req, res) {
   try {
     const { groupBy, dateFrom, dateTo } = req.query;
-    const rows = await Invoice.summary(req.companyId, { groupBy, dateFrom, dateTo });
-    return res.json(rows);
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const cacheQuery = { ...req.query };
+    delete cacheQuery.refresh;
+    const { value, cached } = await getOrSet('invoices-summary', { companyId: req.companyId, query: cacheQuery }, () => Invoice.summary(req.companyId, { groupBy, dateFrom, dateTo }), { ttlMs: 5 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

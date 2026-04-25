@@ -41,6 +41,7 @@
         <DatePicker v-model="dateFrom" placeholder="From" date-format="yy-mm-dd" show-icon @date-select="load" />
         <DatePicker v-model="dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon @date-select="load" />
         <Button label="Run"   icon="pi pi-play"  @click="load" :loading="loading" />
+        <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="load(true)" :loading="loading" />
         <Button label="Clear" icon="pi pi-times" text @click="clearFilters" />
         <Button icon="pi pi-download" text severity="secondary" v-tooltip="'Export to CSV'"
           :disabled="!rows.length" @click="exportSummary" />
@@ -105,7 +106,7 @@
           </Column>
           <Column header="" style="width:110px">
             <template #body="{ data }">
-              <Button label="Show lines" icon="pi pi-chevron-right" text size="small" @click="drillDown(data.GroupKey)" />
+              <Button v-if="canDrillSource" label="Show lines" icon="pi pi-chevron-right" text size="small" @click="drillDown(data.GroupKey)" />
             </template>
           </Column>
         </DataTable>
@@ -124,6 +125,7 @@
         <DatePicker v-model="analysisFrom" placeholder="From" date-format="yy-mm-dd" show-icon />
         <DatePicker v-model="analysisTo"   placeholder="To"   date-format="yy-mm-dd" show-icon />
         <Button label="Apply" icon="pi pi-filter" @click="loadAnalysis" :loading="analysisLoading" />
+        <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="loadAnalysis(true)" :loading="analysisLoading" />
         <Button label="Clear" icon="pi pi-times"  text @click="clearAnalysis" />
         <Button icon="pi pi-download" text severity="secondary" v-tooltip="'Export to CSV'"
           :disabled="!analysisOrders.length && !analysisInvoices.length" @click="exportAnalysis" />
@@ -146,7 +148,8 @@
             <div
               v-for="row in analysisOrders" :key="row.GroupKey"
               class="bar-row"
-              @click="drillDownAnalysis(row.GroupKey, 'orders')"
+              :class="{ disabled: !canViewOrderDocs }"
+              @click="canViewOrderDocs && drillDownAnalysis(row.GroupKey, 'orders')"
             >
               <div class="bar-label">{{ row.GroupKey || '(blank)' }}</div>
               <div class="bar-track">
@@ -187,7 +190,8 @@
             <div
               v-for="row in analysisInvoices" :key="row.GroupKey"
               class="bar-row"
-              @click="drillDownAnalysis(row.GroupKey, 'invoices')"
+              :class="{ disabled: !canViewInvoiceDocs }"
+              @click="canViewInvoiceDocs && drillDownAnalysis(row.GroupKey, 'invoices')"
             >
               <div class="bar-label">{{ row.GroupKey || '(blank)' }}</div>
               <div class="bar-track">
@@ -267,12 +271,15 @@ import Select     from 'primevue/select'
 import DatePicker from 'primevue/datepicker'
 import Drawer     from 'primevue/drawer'
 import Skeleton   from 'primevue/skeleton'
+import { useAuthStore } from '@/stores/auth.js'
 import StatusBadge   from '@/components/base/StatusBadge.vue'
 import DocumentLines from '@/components/base/DocumentLines.vue'
 import { ordersApi, invoicesApi } from '@/services/api.js'
 import { exportCsv, todayStr } from '@/utils/exportCsv.js'
+import { canAccessInvoices, canAccessOrders } from '@/lib/access.js'
 
 const router = useRouter()
+const auth = useAuthStore()
 
 // ── Tab state ───────────────────────────────────────────────────────────────
 const tab = ref('summary')
@@ -298,6 +305,9 @@ const groupOptions = [
 const groupLabel = computed(() => groupOptions.find(o => o.value === groupBy.value)?.label ?? groupBy.value)
 const api        = computed(() => source.value === 'orders' ? ordersApi : invoicesApi)
 const docNoField = computed(() => source.value === 'orders' ? 'OrderNo' : 'InvoiceNo')
+const canViewOrderDocs = computed(() => canAccessOrders(auth.user?.role))
+const canViewInvoiceDocs = computed(() => canAccessInvoices(auth.user?.role))
+const canDrillSource = computed(() => source.value === 'orders' ? canViewOrderDocs.value : canViewInvoiceDocs.value)
 
 const totalDocs    = computed(() => rows.value.reduce((s, r) => s + (+r.DocumentCount    || 0), 0))
 const totalQty     = computed(() => rows.value.reduce((s, r) => s + (+r.TotalQuantity    || 0), 0))
@@ -305,11 +315,12 @@ const totalQtyBase = computed(() => rows.value.reduce((s, r) => s + (+r.TotalQua
 const totalAmount  = computed(() => rows.value.reduce((s, r) => s + (+r.TotalLineAmount  || 0), 0))
 const maxAmount    = computed(() => Math.max(...rows.value.map(r => +r.TotalLineAmount || 0), 1))
 
-async function load() {
+async function load(refresh = false) {
   loading.value = true
   try {
     const params = {
       groupBy: groupBy.value,
+      refresh: refresh ? 1 : 0,
       ...(dateFrom.value ? { dateFrom: fmtParam(dateFrom.value) } : {}),
       ...(dateTo.value   ? { dateTo:   fmtParam(dateTo.value) }   : {}),
     }
@@ -349,13 +360,14 @@ function switchTab(t) {
   loadAnalysis()
 }
 
-async function loadAnalysis() {
+async function loadAnalysis(refresh = false) {
   analysisLoading.value = true
   analysisOrders.value  = []
   analysisInvoices.value = []
   try {
     const params = {
       groupBy: analysisGroupBy.value,
+      refresh: refresh ? 1 : 0,
       ...(analysisFrom.value ? { dateFrom: fmtParam(analysisFrom.value) } : {}),
       ...(analysisTo.value   ? { dateTo:   fmtParam(analysisTo.value) }   : {}),
     }
@@ -415,6 +427,7 @@ async function drillDownAnalysis(groupKey, sourceType) {
 }
 
 async function openDrawer(groupKey, dimension, apiSource, from, to) {
+  if ((apiSource === ordersApi && !canViewOrderDocs.value) || (apiSource === invoicesApi && !canViewInvoiceDocs.value)) return
   selectedGroup.value  = groupKey
   drawerVisible.value  = true
   drawerLoading.value  = true
@@ -437,6 +450,7 @@ async function openDrawer(groupKey, dimension, apiSource, from, to) {
 }
 
 async function loadLines(docNo) {
+  if ((drawerDocField.value === 'OrderNo' && !canViewOrderDocs.value) || (drawerDocField.value !== 'OrderNo' && !canViewInvoiceDocs.value)) return
   linesDocNo.value   = docNo
   linesLoading.value = true
   currentLines.value = []
@@ -452,8 +466,10 @@ async function loadLines(docNo) {
 function openScanFromDrawer(row) {
   const no = row[drawerDocField.value]
   if (drawerDocField.value === 'OrderNo') {
+    if (!canViewOrderDocs.value) return
     router.push({ name: 'OrderScan',   query: { no } })
   } else {
+    if (!canViewInvoiceDocs.value) return
     router.push({ name: 'InvoiceScan', query: { no } })
   }
 }
@@ -627,6 +643,8 @@ const analysisPct = (v, max) => max ? Math.round((+v / max) * 100) : 0
   transition: background 0.12s;
 }
 .bar-row:hover { background: var(--bc-surface-raised); padding-left: 6px; }
+.bar-row.disabled { cursor: default; }
+.bar-row.disabled:hover { background: transparent; padding-left: 0; }
 
 .bar-label {
   font-size: 12px;

@@ -52,4 +52,16 @@ export const invoicesApi = {
   exportLines: (params) => api.get('/invoices/lines', { params }),
 }
 
+export const adminApi = {
+  users:          () => api.get('/admin/users'),
+  updateUser:     (userId, payload) => api.patch(`/admin/users/${userId}`, payload),
+  getSmtpSettings:() => api.get('/admin/settings/smtp'),
+  saveSmtpSettings:(payload) => api.post('/admin/settings/smtp', payload),
+  schedules:      () => api.get('/admin/report-schedules'),
+  createSchedule: (payload) => api.post('/admin/report-schedules', payload),
+  updateSchedule: (scheduleId, payload) => api.patch(`/admin/report-schedules/${scheduleId}`, payload),
+  deleteSchedule: (scheduleId) => api.delete(`/admin/report-schedules/${scheduleId}`),
+  runSchedule:    (scheduleId) => api.post(`/admin/report-schedules/${scheduleId}/run`),
+}
+
 export default api

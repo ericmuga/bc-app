@@ -107,6 +107,201 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='UpdatedAt')
       ALTER TABLE [dbo].[Users] ADD [UpdatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='ReceiveScheduledReports')
+      ALTER TABLE [dbo].[Users] ADD [ReceiveScheduledReports] BIT NOT NULL DEFAULT 0
+  `);
+
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='ReportSchedules' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[ReportSchedules] (
+      [ScheduleId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Name] NVARCHAR(200) NOT NULL,
+      [ReportType] NVARCHAR(50) NOT NULL,
+      [DeliveryFormat] NVARCHAR(10) NOT NULL DEFAULT 'xlsx',
+      [Frequency] NVARCHAR(20) NOT NULL DEFAULT 'daily',
+      [IntervalHours] INT NULL,
+      [DayOfWeek] INT NULL,
+      [DayOfMonth] INT NULL,
+      [TimeOfDay] NVARCHAR(5) NOT NULL DEFAULT '08:00',
+      [LookbackDays] INT NOT NULL DEFAULT 7,
+      [IsActive] BIT NOT NULL DEFAULT 1,
+      [RecipientUserIdsJson] NVARCHAR(MAX) NULL,
+      [FiltersJson] NVARCHAR(MAX) NULL,
+      [LastRunAt] DATETIME2 NULL,
+      [NextRunAt] DATETIME2 NULL,
+      [LastStatus] NVARCHAR(20) NULL,
+      [LastError] NVARCHAR(MAX) NULL,
+      [CreatedBy] NVARCHAR(100) NULL,
+      [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  for (const [col, def] of [
+    ['LookbackDays', 'INT NOT NULL DEFAULT 7'],
+    ['IntervalHours', 'INT NULL'],
+    ['RecipientUserIdsJson', 'NVARCHAR(MAX) NULL'],
+    ['FiltersJson', 'NVARCHAR(MAX) NULL'],
+    ['LastRunAt', 'DATETIME2 NULL'],
+    ['NextRunAt', 'DATETIME2 NULL'],
+    ['LastStatus', 'NVARCHAR(20) NULL'],
+    ['LastError', 'NVARCHAR(MAX) NULL'],
+    ['CreatedBy', 'NVARCHAR(100) NULL'],
+    ['CreatedAt', 'DATETIME2 NOT NULL DEFAULT GETUTCDATE()'],
+    ['UpdatedAt', 'DATETIME2 NOT NULL DEFAULT GETUTCDATE()'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[ReportSchedules]') AND name='${col}')
+        ALTER TABLE [dbo].[ReportSchedules] ADD [${col}] ${def}
+    `);
+  }
+  console.log('  [dbo].[ReportSchedules] OK');
+
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='AppSettings' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[AppSettings] (
+      [SettingKey] NVARCHAR(100) NOT NULL PRIMARY KEY,
+      [SettingValue] NVARCHAR(MAX) NULL,
+      [UpdatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[AppSettings] OK');
+
+  // ── [dbo].[GlAccountMapper] ───────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='GlAccountMapper' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[GlAccountMapper] (
+      [MapId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [CompanyId]   NVARCHAR(10)     NOT NULL DEFAULT 'ALL',
+      [AccountFrom] NVARCHAR(20)     NOT NULL,
+      [AccountTo]   NVARCHAR(20)     NOT NULL,
+      [Section]     NVARCHAR(50)     NOT NULL,
+      [LineLabel]   NVARCHAR(200)    NOT NULL,
+      [SortOrder]   INT              NOT NULL DEFAULT 0,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[GlAccountMapper] OK');
+
+  // ── [dbo].[MgmtTemplate] ─────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='MgmtTemplate' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[MgmtTemplate] (
+      [TemplateId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [TemplateName] NVARCHAR(200)    NOT NULL,
+      [Description]  NVARCHAR(500)    NULL,
+      [SortOrder]    INT              NOT NULL DEFAULT 0,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[MgmtTemplate] OK');
+
+  // ── [dbo].[MgmtLine] ─────────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='MgmtLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[MgmtLine] (
+      [LineId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [TemplateId]   UNIQUEIDENTIFIER NOT NULL,
+      [LineCode]     NVARCHAR(50)     NOT NULL,
+      [LineLabel]    NVARCHAR(200)    NOT NULL,
+      [LineType]     NVARCHAR(20)     NOT NULL DEFAULT 'data',
+      [SubtotalOf]   NVARCHAR(500)    NULL,
+      [IndentLevel]  INT              NOT NULL DEFAULT 0,
+      [IsBold]       BIT              NOT NULL DEFAULT 0,
+      [IsNegated]    BIT              NOT NULL DEFAULT 0,
+      [SortOrder]    INT              NOT NULL DEFAULT 0,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[MgmtLine] OK');
+
+  // ── [dbo].[MgmtFormula] ──────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='MgmtFormula' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[MgmtFormula] (
+      [FormulaId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [LineId]      UNIQUEIDENTIFIER NOT NULL,
+      [CompanyId]     NVARCHAR(10)     NOT NULL DEFAULT 'ALL',
+      [AccountFrom]   NVARCHAR(20)     NOT NULL DEFAULT '',
+      [AccountTo]     NVARCHAR(20)     NOT NULL DEFAULT '',
+      [Operation]     NVARCHAR(10)     NOT NULL DEFAULT 'ADD',
+      [SelectionMode] NVARCHAR(20)     NOT NULL DEFAULT 'range',
+      [AccountList]   NVARCHAR(MAX)    NULL,
+      [SortOrder]     INT              NOT NULL DEFAULT 0,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[MgmtFormula] OK');
+
+  // ── [dbo].[MgmtMeasure] ──────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='MgmtMeasure' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[MgmtMeasure] (
+      [MeasureId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [TemplateId]     UNIQUEIDENTIFIER NOT NULL,
+      [MeasureCode]    NVARCHAR(50)     NOT NULL,
+      [MeasureLabel]   NVARCHAR(100)    NOT NULL,
+      [DateMode]       NVARCHAR(20)     NOT NULL DEFAULT 'MTD',
+      [CustomDateFrom] DATE             NULL,
+      [CustomDateTo]   DATE             NULL,
+      [SortOrder]      INT              NOT NULL DEFAULT 0,
+      [CreatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[MgmtMeasure] OK');
+
+  // Upgrade guards for MgmtFormula — add SelectionMode and AccountList if missing
+  for (const [col, def] of [
+    ['SelectionMode', "NVARCHAR(20) NOT NULL DEFAULT 'range'"],
+    ['AccountList',   'NVARCHAR(MAX) NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[MgmtFormula]') AND name='${col}')
+        ALTER TABLE [dbo].[MgmtFormula] ADD [${col}] ${def}
+    `);
+  }
+
+  // Upgrade guards for MgmtLine — add Formula text and EnabledMeasures
+  for (const [col, def] of [
+    ['Formula',         'NVARCHAR(MAX) NULL'],
+    ['EnabledMeasures', 'NVARCHAR(1000) NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[MgmtLine]') AND name='${col}')
+        ALTER TABLE [dbo].[MgmtLine] ADD [${col}] ${def}
+    `);
+  }
+
+  // Upgrade guard for MgmtMeasure — add SqlQuery
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[MgmtMeasure]') AND name='SqlQuery')
+      ALTER TABLE [dbo].[MgmtMeasure] ADD [SqlQuery] NVARCHAR(MAX) NULL
+  `);
+
+  // ── [dbo].[CustPostingGroupMap] ─────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='CustPostingGroupMap' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[CustPostingGroupMap] (
+      [MapId]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [CompanyId]        NVARCHAR(10)     NOT NULL,
+      [NativeGroupCode]  NVARCHAR(100)    NOT NULL,
+      [DisplayGroupCode] NVARCHAR(100)    NOT NULL,
+      [SortOrder]        INT              NOT NULL DEFAULT 0,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[CustPostingGroupMap] OK');
 
   // ── [s].[SalesHeader] ─────────────────────────────────────────────────────
   await run(`

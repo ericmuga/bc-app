@@ -16,6 +16,8 @@ const config = {
   database: process.env.BC_DB_NAME || 'FCL',
   user:     process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+  connectionTimeout: parseInt(process.env.BC_DB_CONNECTION_TIMEOUT) || 30000,
+  requestTimeout: parseInt(process.env.BC_DB_REQUEST_TIMEOUT) || 120000,
   options: {
     encrypt:                process.env.DB_ENCRYPT === 'true',
     trustServerCertificate: process.env.DB_TRUST_CERT === 'true',

@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const port    = parseInt(env.VITE_PORT     || '5173')
   const apiHost =          env.VITE_API_HOST || 'localhost'
   const apiPort = parseInt(env.VITE_API_PORT || '4000')
-
+  
   return {
     plugins: [vue()],
     resolve: {
@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     server: {
+      host:'0.0.0.0',
       port,
       watch: {
         include: ['.env'],

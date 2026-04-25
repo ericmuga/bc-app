@@ -4,7 +4,20 @@
       "Bash(npm install:*)",
       "Bash(cat F:/applications/bc-app/server/src/middleware/*.js)",
       "Bash(ls F:/applications/bc-app/*.env F:/applications/bc-app/server/*.env)",
-      "Bash(node --input-type=module)"
+      "Bash(node --input-type=module)",
+      "Bash(ls \"F:/applications/bc-app/\"*.xls*)",
+      "Bash(ls \"F:/applications/bc-app/\"*.xlsx*)",
+      "Bash(node -e ':*)",
+      "Bash(chmod 644 \"F:/applications/bc-app/client/src/lib/access.js\")",
+      "Bash(node /tmp/access_patch.js)",
+      "Bash(attrib \"F:/applications/bc-app/client/src/lib/access.js\")",
+      "Bash(icacls \"F:/applications/bc-app/client/src/lib/access.js\")",
+      "Bash(powershell -Command \"Get-Acl 'F:\\\\applications\\\\bc-app\\\\client\\\\src\\\\lib\\\\access.js' | Format-List\")",
+      "Bash(powershell:*)",
+      "Bash(node *)",
+      "Read(//f/applications/NexoPOS/**)",
+      "Bash(php artisan *)",
+      "Bash(xargs grep *)"
     ]
   }
 }

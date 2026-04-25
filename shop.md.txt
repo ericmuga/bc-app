@@ -1,0 +1,1091 @@
+# Plan: Add Point of Sale Module to Existing Node.js + Vue App
+
+## Goal
+
+Add a Point of Sale (POS) module to the existing Node.js and Vue application, integrated with Microsoft Dynamics 365 Business Central through both API-based integration and database-to-database sync.
+
+The POS must support offline operation at shop level, periodic synchronization to Business Central, stock control, payment reconciliation, MPESA payments, tax invoice signing, expense approvals, stock transfer requests, and role-based access control.
+
+The Business Central repository will be shared and should be used as the main source of truth for business rules. The **SHOP Role Centre** in Business Central should be treated as the primary functional reference.
+
+---
+
+## Key Business Requirements
+
+### 1. Business Central Integration
+
+The POS module must support two integration modes:
+
+1. **API integration**
+
+   * Used for posting transactions, reading approved records, validating business rules, and calling Business Central codeunits/pages/API endpoints.
+   * Should support authenticated requests to Business Central.
+
+2. **Database-to-database integration**
+
+   * Used for syncing master data and transactional records where direct database integration is required.
+   * Must be implemented carefully with staging tables, sync logs, retry handling, and clear ownership of records.
+
+Claude Code should inspect the shared Business Central repo and identify:
+
+* Tables used by the SHOP Role Centre.
+* Pages/actions exposed to shop users.
+* Codeunits used for posting invoices, payments, stock transfers, tax signing, MPESA handling, and approvals.
+* Custom table extensions, especially item and customer extensions.
+* Existing AL integration logic that should be mirrored or called from Node.js.
+
+---
+
+## 2. Offline-First POS Operation
+
+The POS must be able to work offline at shop level.
+
+### Offline Capabilities
+
+Shop attendants should be able to:
+
+* View synced items.
+* View synced prices.
+* View synced shop customers.
+* Create sales invoices.
+* Receive payments.
+* Record MPESA payment references where applicable.
+* Perform daily stock/cycle counts.
+* Request stock transfers.
+* Request expense approvals.
+
+### Offline Storage
+
+Use a local browser database for the Vue app, preferably:
+
+* IndexedDB via Dexie.js, or
+* another reliable offline storage wrapper.
+
+Data created offline should be stored locally with sync metadata.
+
+Recommended sync fields:
+
+```text
+local_id
+server_id
+bc_document_no
+sync_status: pending | syncing | synced | failed | conflict
+sync_attempts
+last_sync_attempt_at
+last_sync_error
+created_offline
+created_by
+shop_code
+salesperson_code
+created_at
+updated_at
+```
+
+### Sync Job
+
+A background sync job should run from the Node.js backend.
+
+The job should:
+
+* Push pending offline sales to Business Central.
+* Push payments to Business Central.
+* Push cycle counts and stock variances.
+* Push stock transfer requests.
+* Push expense approval requests.
+* Pull updated master data from Business Central.
+* Retry failed records.
+* Log every sync attempt.
+* Avoid duplicate posting in Business Central.
+
+Recommended tools:
+
+* BullMQ + Redis, or
+* node-cron for simpler scheduling.
+
+BullMQ is preferred if the app already has Redis or needs durable queues.
+
+---
+
+## 3. Master Data Sync
+
+The POS should sync the following master data from Business Central.
+
+### 3.1 Shop Customers
+
+Shop customers are Business Central customers denoted by:
+
+```text
+Customer Price Group = SHOP
+```
+
+The sync should pull only customers matching this configuration.
+
+Local table suggestion:
+
+```text
+shop_customers
+```
+
+Important fields:
+
+```text
+bc_customer_no
+name
+phone_no
+email
+customer_price_group
+blocked
+shop_code
+last_synced_at
+```
+
+### 3.2 Item Prices
+
+Prices are configured in the Business Central Sales Price table.
+
+The POS must respect:
+
+* Item number.
+* Unit of measure.
+* Customer Price Group.
+* Start date.
+* End date.
+* Unit price.
+* Currency if applicable.
+
+Only prices valid for the transaction date should be used.
+
+Local table suggestion:
+
+```text
+item_prices
+```
+
+Important fields:
+
+```text
+item_no
+customer_price_group
+unit_of_measure
+starting_date
+ending_date
+unit_price
+currency_code
+minimum_quantity
+last_synced_at
+```
+
+### 3.3 Items
+
+Only items marked as PDA Items in the Business Central Item table extension should be synced.
+
+Claude Code should inspect the AL files to confirm the exact field name.
+
+Local table suggestion:
+
+```text
+items
+```
+
+Important fields:
+
+```text
+item_no
+description
+base_unit_of_measure
+sales_unit_of_measure
+inventory_posting_group
+gen_prod_posting_group
+vat_prod_posting_group
+is_pda_item
+blocked
+last_synced_at
+```
+
+### 3.4 Salespersons
+
+Salespersons should sync from Business Central Table 13.
+
+Every shop has a unique salesperson.
+
+Local table suggestion:
+
+```text
+salespersons
+```
+
+Important fields:
+
+```text
+code
+name
+email
+phone_no
+shop_code
+blocked
+last_synced_at
+```
+
+### 3.5 Shops
+
+Create or sync a shops table.
+
+Each shop should be linked to exactly one salesperson.
+
+Local table suggestion:
+
+```text
+shops
+```
+
+Important fields:
+
+```text
+shop_code
+shop_name
+salesperson_code
+location_code
+default_customer_price_group
+is_active
+last_synced_at
+```
+
+---
+
+## 4. POS Sales Flow
+
+The POS sales process should follow the Business Central shop sales process as closely as possible.
+
+### Sales Invoice Creation
+
+A shop attendant should be able to:
+
+1. Select or use the default shop customer.
+2. Add items to cart.
+3. Apply valid Business Central sales prices.
+4. Capture quantity and unit of measure.
+5. Capture payment method.
+6. Generate a local receipt/invoice number.
+7. Save the transaction offline if Business Central is unavailable.
+8. Sync/post the invoice to Business Central when connectivity is available.
+
+Local tables:
+
+```text
+pos_sales_headers
+pos_sales_lines
+```
+
+Sales header fields:
+
+```text
+local_id
+bc_invoice_no
+shop_code
+salesperson_code
+customer_no
+posting_date
+document_date
+status: draft | completed | cancelled | synced | failed
+subtotal
+vat_amount
+total_amount
+payment_status: unpaid | partial | paid
+sync_status
+created_by
+created_at
+updated_at
+```
+
+Sales line fields:
+
+```text
+local_id
+header_local_id
+item_no
+description
+quantity
+unit_of_measure
+unit_price
+line_amount
+vat_amount
+total_amount
+```
+
+---
+
+## 5. Tax Authority Invoice Signing
+
+The POS must follow the same Business Central process for signing invoices through an external API with the tax authorities.
+
+AL files from Business Central will be provided.
+
+Claude Code should inspect the AL files and determine:
+
+* The codeunit responsible for tax signing.
+* The API endpoint used by Business Central.
+* Required payload format.
+* Authentication method.
+* Required invoice fields.
+* Returned signature fields.
+* Error handling process.
+* Whether signing happens before or after posting.
+
+The Node.js implementation should either:
+
+1. Call Business Central and let Business Central perform signing, or
+2. Call the same external tax authority API using the same payload rules.
+
+Preferred approach:
+
+* Business Central remains the authority for fiscal signing if the current implementation is already stable.
+* Node.js should call a Business Central endpoint/codeunit unless there is a strong reason to duplicate the signing logic.
+
+Local table suggestion:
+
+```text
+tax_invoice_signatures
+```
+
+Important fields:
+
+```text
+pos_invoice_local_id
+bc_invoice_no
+tax_signature_no
+tax_qr_code
+tax_control_code
+signed_payload
+signed_at
+signing_status: pending | signed | failed
+error_message
+```
+
+---
+
+## 6. Payment Processing
+
+The POS must support multiple payment types and match invoices to payments.
+
+### Payment Types
+
+Expected payment methods:
+
+* Cash
+* MPESA
+* Card
+* Bank transfer
+* Credit/customer account, if allowed
+* Other configured Business Central payment methods
+
+Local table suggestion:
+
+```text
+pos_payments
+```
+
+Important fields:
+
+```text
+local_id
+sales_header_local_id
+bc_invoice_no
+payment_type
+amount
+reference_no
+mpesa_receipt_no
+payment_date
+payment_status: pending | confirmed | failed | reversed
+sync_status
+created_by
+created_at
+```
+
+---
+
+## 7. MPESA Integration
+
+MPESA integration should be similar to the current Business Central configuration.
+
+AL files will be provided and should be inspected.
+
+Claude Code should identify:
+
+* Current MPESA setup tables.
+* Current payment processing codeunits.
+* Required credentials/configuration.
+* STK push or C2B flow in use.
+* Callback handling logic.
+* Payment validation rules.
+* How Business Central currently applies MPESA payments to invoices.
+
+The Node.js module should include:
+
+* MPESA configuration management.
+* Payment initiation endpoint if STK push is required.
+* Callback endpoint.
+* Payment confirmation table.
+* Payment-to-invoice matching.
+* Duplicate reference prevention.
+* Failed payment handling.
+
+Local table suggestion:
+
+```text
+mpesa_transactions
+```
+
+Important fields:
+
+```text
+local_id
+checkout_request_id
+merchant_request_id
+mpesa_receipt_no
+phone_no
+amount
+invoice_local_id
+bc_invoice_no
+status: pending | success | failed | reversed
+result_code
+result_description
+callback_payload
+created_at
+updated_at
+```
+
+---
+
+## 8. Invoice-to-Payment Matching
+
+The POS must allow matching invoices to payments and generating payment summaries by payment type.
+
+### Matching Rules
+
+The system should match payments using:
+
+* Invoice number.
+* Local POS invoice ID.
+* MPESA receipt number.
+* Amount.
+* Shop code.
+* Payment date.
+* Cashier/shop attendant.
+
+### Payment Summary
+
+The system should generate summaries by:
+
+* Shop.
+* Date.
+* Salesperson.
+* Shop attendant.
+* Payment type.
+* Invoice.
+* Sync status.
+
+Suggested reports:
+
+```text
+Daily payment summary
+Cashier shift summary
+MPESA reconciliation report
+Unmatched payments report
+Failed sync payments report
+Invoice payment status report
+```
+
+---
+
+## 9. Stock Control and Daily Cycle Counts
+
+The POS must support stock control at shop level.
+
+### Stock Requirements
+
+The system should:
+
+* Track available stock by shop/location.
+* Reduce local stock when sales are completed.
+* Sync stock movement to Business Central.
+* Pull stock balances from Business Central periodically.
+* Support daily cycle counts.
+* Allow comments on variances between system quantity and physical count.
+
+Local tables:
+
+```text
+shop_stock_balances
+stock_count_headers
+stock_count_lines
+```
+
+Stock count header fields:
+
+```text
+local_id
+shop_code
+location_code
+count_date
+status: draft | submitted | approved | rejected | synced
+counted_by
+approved_by
+sync_status
+created_at
+updated_at
+```
+
+Stock count line fields:
+
+```text
+local_id
+header_local_id
+item_no
+system_quantity
+physical_quantity
+variance_quantity
+comment
+```
+
+Business rules:
+
+* Cycle counts should be done daily.
+* Variances must require comments.
+* Variances should be sent to Business Central for review/posting.
+* Posting of stock adjustment should follow Business Central rules.
+
+---
+
+## 10. Expense Approval Requests
+
+The POS should allow shop users to request expense approvals.
+
+Shop attendants can create expense requests, but approval should be restricted to admin or the relevant approver role.
+
+Local table suggestion:
+
+```text
+expense_requests
+```
+
+Important fields:
+
+```text
+local_id
+shop_code
+requested_by
+expense_type
+amount
+description
+attachment_url
+status: draft | submitted | approved | rejected | synced
+approved_by
+approval_comment
+sync_status
+created_at
+updated_at
+```
+
+Business Central integration should follow the approval workflow available in the shared Business Central repo.
+
+Claude Code should inspect the AL approval logic and map the POS workflow to it.
+
+---
+
+## 11. Stock Transfer Requests
+
+The POS should allow shops to request stock transfers.
+
+Local tables:
+
+```text
+stock_transfer_requests
+stock_transfer_request_lines
+```
+
+Header fields:
+
+```text
+local_id
+from_location_code
+to_location_code
+shop_code
+requested_by
+status: draft | submitted | approved | rejected | fulfilled | synced
+sync_status
+created_at
+updated_at
+```
+
+Line fields:
+
+```text
+local_id
+request_local_id
+item_no
+quantity
+unit_of_measure
+comment
+```
+
+Business Central should remain the source of truth for actual transfer order creation, approval, shipping, and receipt.
+
+---
+
+## 12. Roles and Permissions
+
+The POS module must have at least two roles:
+
+1. **Admin**
+2. **Shop Attendant**
+
+### Admin Role
+
+Admin users can:
+
+* Manage POS users.
+* Assign users to shops.
+* View all shops.
+* View and manage synced master data.
+* Trigger manual sync.
+* View sync logs.
+* Retry failed syncs.
+* Approve or review expense requests, if configured.
+* Review stock variances.
+* View all reports.
+* Configure payment methods.
+* Configure integration settings.
+
+### Shop Attendant Role
+
+Shop attendants can:
+
+* Access only their assigned shop.
+* Create POS sales.
+* Receive payments.
+* Record MPESA references or initiate MPESA flow, depending on configuration.
+* Perform daily stock counts.
+* Add comments on stock variances.
+* Request stock transfers.
+* Request expense approvals.
+* View their own shop reports.
+
+Shop attendants must **not** be allowed to:
+
+* Add master records.
+* Edit master records.
+* Delete master records.
+* Change item prices.
+* Create customers directly.
+* Create items directly.
+* Create salespersons directly.
+* Change Business Central integration settings.
+* Access other shops unless explicitly allowed.
+
+### Permission Enforcement
+
+Permissions must be enforced in both:
+
+* Vue frontend route/UI guards.
+* Node.js backend middleware/policies.
+
+Do not rely only on hiding buttons in Vue.
+
+Recommended backend middleware:
+
+```text
+requireAuth
+requireRole('admin')
+requireRole('shop_attendant')
+requireShopAccess(shopCode)
+```
+
+---
+
+## 13. Suggested Backend Modules
+
+Create the following backend modules/services:
+
+```text
+src/modules/pos
+src/modules/pos-sales
+src/modules/pos-payments
+src/modules/mpesa
+src/modules/business-central
+src/modules/sync
+src/modules/stock-control
+src/modules/expenses
+src/modules/transfers
+src/modules/reports
+src/modules/auth
+src/modules/roles
+```
+
+Suggested services:
+
+```text
+BusinessCentralApiService
+BusinessCentralDbSyncService
+MasterDataSyncService
+PosSalesService
+PaymentService
+MpesaService
+TaxSigningService
+StockControlService
+CycleCountService
+ExpenseRequestService
+StockTransferRequestService
+SyncQueueService
+SyncLogService
+```
+
+---
+
+## 14. Suggested Vue Modules
+
+Create POS frontend views/components such as:
+
+```text
+resources/js/Pages/POS/Sales.vue
+resources/js/Pages/POS/Checkout.vue
+resources/js/Pages/POS/Payments.vue
+resources/js/Pages/POS/StockCount.vue
+resources/js/Pages/POS/ExpenseRequest.vue
+resources/js/Pages/POS/TransferRequest.vue
+resources/js/Pages/POS/Reports.vue
+resources/js/Pages/POS/Admin/SyncLogs.vue
+resources/js/Pages/POS/Admin/MasterData.vue
+resources/js/Pages/POS/Admin/IntegrationSettings.vue
+```
+
+Reusable components:
+
+```text
+ItemSearch
+CartSummary
+PaymentSelector
+MpesaPaymentModal
+OfflineStatusBanner
+SyncStatusBadge
+StockVarianceCommentModal
+ShopSelector
+```
+
+---
+
+## 15. API Endpoints
+
+Suggested backend endpoints:
+
+### POS Sales
+
+```text
+GET    /api/pos/items
+GET    /api/pos/customers
+GET    /api/pos/prices
+POST   /api/pos/sales
+GET    /api/pos/sales/:id
+POST   /api/pos/sales/:id/cancel
+POST   /api/pos/sales/:id/sync
+```
+
+### Payments
+
+```text
+POST   /api/pos/payments
+GET    /api/pos/payments
+POST   /api/pos/payments/:id/match
+GET    /api/pos/payment-summary
+```
+
+### MPESA
+
+```text
+POST   /api/mpesa/stk-push
+POST   /api/mpesa/callback
+GET    /api/mpesa/transactions
+```
+
+### Stock Control
+
+```text
+GET    /api/pos/stock-balances
+POST   /api/pos/stock-counts
+GET    /api/pos/stock-counts
+POST   /api/pos/stock-counts/:id/submit
+```
+
+### Expenses
+
+```text
+POST   /api/pos/expense-requests
+GET    /api/pos/expense-requests
+POST   /api/pos/expense-requests/:id/submit
+POST   /api/pos/expense-requests/:id/approve
+POST   /api/pos/expense-requests/:id/reject
+```
+
+### Transfers
+
+```text
+POST   /api/pos/transfer-requests
+GET    /api/pos/transfer-requests
+POST   /api/pos/transfer-requests/:id/submit
+```
+
+### Sync
+
+```text
+POST   /api/pos/sync/run
+GET    /api/pos/sync/logs
+POST   /api/pos/sync/retry/:id
+```
+
+---
+
+## 16. Sync Design
+
+Create a generic sync log table.
+
+```text
+sync_logs
+```
+
+Fields:
+
+```text
+id
+entity_type
+entity_id
+direction: pull | push
+source: pos | business_central
+target: pos | business_central
+status: pending | success | failed | conflict
+attempt_count
+request_payload
+response_payload
+error_message
+started_at
+completed_at
+created_at
+updated_at
+```
+
+### Sync Principles
+
+* Business Central is the source of truth for posted financial and inventory transactions.
+* POS can create transactions offline, but they must be synced and confirmed by Business Central.
+* Master data should generally be read-only in POS.
+* Shop attendants cannot create or modify master data.
+* Avoid duplicate Business Central documents by using idempotency keys.
+* Every POS transaction should have a unique local ID and external document number.
+* Sync failures should be visible to admins.
+
+---
+
+## 17. Implementation Phases
+
+### Phase 1: Repository Review
+
+Claude Code should inspect the existing Node.js/Vue repo and the shared Business Central repo.
+
+Tasks:
+
+* Identify current backend framework structure.
+* Identify current Vue structure.
+* Identify authentication and roles implementation.
+* Identify database migration approach.
+* Review Business Central SHOP Role Centre.
+* Review AL files for tax signing.
+* Review AL files for MPESA.
+* Review AL files for shop sales, stock, payments, approvals, and transfers.
+
+Deliverable:
+
+```text
+implementation-notes.md
+```
+
+### Phase 2: Database Schema
+
+Create migrations for:
+
+* shops
+* shop_users or user_shop_assignments
+* items
+* item_prices
+* shop_customers
+* salespersons
+* pos_sales_headers
+* pos_sales_lines
+* pos_payments
+* mpesa_transactions
+* tax_invoice_signatures
+* shop_stock_balances
+* stock_count_headers
+* stock_count_lines
+* expense_requests
+* stock_transfer_requests
+* stock_transfer_request_lines
+* sync_logs
+
+### Phase 3: Roles and Permissions
+
+Implement:
+
+* Admin role.
+* Shop attendant role.
+* Route guards.
+* Backend authorization middleware.
+* Shop-level data restrictions.
+
+### Phase 4: Master Data Sync
+
+Implement Business Central pull sync for:
+
+* Shop customers.
+* PDA items.
+* Sales prices.
+* Salespersons.
+* Shops/location mappings.
+
+### Phase 5: Offline POS Sales
+
+Implement:
+
+* Item search.
+* Cart.
+* Price lookup.
+* Offline invoice creation.
+* Local payment capture.
+* Offline storage.
+* Sync status display.
+
+### Phase 6: Business Central Posting
+
+Implement:
+
+* Push POS sales to Business Central.
+* Post invoices using Business Central process.
+* Return BC invoice numbers to POS.
+* Handle posting errors.
+* Prevent duplicate posting.
+
+### Phase 7: Tax Signing
+
+Implement invoice signing using Business Central AL process as reference.
+
+Prefer calling Business Central if existing signing logic is already reliable.
+
+### Phase 8: Payments and MPESA
+
+Implement:
+
+* Payment capture.
+* MPESA integration.
+* MPESA callback handling.
+* Payment matching.
+* Payment summary reports.
+* Sync payments to Business Central.
+
+### Phase 9: Stock Control and Cycle Counts
+
+Implement:
+
+* Shop stock balance view.
+* Daily cycle count entry.
+* Variance calculation.
+* Required variance comments.
+* Sync count results to Business Central.
+
+### Phase 10: Expense and Transfer Requests
+
+Implement:
+
+* Expense request creation.
+* Approval workflow integration.
+* Stock transfer request creation.
+* Sync to Business Central.
+
+### Phase 11: Reports and Admin Tools
+
+Implement:
+
+* Daily sales report.
+* Payment summary report.
+* MPESA reconciliation report.
+* Stock variance report.
+* Sync failure report.
+* Shop attendant activity report.
+
+---
+
+## 18. Testing Requirements
+
+Add tests for:
+
+* Role permissions.
+* Shop attendant restrictions.
+* Master data read-only rules.
+* Price validity by date.
+* Offline sale creation.
+* Sync retry behavior.
+* Duplicate prevention.
+* MPESA callback handling.
+* Invoice-payment matching.
+* Stock variance comments.
+* Expense request workflow.
+* Transfer request workflow.
+
+---
+
+## 19. Important Rules for Claude Code
+
+When implementing this POS module:
+
+1. Do not allow shop attendants to create, edit, or delete master records.
+2. Do not duplicate Business Central business logic blindly; inspect the AL files first.
+3. Use the SHOP Role Centre as the functional reference.
+4. Prefer Business Central as the source of truth for posted financial and inventory records.
+5. Make all offline-created records idempotent before syncing.
+6. Add sync logs for every push and pull operation.
+7. Make failed sync records visible and retryable by admins.
+8. Enforce role and shop restrictions on the backend, not only in Vue.
+9. Keep master data sync separate from transaction sync.
+10. Keep tax signing and MPESA behavior aligned with the provided Business Central AL files.
+
+---
+
+## 20. Open Questions to Resolve After Reviewing the Business Central Repo
+
+Claude Code should answer these after inspecting the Business Central AL files:
+
+1. What is the exact field name for PDA Item on the Item table extension?
+2. Which Business Central table/page/codeunit defines the SHOP Role Centre behavior?
+3. How are shops mapped to salespersons and locations?
+4. Is invoice signing done before or after posting?
+5. Which codeunit handles tax authority signing?
+6. Which codeunit/table handles MPESA setup and payment processing?
+7. Are MPESA payments applied directly to invoices or posted as journal/payment entries first?
+8. What document type should POS sales create in Business Central: Sales Invoice, Sales Order, or custom shop invoice?
+9. How should stock variances be posted in Business Central?
+10. What approval workflow exists for expenses and stock transfers?
+11. Are there existing APIs exposed in Business Central, or should new API pages/codeunits be added?
+12. Which number series should be used for POS invoices, payments, transfers, and expense requests?
+
+---
+
+## Expected Final Outcome
+
+At the end of implementation, the existing Node.js and Vue app should have a complete POS module where:
+
+* Shops can sell offline.
+* Transactions sync to Business Central.
+* Master data comes from Business Central.
+* Shop attendants cannot manage master data.
+* Admins can manage users, sync, reports, and configuration.
+* MPESA payments are captured and reconciled.
+* Invoices are signed using the tax authority process aligned with Business Central.
+* Stock is controlled through sales, stock balances, and daily cycle counts.
+* Expense and transfer requests can be created and routed for approval.
+* The Business Central SHOP Role Centre remains the primary reference for business behavior.

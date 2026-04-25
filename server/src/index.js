@@ -11,6 +11,7 @@ import { db } from './db/pool.js';
 import routes from './routes/index.js';
 import logger from './services/logger.js';
 import swaggerSpec from './docs/swagger.js';
+import { startReportScheduler } from './services/reportScheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,6 +52,7 @@ app.use((err, _req, res, _next) => {
 // ── Start ────────────────────────────────────────────────────────────────────
 async function start() {
   await db.connect();
+  startReportScheduler();
   app.listen(PORT, () => logger.info(`API listening on :${PORT}`));
 }
 

@@ -16,6 +16,7 @@ import bcrypt       from 'bcryptjs';
 import { db, sql }  from '../db/pool.js';
 import { authenticateAD } from '../services/ldap.js';
 import logger       from '../services/logger.js';
+import { ROLES } from '../services/access.js';
 
 // ── shared helpers ─────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ function issueToken(user) {
 }
 
 function userShape(user) {
-  return { userId: user.UserId, userName: user.DisplayName, role: user.Role };
+  return { userId: user.UserId, userName: user.DisplayName, role: user.Role, email: user.Email ?? null, receiveScheduledReports: Boolean(user.ReceiveScheduledReports) };
 }
 
 // ── POST /api/auth/login  (local bcrypt) ───────────────────────────────────
@@ -43,7 +44,7 @@ export async function login(req, res) {
     const req1 = pool.request();
     req1.input('Username', sql.NVarChar(100), username);
     const result = await req1.query(`
-      SELECT UserId, Username, PasswordHash, DisplayName, Role, IsActive, AuthProvider
+      SELECT UserId, Username, PasswordHash, DisplayName, Email, Role, IsActive, AuthProvider, ReceiveScheduledReports
       FROM   [dbo].[Users]
       WHERE  Username = @Username AND IsActive = 1
     `);
@@ -113,7 +114,7 @@ export async function loginAD(req, res) {
     const req2 = pool.request();
     req2.input('Username', sql.NVarChar(100), adUser.samAccountName);
     const { recordset } = await req2.query(`
-      SELECT UserId, DisplayName, Role
+      SELECT UserId, DisplayName, Email, Role, ReceiveScheduledReports
       FROM   [dbo].[Users]
       WHERE  Username = @Username AND IsActive = 1
     `);
@@ -132,6 +133,35 @@ export async function loginAD(req, res) {
   }
 }
 
+// ── POST /api/auth/validate-ad  (service-to-service, API-key protected) ──────
+//
+// Validates AD credentials and returns the user's AD profile.
+// Does NOT touch the Users table or issue a JWT — the calling app
+// handles its own session.
+//
+// Request body:  { username, password }
+// Success 200:   { samAccountName, displayName, email, isAdmin }
+// Failure 401:   { error: "..." }
+
+export async function validateAD(req, res) {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password are required' });
+  }
+  try {
+    const adUser = await authenticateAD(username, password);
+    return res.json({
+      samAccountName: adUser.samAccountName,
+      displayName:    adUser.displayName,
+      email:          adUser.email ?? null,
+      isAdmin:        adUser.isAdmin,
+    });
+  } catch (err) {
+    const status = err.message.toLowerCase().includes('invalid credentials') ? 401 : 502;
+    return res.status(status).json({ error: err.message });
+  }
+}
+
 // ── POST /api/auth/create-user  (admin only) ───────────────────────────────
 
 export async function createUser(req, res) {
@@ -142,7 +172,7 @@ export async function createUser(req, res) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin role required' });
   }
-  const VALID_ROLES = ['admin', 'analyst', 'user'];
+  const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST];
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
   }

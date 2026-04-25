@@ -3,6 +3,7 @@
  */
 import Order from '../models/Order.js';
 import logger from '../services/logger.js';
+import { getOrSet } from '../services/reportCache.js';
 
 /** POST /api/webhook/orders  – called by Business Central */
 export async function receiveOrder(req, res) {
@@ -99,8 +100,12 @@ export async function getOrderAudit(req, res) {
 export async function exportOrderLines(req, res) {
   try {
     const { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup } = req.query;
-    const rows = await Order.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup });
-    return res.json(rows);
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const cacheQuery = { ...req.query };
+    delete cacheQuery.refresh;
+    const { value, cached } = await getOrSet('orders-lines', { companyId: req.companyId, query: cacheQuery }, () => Order.exportLines(req.companyId, { q, dateFrom, dateTo, status, customerNo, salesperson, route, sector, postingGroup }), { ttlMs: 5 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -110,8 +115,12 @@ export async function exportOrderLines(req, res) {
 export async function orderSummary(req, res) {
   try {
     const { groupBy, dateFrom, dateTo } = req.query;
-    const rows = await Order.summary(req.companyId, { groupBy, dateFrom, dateTo });
-    return res.json(rows);
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const cacheQuery = { ...req.query };
+    delete cacheQuery.refresh;
+    const { value, cached } = await getOrSet('orders-summary', { companyId: req.companyId, query: cacheQuery }, () => Order.summary(req.companyId, { groupBy, dateFrom, dateTo }), { ttlMs: 5 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

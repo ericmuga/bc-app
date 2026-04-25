@@ -43,3 +43,18 @@ export function webhookAuth(req, res, next) {
   }
   next();
 }
+
+/**
+ * API-key guard for service-to-service endpoints.
+ * Caller must send:  X-Api-Key: <AUTH_API_KEY env var>
+ */
+export function apiKeyAuth(req, res, next) {
+  const key = process.env.AUTH_API_KEY;
+  if (!key) {
+    return res.status(503).json({ error: 'AUTH_API_KEY is not configured on this server.' });
+  }
+  if (req.headers['x-api-key'] !== key) {
+    return res.status(401).json({ error: 'Invalid or missing X-Api-Key header.' });
+  }
+  next();
+}
