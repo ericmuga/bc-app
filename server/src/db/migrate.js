@@ -112,6 +112,11 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='ReceiveScheduledReports')
       ALTER TABLE [dbo].[Users] ADD [ReceiveScheduledReports] BIT NOT NULL DEFAULT 0
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[Users]') AND name='ShopCode')
+      ALTER TABLE [dbo].[Users] ADD [ShopCode] NVARCHAR(50) NULL
+  `);
 
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='ReportSchedules' AND schema_id=SCHEMA_ID('dbo'))
@@ -288,6 +293,643 @@ async function migrate(companyId) {
       ALTER TABLE [dbo].[MgmtMeasure] ADD [SqlQuery] NVARCHAR(MAX) NULL
   `);
 
+  // ── [dbo].[PosVatRate] ───────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosVatRate' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosVatRate] (
+      [VatRateId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [PostingGroup] NVARCHAR(50)     NOT NULL UNIQUE,
+      [RatePercent]  DECIMAL(8,4)     NOT NULL DEFAULT 0,
+      [TaxType]      NVARCHAR(10)     NULL,
+      [IsActive]     BIT              NOT NULL DEFAULT 1,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  // Seed common defaults if table is empty
+  await run(`
+    IF NOT EXISTS (SELECT 1 FROM [dbo].[PosVatRate])
+    INSERT INTO [dbo].[PosVatRate]([PostingGroup],[RatePercent],[TaxType])
+    VALUES ('VAT16', 16, 'B'),
+           ('VAT0',   0, 'A'),
+           ('EXEMPT', 0, 'E')
+  `);
+  console.log('  [dbo].[PosVatRate] OK');
+
+  // ── [dbo].[PosShop] ──────────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosShop' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosShop] (
+      [ShopId]          UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Code]            NVARCHAR(50)     NOT NULL UNIQUE,
+      [Name]            NVARCHAR(200)    NOT NULL,
+      [LocationCode]    NVARCHAR(20)     NULL,
+      [SalespersonCode] NVARCHAR(20)     NULL,
+      [IsActive]        BIT              NOT NULL DEFAULT 1,
+      [SortOrder]       INT              NOT NULL DEFAULT 0,
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='SalespersonCode')
+      ALTER TABLE [dbo].[PosShop] ADD [SalespersonCode] NVARCHAR(20) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='WalkInCustomerNo')
+      ALTER TABLE [dbo].[PosShop] ADD [WalkInCustomerNo] NVARCHAR(20) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='CustomerPriceGroup')
+      ALTER TABLE [dbo].[PosShop] ADD [CustomerPriceGroup] NVARCHAR(50) NULL
+  `);
+  console.log('  [dbo].[PosShop] OK');
+
+  // ── [dbo].[PosContact] ────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosContact' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosContact] (
+      [ContactId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [BcContactNo]     NVARCHAR(20)     NOT NULL UNIQUE,
+      [Name]            NVARCHAR(200)    NOT NULL,
+      [MobileNo]        NVARCHAR(30)     NULL,
+      [Email]           NVARCHAR(200)    NULL,
+      [KraPin]          NVARCHAR(30)     NULL,
+      [SalespersonCode] NVARCHAR(20)     NULL,
+      [ShopCode]        NVARCHAR(50)     NULL,
+      [IsActive]        BIT              NOT NULL DEFAULT 1,
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosContact]') AND name='KraPin')
+      ALTER TABLE [dbo].[PosContact] ADD [KraPin] NVARCHAR(30) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosContact]') AND name='IsWalkIn')
+      ALTER TABLE [dbo].[PosContact] ADD [IsWalkIn] BIT NOT NULL DEFAULT 0
+  `);
+  for (const [col, def] of [
+    ['RouteCode',       'NVARCHAR(20)  NULL'],
+    ['CustomerType',    'NVARCHAR(20)  NULL'],
+    ['CompanyName',     'NVARCHAR(200) NULL'],
+    ['ParentContactNo', 'NVARCHAR(20)  NULL'],
+    ['IsLocalOnly',     'BIT NOT NULL DEFAULT 0'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[PosContact]') AND name='${col}')
+        ALTER TABLE [dbo].[PosContact] ADD [${col}] ${def}
+    `);
+  }
+  console.log('  [dbo].[PosContact] OK');
+
+  // ── [dbo].[PosCategory] ──────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosCategory' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosCategory] (
+      [CategoryId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Code]       NVARCHAR(50)     NOT NULL UNIQUE,
+      [Name]       NVARCHAR(200)    NOT NULL,
+      [SortOrder]  INT              NOT NULL DEFAULT 0,
+      [IsActive]   BIT              NOT NULL DEFAULT 1,
+      [CreatedAt]  DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]  DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosCategory] OK');
+
+  // ── [dbo].[PosItem] ───────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosItem' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosItem] (
+      [ItemId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ItemNo]       NVARCHAR(30)     NOT NULL UNIQUE,
+      [Description]  NVARCHAR(200)    NOT NULL,
+      [CategoryCode] NVARCHAR(50)     NULL,
+      [UnitPrice]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Barcode]      NVARCHAR(100)    NULL,
+      [ImageUrl]     NVARCHAR(500)    NULL,
+      [IsActive]     BIT              NOT NULL DEFAULT 1,
+      [SortOrder]    INT              NOT NULL DEFAULT 0,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  for (const [col, def] of [
+    ['EtimsItemCode',      'NVARCHAR(50)  NULL'],
+    ['EtimsItemClassCode', 'NVARCHAR(50)  NULL'],
+    ['TaxType',            'NVARCHAR(10)  NULL'],
+    ['UnitOfMeasure',      'NVARCHAR(20)  NULL'],
+    ['VatPostingGroup',    'NVARCHAR(50)  NULL'],
+    ['PriceIncludesVat',   'BIT NOT NULL DEFAULT 0'],
+    ['VatPercent',         'DECIMAL(8,4)  NOT NULL DEFAULT 0'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[PosItem]') AND name='${col}')
+        ALTER TABLE [dbo].[PosItem] ADD [${col}] ${def}
+    `);
+  }
+  console.log('  [dbo].[PosItem] OK');
+
+  // ── [dbo].[PosPaymentType] ────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosPaymentType' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosPaymentType] (
+      [TypeId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Code]         NVARCHAR(50)     NOT NULL,
+      [ShopCode]     NVARCHAR(50)     NULL,
+      [Name]         NVARCHAR(200)    NOT NULL,
+      [PaymentClass] NVARCHAR(20)     NOT NULL DEFAULT 'Cash',
+      [IsActive]     BIT              NOT NULL DEFAULT 1,
+      [SortOrder]    INT              NOT NULL DEFAULT 0,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [UQ_PosPaymentType_Code_Shop] UNIQUE ([Code], [ShopCode])
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosPaymentType]') AND name='ShopCode')
+      ALTER TABLE [dbo].[PosPaymentType] ADD [ShopCode] NVARCHAR(50) NULL
+  `);
+  for (const [col, def] of [
+    ['ApiEndpoint',     'NVARCHAR(250) NULL'],
+    ['UseApiEndpoint',  'BIT NOT NULL DEFAULT 0'],
+    ['BalanceAcctType', 'NVARCHAR(20)  NULL'],
+    ['BalanceAcctNo',   'NVARCHAR(20)  NULL'],
+    ['BcSourceNo',      'NVARCHAR(20)  NULL'],
+    ['Description',     'NVARCHAR(500) NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[PosPaymentType]') AND name='${col}')
+        ALTER TABLE [dbo].[PosPaymentType] ADD [${col}] ${def}
+    `);
+  }
+  console.log('  [dbo].[PosPaymentType] OK');
+
+  // ── [dbo].[PosOrder] ─────────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosOrder' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosOrder] (
+      [OrderId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [OrderNo]       NVARCHAR(30)     NOT NULL UNIQUE,
+      [ShopCode]      NVARCHAR(50)     NULL,
+      [CashierUserId] NVARCHAR(100)    NOT NULL,
+      [CashierName]   NVARCHAR(200)    NOT NULL,
+      [Status]        NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [TotalAmount]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Notes]         NVARCHAR(500)    NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='ShopCode')
+      ALTER TABLE [dbo].[PosOrder] ADD [ShopCode] NVARCHAR(50) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='ContactNo')
+      ALTER TABLE [dbo].[PosOrder] ADD [ContactNo] NVARCHAR(20) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='ContactName')
+      ALTER TABLE [dbo].[PosOrder] ADD [ContactName] NVARCHAR(200) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='ContactPhone')
+      ALTER TABLE [dbo].[PosOrder] ADD [ContactPhone] NVARCHAR(30) NULL
+  `);
+  for (const [col, def] of [
+    ['EtimsInvoiceNo',     'NVARCHAR(50)   NULL'],
+    ['CuSerialNo',         'NVARCHAR(50)   NULL'],
+    ['QrUrl',              'NVARCHAR(500)  NULL'],
+    ['SignedAt',           'NVARCHAR(100)  NULL'],
+    ['PrintedAt',          'DATETIME2      NULL'],
+    ['PdfFileName',        'NVARCHAR(255)  NULL'],
+    ['ConfirmationPrintedAt', 'DATETIME2   NULL'],
+    ['StkPushReference',   'NVARCHAR(100)  NULL'],
+    ['StkPushSentAt',      'DATETIME2      NULL'],
+    ['StkPushStatus',      'NVARCHAR(20)   NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns
+                     WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='${col}')
+        ALTER TABLE [dbo].[PosOrder] ADD [${col}] ${def}
+    `);
+  }
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosOrder]') AND name='ContactPin')
+      ALTER TABLE [dbo].[PosOrder] ADD [ContactPin] NVARCHAR(30) NULL
+  `);
+  console.log('  [dbo].[PosOrder] OK');
+
+  // ── [dbo].[PosOrderLine] ─────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosOrderLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosOrderLine] (
+      [LineId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [OrderId]     UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]      NVARCHAR(30)     NOT NULL,
+      [Description] NVARCHAR(200)    NOT NULL,
+      [Quantity]    DECIMAL(18,4)    NOT NULL DEFAULT 1,
+      [UnitPrice]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [LineAmount]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [SortOrder]   INT              NOT NULL DEFAULT 0,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosOrderLine_Order]
+        FOREIGN KEY ([OrderId]) REFERENCES [dbo].[PosOrder]([OrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosOrderLine] OK');
+
+  // ── [dbo].[PosPayment] ───────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosPayment' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosPayment] (
+      [PaymentId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [OrderId]         UNIQUEIDENTIFIER NOT NULL,
+      [PaymentTypeCode] NVARCHAR(50)     NOT NULL,
+      [PaymentTypeName] NVARCHAR(200)    NOT NULL,
+      [Amount]          DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [MobileNo]        NVARCHAR(30)     NULL,
+      [Reference]       NVARCHAR(100)    NULL,
+      [Status]          NVARCHAR(20)     NOT NULL DEFAULT 'pending',
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosPayment_Order]
+        FOREIGN KEY ([OrderId]) REFERENCES [dbo].[PosOrder]([OrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosPayment] OK');
+
+  // ── [dbo].[PosSpecialPrice] (date-bound offers — overrides PosItem.UnitPrice) ──
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosSpecialPrice' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosSpecialPrice] (
+      [SpecialPriceId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ItemNo]         NVARCHAR(30)     NOT NULL,
+      [ShopCode]       NVARCHAR(50)     NULL,    -- NULL = all shops
+      [UnitPrice]      DECIMAL(18,4)    NOT NULL,
+      [StartingDate]   DATE             NOT NULL,
+      [EndingDate]     DATE             NULL,    -- NULL = open-ended
+      [Description]    NVARCHAR(200)    NULL,
+      [IsActive]       BIT              NOT NULL DEFAULT 1,
+      [CreatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes
+                   WHERE name='IX_PosSpecialPrice_Item_Shop'
+                     AND object_id=OBJECT_ID('[dbo].[PosSpecialPrice]'))
+    CREATE INDEX [IX_PosSpecialPrice_Item_Shop]
+      ON [dbo].[PosSpecialPrice]([ItemNo],[ShopCode],[IsActive])
+  `);
+  console.log('  [dbo].[PosSpecialPrice] OK');
+
+  // ── [dbo].[PosFavourite] (per-user favourite items) ─────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosFavourite' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosFavourite] (
+      [FavouriteId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [UserId]      UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]      NVARCHAR(30)     NOT NULL,
+      [SortOrder]   INT              NOT NULL DEFAULT 0,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [UQ_PosFavourite_User_Item] UNIQUE ([UserId],[ItemNo])
+    )
+  `);
+  console.log('  [dbo].[PosFavourite] OK');
+
+  // ── [dbo].[PosTillSession] + balances + transactions ─────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosTillSession' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosTillSession] (
+      [SessionId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [SessionNo]      NVARCHAR(30)     NOT NULL UNIQUE,
+      [ShopCode]       NVARCHAR(50)     NOT NULL,
+      [CashierUserId]  NVARCHAR(100)    NOT NULL,
+      [CashierName]    NVARCHAR(200)    NOT NULL,
+      [Status]         NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [OpenedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [ClosedAt]       DATETIME2        NULL,
+      [Notes]          NVARCHAR(500)    NULL,
+      [CreatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosTillBalance' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosTillBalance] (
+      [BalanceId]        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [SessionId]        UNIQUEIDENTIFIER NOT NULL,
+      [PaymentTypeCode]  NVARCHAR(50)     NOT NULL,
+      [PaymentTypeName]  NVARCHAR(200)    NOT NULL,
+      [OpeningAmount]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [DeclaredClosing]  DECIMAL(18,4)    NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosTillBalance_Session] FOREIGN KEY ([SessionId])
+        REFERENCES [dbo].[PosTillSession]([SessionId]) ON DELETE CASCADE,
+      CONSTRAINT [UQ_PosTillBalance_SessionType] UNIQUE ([SessionId],[PaymentTypeCode])
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosTillTransaction' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosTillTransaction] (
+      [TransactionId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [SessionId]       UNIQUEIDENTIFIER NOT NULL,
+      [PaymentTypeCode] NVARCHAR(50)     NOT NULL,
+      [TransactionType] NVARCHAR(30)     NOT NULL,  -- cash-in, cash-out, drop, payout, expense
+      [Amount]          DECIMAL(18,4)    NOT NULL,  -- signed: +in / -out
+      [Reference]       NVARCHAR(100)    NULL,
+      [Notes]           NVARCHAR(500)    NULL,
+      [CreatedBy]       NVARCHAR(100)    NULL,
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosTillTx_Session] FOREIGN KEY ([SessionId])
+        REFERENCES [dbo].[PosTillSession]([SessionId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosTillSession] + balances + tx OK');
+
+  // ── [dbo].[PosStockMovement] (ledger — every quantity change in/out) ──────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockMovement' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockMovement] (
+      [MovementId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ShopCode]      NVARCHAR(50)     NOT NULL,
+      [ItemNo]        NVARCHAR(30)     NOT NULL,
+      [Description]   NVARCHAR(200)    NULL,
+      [MovementType]  NVARCHAR(30)     NOT NULL,
+      [Quantity]      DECIMAL(18,4)    NOT NULL,
+      [UnitPrice]     DECIMAL(18,4)    NULL,
+      [ReferenceType] NVARCHAR(30)     NULL,
+      [ReferenceId]   UNIQUEIDENTIFIER NULL,
+      [ReferenceNo]   NVARCHAR(30)     NULL,
+      [MovementDate]  DATE             NOT NULL,
+      [Notes]         NVARCHAR(500)    NULL,
+      [CreatedBy]     NVARCHAR(100)    NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes
+                   WHERE name='IX_PosStockMovement_Shop_Item_Date'
+                     AND object_id=OBJECT_ID('[dbo].[PosStockMovement]'))
+    CREATE INDEX [IX_PosStockMovement_Shop_Item_Date]
+      ON [dbo].[PosStockMovement] ([ShopCode],[ItemNo],[MovementDate])
+  `);
+  console.log('  [dbo].[PosStockMovement] OK');
+
+  // ── [dbo].[PosStockRequest] + lines ─────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockRequest' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockRequest] (
+      [RequestId]     UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [RequestNo]     NVARCHAR(30)     NOT NULL UNIQUE,
+      [ShopCode]      NVARCHAR(50)     NOT NULL,
+      [RequestedBy]   NVARCHAR(100)    NOT NULL,
+      [RequestedName] NVARCHAR(200)    NOT NULL,
+      [Status]        NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [Notes]         NVARCHAR(500)    NULL,
+      [SubmittedAt]   DATETIME2        NULL,
+      [ApprovedBy]    NVARCHAR(100)    NULL,
+      [ApprovedAt]    DATETIME2        NULL,
+      [CompletedAt]   DATETIME2        NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockRequestLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockRequestLine] (
+      [LineId]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [RequestId]         UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]            NVARCHAR(30)     NOT NULL,
+      [Description]       NVARCHAR(200)    NOT NULL,
+      [QuantityRequested] DECIMAL(18,4)    NOT NULL,
+      [QuantityReceived]  DECIMAL(18,4)    NULL,
+      [UnitOfMeasure]     NVARCHAR(20)     NULL,
+      [SortOrder]         INT              NOT NULL DEFAULT 0,
+      [CreatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosStockRequestLine_Hdr] FOREIGN KEY ([RequestId])
+        REFERENCES [dbo].[PosStockRequest]([RequestId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosStockRequest] + lines OK');
+
+  // ── [dbo].[PosStockTake] + lines ────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockTake' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockTake] (
+      [StockTakeId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [StockTakeNo] NVARCHAR(30)     NOT NULL UNIQUE,
+      [ShopCode]    NVARCHAR(50)     NOT NULL,
+      [DateFrom]    DATE             NOT NULL,
+      [DateTo]      DATE             NOT NULL,
+      [Status]      NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [CountedBy]   NVARCHAR(100)    NULL,
+      [CompletedAt] DATETIME2        NULL,
+      [Notes]       NVARCHAR(500)    NULL,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockTakeLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockTakeLine] (
+      [LineId]        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [StockTakeId]   UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]        NVARCHAR(30)     NOT NULL,
+      [Description]   NVARCHAR(200)    NOT NULL,
+      [UnitOfMeasure] NVARCHAR(20)     NULL,
+      [OpeningStock]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [IncreasesQty]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [DecreasesQty]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [ExpectedStock] DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [PhysicalStock] DECIMAL(18,4)    NULL,
+      [Variance]      DECIMAL(18,4)    NULL,
+      [Comments]      NVARCHAR(500)    NULL,
+      [SortOrder]     INT              NOT NULL DEFAULT 0,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosStockTakeLine_Hdr] FOREIGN KEY ([StockTakeId])
+        REFERENCES [dbo].[PosStockTake]([StockTakeId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosStockTake] + lines OK');
+
+  // ── [dbo].[PosThirdParty] (master list of third-party recipients) ──────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosThirdParty' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosThirdParty] (
+      [ThirdPartyId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Code]         NVARCHAR(50)     NOT NULL UNIQUE,
+      [Name]         NVARCHAR(200)    NOT NULL,
+      [ShopCode]     NVARCHAR(50)     NULL,
+      [IsActive]     BIT              NOT NULL DEFAULT 1,
+      [Notes]        NVARCHAR(500)    NULL,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosThirdParty] OK');
+
+  // ── [dbo].[PosThirdPartyTransfer] + lines ──────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosThirdPartyTransfer' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosThirdPartyTransfer] (
+      [TransferId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [TransferNo]   NVARCHAR(30)     NOT NULL UNIQUE,
+      [TransferDate] DATE             NOT NULL,
+      [ThirdPartyId] UNIQUEIDENTIFIER NULL,
+      [ThirdPartyName] NVARCHAR(200)  NULL,
+      [DestinationShopCode] NVARCHAR(50) NULL,
+      [Status]       NVARCHAR(20)     NOT NULL DEFAULT 'draft',
+      [TotalCost]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Notes]        NVARCHAR(500)    NULL,
+      [CreatedBy]    NVARCHAR(100)    NULL,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [PostedAt]     DATETIME2        NULL,
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosThirdPartyTransferLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosThirdPartyTransferLine] (
+      [LineId]        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [TransferId]    UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]        NVARCHAR(30)     NOT NULL,
+      [Description]   NVARCHAR(200)    NOT NULL,
+      [Quantity]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitOfMeasure] NVARCHAR(20)     NULL,
+      [UnitCost]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [LineCost]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [SortOrder]     INT              NOT NULL DEFAULT 0,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosThirdPartyTransferLine] FOREIGN KEY ([TransferId])
+        REFERENCES [dbo].[PosThirdPartyTransfer]([TransferId]) ON DELETE CASCADE
+    )
+  `);
+  // Relax DestinationShopCode to NULL — destination is the third party (which may or may not be linked to a shop)
+  await run(`
+    IF EXISTS (
+      SELECT 1 FROM sys.columns
+      WHERE object_id = OBJECT_ID('[dbo].[PosThirdPartyTransfer]')
+        AND name = 'DestinationShopCode' AND is_nullable = 0
+    )
+    ALTER TABLE [dbo].[PosThirdPartyTransfer] ALTER COLUMN [DestinationShopCode] NVARCHAR(50) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosThirdPartyTransfer]') AND name='OriginLabel')
+      ALTER TABLE [dbo].[PosThirdPartyTransfer] ADD [OriginLabel] NVARCHAR(100) NOT NULL DEFAULT 'HQ dispatch'
+  `);
+  console.log('  [dbo].[PosThirdPartyTransfer] + lines OK');
+
+  // ── [dbo].[PosPortioning] + lines ──────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosPortioning' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosPortioning] (
+      [PortioningId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [PortioningNo]      NVARCHAR(30)     NOT NULL UNIQUE,
+      [PortioningDate]    DATE             NOT NULL,
+      [SourceTransferLineId] UNIQUEIDENTIFIER NULL,
+      [SourceItemNo]      NVARCHAR(30)     NOT NULL,
+      [SourceDescription] NVARCHAR(200)    NOT NULL,
+      [SourceQuantity]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [SourceUom]         NVARCHAR(20)     NULL,
+      [SourceUnitCost]    DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [SourceTotalCost]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [ShopCode]          NVARCHAR(50)     NOT NULL,
+      [Status]            NVARCHAR(20)     NOT NULL DEFAULT 'draft',
+      [Notes]             NVARCHAR(500)    NULL,
+      [CreatedBy]         NVARCHAR(100)    NULL,
+      [CreatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [PostedAt]          DATETIME2        NULL,
+      [UpdatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosPortioningLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosPortioningLine] (
+      [LineId]         UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [PortioningId]   UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]         NVARCHAR(30)     NOT NULL,
+      [Description]    NVARCHAR(200)    NOT NULL,
+      [Quantity]       DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitOfMeasure]  NVARCHAR(20)     NULL,
+      [AllocatedCost]  DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [SortOrder]      INT              NOT NULL DEFAULT 0,
+      [CreatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_PosPortioningLine] FOREIGN KEY ([PortioningId])
+        REFERENCES [dbo].[PosPortioning]([PortioningId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosPortioning] + lines OK');
+
+  // ── [dbo].[PosManualSale] (manual sales registration outside POS terminal) ─
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosManualSale' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosManualSale] (
+      [ManualSaleId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ManualSaleNo]      NVARCHAR(30)     NOT NULL UNIQUE,
+      [SaleDate]          DATE             NOT NULL,
+      [ShopCode]          NVARCHAR(50)     NOT NULL,
+      [ItemNo]            NVARCHAR(30)     NOT NULL,
+      [Description]       NVARCHAR(200)    NOT NULL,
+      [Quantity]          DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitOfMeasure]     NVARCHAR(20)     NULL,
+      [UnitPrice]         DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [TotalAmount]       DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Notes]             NVARCHAR(500)    NULL,
+      [CreatedBy]         NVARCHAR(100)    NULL,
+      [CreatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosManualSale] OK');
+
+  // ── [dbo].[PosWriteOff] (waste, spoilage, damage) ──────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosWriteOff' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosWriteOff] (
+      [WriteOffId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [WriteOffNo]    NVARCHAR(30)     NOT NULL UNIQUE,
+      [WriteOffDate]  DATE             NOT NULL,
+      [ShopCode]      NVARCHAR(50)     NOT NULL,
+      [ItemNo]        NVARCHAR(30)     NOT NULL,
+      [Description]   NVARCHAR(200)    NOT NULL,
+      [Quantity]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [UnitOfMeasure] NVARCHAR(20)     NULL,
+      [UnitCost]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [TotalCost]     DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Reason]        NVARCHAR(50)     NULL,
+      [Notes]         NVARCHAR(500)    NULL,
+      [SourceTransferLineId] UNIQUEIDENTIFIER NULL,
+      [SourcePortioningId]   UNIQUEIDENTIFIER NULL,
+      [Status]        NVARCHAR(20)     NOT NULL DEFAULT 'posted',
+      [CreatedBy]     NVARCHAR(100)    NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosWriteOff] OK');
+
   // ── [dbo].[CustPostingGroupMap] ─────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='CustPostingGroupMap' AND schema_id=SCHEMA_ID('dbo'))
@@ -398,6 +1040,7 @@ async function migrate(companyId) {
     ['CustomerSpec',  'NVARCHAR(200) NULL'],
     ['Barcode',       'NVARCHAR(100) NULL'],
     ['UpdatedAt',     'DATETIME2     NOT NULL DEFAULT GETUTCDATE()'],
+    ['Part',          'NVARCHAR(50)  NULL'],
   ]) {
     await run(`
       IF NOT EXISTS (SELECT * FROM sys.columns
@@ -405,7 +1048,27 @@ async function migrate(companyId) {
         ALTER TABLE [${s}].[SalesLine] ADD [${col}] ${def}
     `);
   }
+  await run(`
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SalesLine_OrderNo_Part'
+                   AND object_id=OBJECT_ID('[${s}].[SalesLine]'))
+      CREATE INDEX [IX_SalesLine_OrderNo_Part] ON [${s}].[SalesLine]([OrderNo],[Part])
+  `);
   console.log(`  [${s}].[SalesLine] OK`);
+
+  // ── [s].[OrderPartConfirmation] ───────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='OrderPartConfirmation' AND schema_id=SCHEMA_ID('${s}'))
+    CREATE TABLE [${s}].[OrderPartConfirmation] (
+      [OrderNo]         NVARCHAR(30) NOT NULL,
+      [Part]            NVARCHAR(50) NOT NULL,
+      [ConfirmedAt]     DATETIME2    NOT NULL DEFAULT GETUTCDATE(),
+      [ConfirmedBy]     NVARCHAR(100) NOT NULL,
+      [ConfirmedByName] NVARCHAR(200) NULL,
+      [Notes]           NVARCHAR(500) NULL,
+      CONSTRAINT [PK_OrderPartConfirmation_${s}] PRIMARY KEY ([OrderNo],[Part])
+    )
+  `);
+  console.log(`  [${s}].[OrderPartConfirmation] OK`);
 
   // ── [s].[InvoiceHeader] ───────────────────────────────────────────────────
   await run(`
@@ -473,6 +1136,7 @@ async function migrate(companyId) {
     ['CompanyEmail',   'NVARCHAR(200) NULL'],
     ['CompanyVatReg',  'NVARCHAR(50)  NULL'],
     ['NoPrinted',      'INT           NULL'],
+    ['Barcode',        'NVARCHAR(60)  NULL'],
   ]) {
     await run(`
       IF NOT EXISTS (SELECT * FROM sys.columns

@@ -1,0 +1,30 @@
+  duration_ms: 0.083
+  type: 'test'
+  ...
+# Subtest: Admin: GET /pos/setup/cashier-shops returns array
+ok 17 - Admin: GET /pos/setup/cashier-shops returns array # SKIP admin not logged in
+  ---
+  duration_ms: 0.0859
+  type: 'test'
+  ...
+# Subtest: Shape: shops carry the multi-company customer columns
+ok 18 - Shape: shops carry the multi-company customer columns # SKIP admin not logged in
+  ---
+  duration_ms: 0.1213
+  type: 'test'
+  ...
+# Subtest: Shape: items expose VatPercent and SourceCompany
+ok 19 - Shape: items expose VatPercent and SourceCompany # SKIP admin not logged in
+  ---
+  duration_ms: 0.1091
+  type: 'test'
+  ...
+1..19
+# tests 19
+# suites 0
+# pass 0
+# fail 4
+# cancelled 0
+# skipped 15
+# todo 0
+# duration_ms 211.7745

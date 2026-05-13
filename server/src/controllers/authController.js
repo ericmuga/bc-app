@@ -43,8 +43,12 @@ export async function login(req, res) {
     const pool = await db.getPool();
     const req1 = pool.request();
     req1.input('Username', sql.NVarChar(100), username);
+    // Optional columns are wrapped in CASE/COL_LENGTH guards so a deployment that
+    // hasn't migrated yet still authenticates instead of returning a generic 500.
     const result = await req1.query(`
-      SELECT UserId, Username, PasswordHash, DisplayName, Email, Role, IsActive, AuthProvider, ReceiveScheduledReports
+      SELECT UserId, Username, PasswordHash, DisplayName, Email, Role, IsActive, AuthProvider,
+             CASE WHEN COL_LENGTH('dbo.Users', 'ReceiveScheduledReports') IS NULL THEN 0
+                  ELSE ISNULL(ReceiveScheduledReports, 0) END AS ReceiveScheduledReports
       FROM   [dbo].[Users]
       WHERE  Username = @Username AND IsActive = 1
     `);
@@ -60,6 +64,9 @@ export async function login(req, res) {
       });
     }
 
+    if (!user.PasswordHash) {
+      return res.status(401).json({ error: 'Account has no password — sign in with AD instead.' });
+    }
     if (!(await bcrypt.compare(password, user.PasswordHash))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -67,8 +74,15 @@ export async function login(req, res) {
     logger.info('Local login', { username, userId: user.UserId });
     return res.json({ token: issueToken(user), user: userShape(user) });
   } catch (err) {
-    logger.error('Login error', { error: err.message });
-    return res.status(500).json({ error: 'Login failed' });
+    logger.error('Login error', {
+      error:    err.message,
+      sqlCode:  err.code || err.number,
+      stack:    err.stack,
+    });
+    return res.status(500).json({
+      error:   `Login failed: ${err.message}`,
+      sqlCode: err.code || err.number || null,
+    });
   }
 }
 
@@ -172,7 +186,7 @@ export async function createUser(req, res) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin role required' });
   }
-  const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST];
+  const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN];
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
   }

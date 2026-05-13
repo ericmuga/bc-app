@@ -70,6 +70,7 @@ function mapUser(row) {
     displayName: row.DisplayName,
     email: row.Email,
     role: row.Role,
+    shopCode: row.ShopCode ?? null,
     isActive: Boolean(row.IsActive),
     receiveScheduledReports: Boolean(row.ReceiveScheduledReports),
     authProvider: row.AuthProvider,
@@ -117,6 +118,10 @@ export async function listUsers() {
         WHEN COL_LENGTH('dbo.Users', 'ReceiveScheduledReports') IS NULL THEN CAST(0 AS bit)
         ELSE ReceiveScheduledReports
       END AS ReceiveScheduledReports,
+      CASE
+        WHEN COL_LENGTH('dbo.Users', 'ShopCode') IS NULL THEN NULL
+        ELSE ShopCode
+      END AS ShopCode,
       AuthProvider,
       CreatedAt,
       UpdatedAt
@@ -169,6 +174,7 @@ export async function updateUser(userId, payload) {
   req.input('Role', sql.NVarChar(20), payload.role);
   req.input('IsActive', sql.Bit, payload.isActive ? 1 : 0);
   req.input('ReceiveScheduledReports', sql.Bit, payload.receiveScheduledReports ? 1 : 0);
+  req.input('ShopCode', sql.NVarChar(50), payload.shopCode?.trim().toUpperCase() || null);
   await req.query(`
     IF COL_LENGTH('dbo.Users', 'ReceiveScheduledReports') IS NULL
     BEGIN
@@ -188,6 +194,7 @@ export async function updateUser(userId, payload) {
           Role = @Role,
           IsActive = @IsActive,
           ReceiveScheduledReports = @ReceiveScheduledReports,
+          ShopCode = CASE WHEN COL_LENGTH('dbo.Users','ShopCode') IS NULL THEN NULL ELSE @ShopCode END,
           UpdatedAt = GETUTCDATE()
       WHERE UserId = @UserId
     END

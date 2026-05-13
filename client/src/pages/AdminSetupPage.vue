@@ -13,7 +13,8 @@
     <div class="admin-sections">
 
       <!-- ── Users ──────────────────────────────────────────────────────── -->
-      <details class="admin-accordion" open>
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('users', loadUsersData, $event)">
         <summary>
           <i class="pi pi-users acc-icon" />
           <span>Users</span>
@@ -34,6 +35,13 @@
                 <Select v-model="data.role" :options="roleOptions" option-label="label" option-value="value" fluid />
               </template>
             </Column>
+            <Column field="shopCode" header="Shop" style="min-width:120px">
+              <template #body="{ data }">
+                <Select v-model="data.shopCode" :options="posShopOptions" option-label="label" option-value="value"
+                  placeholder="— none —" show-clear fluid
+                  :disabled="!['shop','admin'].includes(data.role)" />
+              </template>
+            </Column>
             <Column header="Active" style="width:90px">
               <template #body="{ data }"><Checkbox v-model="data.isActive" binary /></template>
             </Column>
@@ -45,7 +53,8 @@
       </details>
 
       <!-- ── SMTP Setup ──────────────────────────────────────────────────── -->
-      <details class="admin-accordion">
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('smtp', loadSmtpData, $event)">
         <summary>
           <i class="pi pi-envelope acc-icon" />
           <span>SMTP Setup</span>
@@ -70,7 +79,8 @@
       </details>
 
       <!-- ── Scheduled Sales Reports ────────────────────────────────────── -->
-      <details class="admin-accordion">
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('schedules', () => Promise.all([loadSchedulesData(), loadOnce('users', loadUsersData)]), $event)">
         <summary>
           <i class="pi pi-calendar-clock acc-icon" />
           <span>Scheduled Sales Reports</span>
@@ -136,7 +146,8 @@
       </details>
 
       <!-- ── Management Account Builder ────────────────────────────────────── -->
-      <details class="admin-accordion" open>
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('templates', loadTemplates, $event)">
         <summary>
           <i class="pi pi-table acc-icon" />
           <span>Management Account Builder</span>
@@ -426,7 +437,8 @@ GROUP BY [G_L Account No_]</pre>
       </details>
 
       <!-- ── Customer Posting Group Mapper ────────────────────────────────── -->
-      <details class="admin-accordion">
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('custPg', loadCustPgMappings, $event)">
         <summary>
           <i class="pi pi-users acc-icon" />
           <span>Customer Posting Group Mapper</span>
@@ -474,12 +486,689 @@ GROUP BY [G_L Account No_]</pre>
         </div>
       </details>
 
+      <!-- ── POS Setup ───────────────────────────────────────────────────────── -->
+      <details class="admin-accordion"
+               @toggle="onAccordionToggle('posSetup', loadPosSetup, $event)">
+        <summary>
+          <i class="pi pi-shopping-cart acc-icon" />
+          <span>POS Setup</span>
+          <span class="acc-count">{{ posItems.length }} item(s)</span>
+        </summary>
+        <div class="accordion-body">
+
+          <!-- Master sync banner -->
+          <div class="sync-bar">
+            <div class="sync-info">
+              <i class="pi pi-cloud-download" />
+              <div>
+                <div class="sync-title">Sync master records from Business Central</div>
+                <div class="sync-sub">Refreshes payment methods (M-PESA endpoint, balance accounts) and item prices/eTIMS codes for all PosItems already in the catalogue.</div>
+              </div>
+            </div>
+            <Button label="Sync everything from BC" icon="pi pi-sync" severity="info"
+                    :loading="syncingFromBc" @click="syncFromBc" />
+          </div>
+
+          <!-- Per-step buttons so admins can run individual stages on demand -->
+          <div class="sync-steps">
+            <Button v-for="step in syncSteps" :key="step.kind"
+                    :label="step.label" :icon="step.icon" size="small" severity="secondary"
+                    :loading="syncingStep === step.kind"
+                    :disabled="!!syncingStep && syncingStep !== step.kind"
+                    @click="syncStep(step.kind)" />
+          </div>
+
+          <Message v-if="syncResult" :severity="syncResult.errors?.length ? 'warn' : 'success'" :closable="true" class="mb-3">
+            <span v-if="syncResult.kind">
+              Step <strong>{{ syncResult.kind }}</strong>: {{ syncResult.count }} record(s) synced.
+            </span>
+            <span v-else>
+              Synced {{ syncResult.paymentTypes }} payment type(s) and refreshed {{ syncResult.items }} item(s).
+            </span>
+            <span v-if="syncResult.errors?.length"> Errors: {{ syncResult.errors.join('; ') }}</span>
+          </Message>
+
+          <!-- Print configuration -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-print" /> Print Configuration (per shop)</summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Print Configuration — {{ printShopLabel }}</h4>
+              <Button label="Refresh printers" icon="pi pi-refresh" text size="small" @click="loadPrinters" :loading="loadingPrinters" />
+            </div>
+            <div class="cf-field" style="max-width:260px;margin-bottom:8px">
+              <label>Shop</label>
+              <Select v-model="printShop" :options="printShopOpts" option-label="label" option-value="value"
+                @change="loadPrintCfg" />
+            </div>
+            <p class="text-muted text-sm">Choose A4 or thermal format and pick which printer the POS should send invoices to for this shop.</p>
+            <div class="builder-form" style="max-width:680px">
+              <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr;gap:8px;align-items:end">
+                <div class="cf-field">
+                  <label>Format</label>
+                  <Select v-model="printCfg.format" :options="formatOpts" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="cf-field">
+                  <label>Invoice Printer</label>
+                  <Select v-model="printCfg.invoicePrinter" :options="installedPrinters" editable fluid placeholder="Pick or type printer name" />
+                </div>
+                <div class="cf-field">
+                  <label>Thermal Width (mm)</label>
+                  <InputNumber v-model="printCfg.thermalWidthMm" :min="48" :max="120" show-buttons fluid />
+                </div>
+                <div class="cf-field">
+                  <label>Copies</label>
+                  <InputNumber v-model="printCfg.copies" :min="1" :max="5" show-buttons fluid />
+                </div>
+              </div>
+              <div class="schedule-actions" style="margin-top:8px">
+                <Button label="Save Print Config" icon="pi pi-save" size="small" @click="savePrintCfg" :loading="savingPrintCfg" />
+                <span v-if="installedPrinters.length" class="text-muted text-sm" style="margin-left:8px">
+                  {{ installedPrinters.length }} printer(s) detected on this server.
+                </span>
+              </div>
+            </div>
+          </div>
+          </details>
+
+          <!-- Inventory display on the POS terminal item cards -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-inbox" /> Inventory display</summary>
+            <div class="pos-setup-section">
+              <h4>POS Terminal — item card inventory</h4>
+              <p class="text-muted text-sm">
+                Item cards on the POS terminal show the on-hand stock at the shop's location ("Remaining: N UoM").
+                Toggle below to also auto-hide items with zero or negative stock so cashiers don't try to sell what isn't there.
+              </p>
+              <div class="builder-checks" style="margin-top:8px">
+                <Checkbox v-model="invCfg.hideOutOfStock" binary input-id="inv-hide" />
+                <label for="inv-hide">Auto-hide items that are out of stock</label>
+              </div>
+              <div class="schedule-actions" style="margin-top:8px">
+                <Button label="Save Inventory Config" icon="pi pi-save" size="small"
+                        :loading="savingInvCfg" @click="saveInvCfg" />
+              </div>
+            </div>
+          </details>
+
+          <!-- Third Parties (HQ → these recipients during transfers) -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-truck" /> Third Parties <span class="acc-count-sm">{{ thirdParties.length }}</span></summary>
+            <div class="pos-setup-section">
+              <p class="text-muted text-sm">Recipients of HQ stock transfers (butchers, depots, processors). Optionally link a third party to a shop where its stock + portioning are tracked.</p>
+              <div v-if="editingTp" class="builder-form" style="max-width:740px">
+                <div style="display:grid;grid-template-columns:1fr 2fr 1fr 80px;gap:8px;align-items:end">
+                  <div class="cf-field"><label>Code</label><InputText v-model="tpForm.code" placeholder="TP001" /></div>
+                  <div class="cf-field"><label>Name</label><InputText v-model="tpForm.name" placeholder="Third party name" /></div>
+                  <div class="cf-field"><label>Linked Shop</label>
+                    <Select v-model="tpForm.shopCode" :options="posShops" option-label="Name" option-value="Code"
+                      placeholder="(optional)" show-clear />
+                  </div>
+                  <div class="builder-checks">
+                    <Checkbox v-model="tpForm.isActive" binary input-id="tp-active" />
+                    <label for="tp-active">Active</label>
+                  </div>
+                </div>
+                <InputText v-model="tpForm.notes" placeholder="Notes (optional)" style="margin-top:8px" fluid />
+                <div class="schedule-actions" style="margin-top:6px">
+                  <Button label="Save" icon="pi pi-save" size="small" @click="saveTp" :loading="savingTp" />
+                  <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingTp=false" />
+                </div>
+              </div>
+              <div class="builder-panel-head" style="margin-top:6px">
+                <span class="text-muted text-sm">{{ thirdParties.length }} third party(ies)</span>
+                <Button icon="pi pi-plus" text size="small" v-tooltip="'New third party'" @click="newTp" />
+              </div>
+              <DataTable :value="thirdParties" dataKey="ThirdPartyId" size="small" responsive-layout="scroll">
+                <Column field="Code"     header="Code"   style="width:100px" />
+                <Column field="Name"     header="Name"   style="min-width:180px" />
+                <Column field="ShopCode" header="Linked Shop" style="width:130px">
+                  <template #body="{ data }">{{ data.ShopCode || '—' }}</template>
+                </Column>
+                <Column field="Notes"    header="Notes"  style="min-width:160px" />
+                <Column header="Active" style="width:65px">
+                  <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+                </Column>
+                <Column header="" style="width:80px">
+                  <template #body="{ data }">
+                    <div class="row-actions">
+                      <Button icon="pi pi-pencil" text size="small" @click="editTp(data)" />
+                      <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deleteTp(data)" />
+                    </div>
+                  </template>
+                </Column>
+              </DataTable>
+            </div>
+          </details>
+
+          <!-- eTIMS Integration -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-shield" /> eTIMS / KRA Integration (per shop)</summary>
+            <div class="pos-setup-section">
+              <div class="cf-field" style="max-width:260px;margin-bottom:8px">
+                <label>Shop</label>
+                <Select v-model="etimsShop" :options="etimsShopOpts" option-label="label" option-value="value"
+                  @change="loadEtimsCfg" />
+              </div>
+              <p class="text-muted text-sm">Per-shop eTIMS endpoints and credentials. Each shop terminal uses its own gateway — admin can copy defaults from BC.</p>
+              <div class="builder-form" style="max-width:780px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                  <div class="cf-field">
+                    <label>Invoice URL</label>
+                    <InputText v-model="etimsCfg.invoiceUrl" placeholder="https://etims.../api/invoice" />
+                  </div>
+                  <div class="cf-field">
+                    <label>Next Invoice Number URL</label>
+                    <InputText v-model="etimsCfg.invoiceNumUrl" placeholder="https://etims.../api/invoice/next" />
+                  </div>
+                  <div class="cf-field">
+                    <label>Credit Note URL</label>
+                    <InputText v-model="etimsCfg.creditNoteUrl" placeholder="https://etims.../api/credit-note" />
+                  </div>
+                  <div class="cf-field">
+                    <label>QR Code Service URL</label>
+                    <InputText v-model="etimsCfg.qrServiceUrl" placeholder="(optional) QR microservice" />
+                  </div>
+                  <div class="cf-field">
+                    <label>API Key</label>
+                    <InputText v-model="etimsCfg.apiKey" type="password" placeholder="X-API-Key header value" />
+                  </div>
+                  <div class="cf-field">
+                    <label>Payment Service (M-PESA lookup)</label>
+                    <InputText v-model="etimsCfg.paymentService" placeholder="(optional) gateway lookup URL" />
+                  </div>
+                  <div class="cf-field">
+                    <label>Branch ID</label>
+                    <InputText v-model="etimsCfg.branchId" placeholder="00" />
+                  </div>
+                  <div class="cf-field">
+                    <label>Company KRA PIN</label>
+                    <InputText v-model="etimsCfg.companyPin" placeholder="P051234567X" />
+                  </div>
+                </div>
+                <div class="schedule-actions" style="margin-top:8px">
+                  <Button label="Save eTIMS Config" icon="pi pi-save" size="small" @click="saveEtimsCfg" :loading="savingEtimsCfg" />
+                  <Button label="Load defaults from BC" icon="pi pi-cloud-download" text size="small" @click="loadEtimsBcDefaults" :loading="loadingEtimsBc" />
+                </div>
+                <Message v-if="etimsBcResult" :severity="etimsBcResult.ok ? 'success' : 'warn'" class="mb-3" style="margin-top:6px" :closable="true">
+                  {{ etimsBcResult.message }}
+                </Message>
+              </div>
+            </div>
+          </details>
+
+          <!-- Shops -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-shopping-bag" /> Shops / Terminals <span class="acc-count-sm">{{ posShops.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Shops / Terminals</h4>
+              <Button icon="pi pi-plus" text size="small" v-tooltip="'New shop'" @click="newPosShop" />
+            </div>
+            <p class="text-muted text-sm">Each shop is a distinct terminal. Assign a Shop Code to users to restrict their POS access to that shop only.</p>
+            <div v-if="editingPosShop" class="builder-form" style="max-width:700px">
+              <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 80px 80px;gap:8px;align-items:center">
+                <InputText v-model="posShopForm.code"            placeholder="Code (e.g. SHOP1)" />
+                <InputText v-model="posShopForm.name"            placeholder="Display name" />
+                <InputText v-model="posShopForm.locationCode"    placeholder="BC Location" />
+                <InputText v-model="posShopForm.salespersonCode" placeholder="Salesperson code" />
+                <InputNumber v-model="posShopForm.sortOrder"     :min="0" show-buttons fluid placeholder="Sort" />
+                <div class="builder-checks">
+                  <Checkbox v-model="posShopForm.isActive" binary input-id="pos-shop-active" />
+                  <label for="pos-shop-active">Active</label>
+                </div>
+              </div>
+              <div class="schedule-actions" style="margin-top:6px">
+                <Button label="Save" icon="pi pi-save" size="small" @click="savePosShop" :loading="savingPosShop" />
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosShop=false" />
+              </div>
+            </div>
+            <DataTable :value="posShops" dataKey="ShopId" size="small">
+              <Column field="Code"            header="Code"        style="width:100px" />
+              <Column field="Name"            header="Name"        style="min-width:160px" />
+              <Column field="LocationCode"    header="Location"    style="width:100px" />
+              <Column field="SalespersonCode" header="Salesperson" style="width:110px" />
+              <Column field="SortOrder"       header="Sort"        style="width:55px" />
+              <Column header="Active" style="width:70px">
+                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              </Column>
+              <Column header="" style="width:80px">
+                <template #body="{ data }">
+                  <div class="row-actions">
+                    <Button icon="pi pi-pencil" text size="small" @click="editPosShop(data)" />
+                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deletePosShop(data)" />
+                  </div>
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          </details>
+
+          <!-- Categories -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-tags" /> Item Categories <span class="acc-count-sm">{{ posCategories.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Item Categories</h4>
+              <Button icon="pi pi-plus" text size="small" v-tooltip="'New category'" @click="newPosCategory" />
+            </div>
+            <div v-if="editingPosCategory" class="builder-form" style="max-width:540px">
+              <div style="display:grid;grid-template-columns:1fr 1fr 80px 80px;gap:8px;align-items:center">
+                <InputText v-model="posCatForm.code" placeholder="Code (e.g. SNACKS)" />
+                <InputText v-model="posCatForm.name" placeholder="Display name" />
+                <InputNumber v-model="posCatForm.sortOrder" :min="0" show-buttons fluid placeholder="Sort" />
+                <div class="builder-checks">
+                  <Checkbox v-model="posCatForm.isActive" binary input-id="pos-cat-active" />
+                  <label for="pos-cat-active">Active</label>
+                </div>
+              </div>
+              <div class="schedule-actions" style="margin-top:6px">
+                <Button label="Save" icon="pi pi-save" size="small" @click="savePosCategory" :loading="savingPosCat" />
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosCategory=false" />
+              </div>
+            </div>
+            <DataTable :value="posCategories" dataKey="CategoryId" size="small">
+              <Column field="Code" header="Code" style="width:110px" />
+              <Column field="Name" header="Name" style="min-width:140px" />
+              <Column field="SortOrder" header="Sort" style="width:60px" />
+              <Column header="Active" style="width:70px">
+                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              </Column>
+              <Column header="" style="width:80px">
+                <template #body="{ data }">
+                  <div class="row-actions">
+                    <Button icon="pi pi-pencil" text size="small" @click="editPosCategory(data)" />
+                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deletePosCategory(data)" />
+                  </div>
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          </details>
+
+          <!-- Items -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-box" /> POS Items <span class="acc-count-sm">{{ posItems.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>POS Items</h4>
+              <div style="display:flex;gap:6px">
+                <Button label="Import from BC" icon="pi pi-download" text size="small" @click="showBcPicker=true" />
+                <Button icon="pi pi-plus" text size="small" v-tooltip="'New item'" @click="newPosItem" />
+              </div>
+            </div>
+            <div v-if="editingPosItem" class="builder-form" style="max-width:680px">
+              <div style="display:grid;grid-template-columns:1fr 2fr 1fr;gap:8px">
+                <InputText v-model="posItemForm.itemNo"      placeholder="Item No" />
+                <InputText v-model="posItemForm.description" placeholder="Description" />
+                <InputNumber v-model="posItemForm.unitPrice" :minFractionDigits="2" :maxFractionDigits="4" mode="decimal" fluid placeholder="Price" />
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 80px 80px;gap:8px;margin-top:6px;align-items:center">
+                <Select v-model="posItemForm.categoryCode" :options="posCategories" option-label="Name" option-value="Code"
+                  placeholder="Category" show-clear />
+                <InputText v-model="posItemForm.barcode" placeholder="Barcode (optional)" />
+                <InputNumber v-model="posItemForm.sortOrder" :min="0" show-buttons fluid placeholder="Sort" />
+                <div class="builder-checks">
+                  <Checkbox v-model="posItemForm.isActive" binary input-id="pos-item-active" />
+                  <label for="pos-item-active">Active</label>
+                </div>
+              </div>
+              <div class="schedule-actions" style="margin-top:6px">
+                <Button label="Save" icon="pi pi-save" size="small" @click="savePosItem" :loading="savingPosItem" />
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosItem=false" />
+              </div>
+            </div>
+            <DataTable :value="posItems" dataKey="ItemId" size="small" responsive-layout="scroll">
+              <Column field="ItemNo"      header="No"          style="width:90px" />
+              <Column field="Description" header="Description" style="min-width:180px" />
+              <Column field="CategoryCode" header="Category"   style="width:110px" />
+              <Column field="UnitPrice"   header="Price"       style="width:100px;text-align:right">
+                <template #body="{ data }">{{ Number(data.UnitPrice||0).toFixed(2) }}</template>
+              </Column>
+              <Column field="SortOrder"   header="Sort"        style="width:55px" />
+              <Column header="Active" style="width:70px">
+                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              </Column>
+              <Column header="" style="width:80px">
+                <template #body="{ data }">
+                  <div class="row-actions">
+                    <Button icon="pi pi-pencil" text size="small" @click="editPosItem(data)" />
+                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deletePosItem(data)" />
+                  </div>
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          </details>
+
+          <!-- Special Prices (date-bound offers) -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-percentage" /> Special Prices (Offers) <span class="acc-count-sm">{{ specialPrices.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Special Prices (Offers)</h4>
+              <div style="display:flex;gap:6px">
+                <Button icon="pi pi-plus"      text size="small" v-tooltip="'New offer'"       @click="newSpecialPrice" />
+                <Button icon="pi pi-upload"    text size="small" v-tooltip="'Import from CSV'" @click="openSpImport" />
+                <Button icon="pi pi-download"  text size="small" v-tooltip="'Export current list to CSV'"
+                        :loading="exportingSp" @click="exportSp" />
+                <Button icon="pi pi-file"      text size="small" v-tooltip="'Download CSV template'"
+                        @click="downloadSpTemplate" />
+              </div>
+            </div>
+            <p class="text-muted text-sm">
+              Date-bound price overrides. Leave Shop blank to apply to all shops.
+              CSV columns: <strong>ItemNo, ShopCode, UnitPrice, StartingDate, EndingDate, Description, IsActive</strong>.
+              Identity (ItemNo + ShopCode + StartingDate) is upserted on import — same key BC uses, so a round-trip stays consistent.
+            </p>
+            <div v-if="editingSpecial" class="builder-form" style="max-width:780px">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 80px;gap:8px;align-items:center">
+                <InputText v-model="specialForm.itemNo" placeholder="Item No" />
+                <Select v-model="specialForm.shopCode" :options="posShops" option-label="Name" option-value="Code"
+                  placeholder="Shop (blank = all)" show-clear />
+                <InputNumber v-model="specialForm.unitPrice" :minFractionDigits="2" mode="decimal" placeholder="Price" />
+                <DatePicker v-model="specialForm.startingDate" date-format="yy-mm-dd" placeholder="Starts" />
+                <DatePicker v-model="specialForm.endingDate"   date-format="yy-mm-dd" placeholder="Ends (optional)" show-clear />
+                <div class="builder-checks">
+                  <Checkbox v-model="specialForm.isActive" binary input-id="sp-active" />
+                  <label for="sp-active">Active</label>
+                </div>
+              </div>
+              <InputText v-model="specialForm.description" placeholder="Description / promo name" style="margin-top:6px" fluid />
+              <div class="schedule-actions" style="margin-top:6px">
+                <Button label="Save" icon="pi pi-save" size="small" @click="saveSpecialPrice" :loading="savingSpecial" />
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingSpecial=false" />
+              </div>
+            </div>
+            <DataTable :value="specialPrices" dataKey="SpecialPriceId" size="small">
+              <Column field="ItemNo"          header="Item No"     style="width:100px" />
+              <Column field="ItemDescription" header="Description" style="min-width:160px" />
+              <Column field="ShopCode"        header="Shop"        style="width:90px">
+                <template #body="{ data }">{{ data.ShopCode || 'All' }}</template>
+              </Column>
+              <Column field="UnitPrice"       header="Price"       style="width:90px;text-align:right">
+                <template #body="{ data }">{{ Number(data.UnitPrice||0).toFixed(2) }}</template>
+              </Column>
+              <Column field="StartingDate"    header="Starts"      style="width:100px">
+                <template #body="{ data }">{{ data.StartingDate ? new Date(data.StartingDate).toLocaleDateString('en-KE') : '' }}</template>
+              </Column>
+              <Column field="EndingDate"      header="Ends"        style="width:100px">
+                <template #body="{ data }">{{ data.EndingDate ? new Date(data.EndingDate).toLocaleDateString('en-KE') : '—' }}</template>
+              </Column>
+              <Column field="Description"     header="Promo"       style="min-width:140px" />
+              <Column header="Active" style="width:65px">
+                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              </Column>
+              <Column header="" style="width:80px">
+                <template #body="{ data }">
+                  <div class="row-actions">
+                    <Button icon="pi pi-pencil" text size="small" @click="editSpecialPrice(data)" />
+                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deleteSpecialPrice(data)" />
+                  </div>
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          </details>
+
+          <!-- Payment Types -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-credit-card" /> Payment Methods <span class="acc-count-sm">{{ posPaymentTypes.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Payment Methods</h4>
+              <Button icon="pi pi-plus" text size="small" v-tooltip="'New payment method'" @click="newPosPayType" />
+            </div>
+            <div v-if="editingPosPayType" class="builder-form" style="max-width:700px">
+              <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 80px 80px;gap:8px;align-items:center">
+                <InputText v-model="posPayTypeForm.code" placeholder="Code (e.g. MPESA)" />
+                <InputText v-model="posPayTypeForm.name" placeholder="Display name" />
+                <Select v-model="posPayTypeForm.shopCode" :options="posShops" option-label="Name" option-value="Code"
+                  placeholder="Shop (blank = all)" show-clear />
+                <Select v-model="posPayTypeForm.paymentClass" :options="paymentClasses" placeholder="Class" />
+                <InputNumber v-model="posPayTypeForm.sortOrder" :min="0" show-buttons fluid placeholder="Sort" />
+                <div class="builder-checks">
+                  <Checkbox v-model="posPayTypeForm.isActive" binary input-id="pos-pt-active" />
+                  <label for="pos-pt-active">Active</label>
+                </div>
+              </div>
+              <Textarea v-model="posPayTypeForm.description" :rows="2" placeholder="Description / instructions shown to cashier (optional)" style="margin-top:6px;width:100%" />
+
+              <!-- ── Integration (STK push + payment fetch) ─────────────────── -->
+              <details class="integration-block" :open="posPayTypeForm.paymentClass === 'Mobile' || posPayTypeForm.useApiEndpoint">
+                <summary><i class="pi pi-link" /> Integration — STK push &amp; payment fetch</summary>
+                <p class="text-muted text-sm" style="margin:6px 0 10px">
+                  Fill in M-PESA Daraja credentials below to enable direct STK push from this app.
+                  Or use a custom proxy by setting <em>API endpoint</em> (legacy mode).
+                </p>
+
+                <div class="builder-checks" style="margin-bottom:8px">
+                  <Checkbox v-model="posPayTypeForm.useApiEndpoint" binary input-id="pt-use-api" />
+                  <label for="pt-use-api">Enable STK push / external integration for this method</label>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                  <div>
+                    <label class="ig-label">API base URL</label>
+                    <InputText v-model="posPayTypeForm.apiEndpoint" placeholder="https://api.safaricom.co.ke" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">API key (custom proxy / x-api-key)</label>
+                    <InputText v-model="posPayTypeForm.apiKey" placeholder="optional" fluid />
+                  </div>
+                </div>
+
+                <h5 style="margin:12px 0 4px">M-PESA Daraja credentials</h5>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                  <div>
+                    <label class="ig-label">Consumer key</label>
+                    <InputText v-model="posPayTypeForm.consumerKey" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">Consumer secret</label>
+                    <InputText v-model="posPayTypeForm.consumerSecret" type="password" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">Short code (PayBill / Till)</label>
+                    <InputText v-model="posPayTypeForm.shortCode" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">Passkey</label>
+                    <InputText v-model="posPayTypeForm.passkey" type="password" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">Transaction type</label>
+                    <Select v-model="posPayTypeForm.transactionType"
+                      :options="['CustomerPayBillOnline','CustomerBuyGoodsOnline']" placeholder="Type" fluid />
+                  </div>
+                  <div>
+                    <label class="ig-label">Account reference template</label>
+                    <InputText v-model="posPayTypeForm.accountReference" placeholder="defaults to order no" fluid />
+                  </div>
+                  <div style="grid-column:1/3">
+                    <label class="ig-label">Callback URL (for STK result)</label>
+                    <InputText v-model="posPayTypeForm.callbackUrl"
+                      placeholder="https://nav.farmerschoice.co.ke:8088/api/pos/payments/mpesa-callback" fluid />
+                  </div>
+                </div>
+
+                <h5 style="margin:12px 0 4px">Payment fetch</h5>
+                <div>
+                  <label class="ig-label">Payment fetch URL</label>
+                  <InputText v-model="posPayTypeForm.paymentFetchUrl"
+                    placeholder="http://172.16.10.5:8084/api/fetch-payments" fluid />
+                  <p class="text-muted text-sm" style="margin-top:4px">
+                    The app will poll this URL to reconcile mobile payments against open orders.
+                    Expects JSON with a <code>payments</code> array (or a top-level array).
+                  </p>
+                </div>
+              </details>
+
+              <div class="schedule-actions" style="margin-top:10px">
+                <Button label="Save" icon="pi pi-save" size="small" @click="savePosPayType" :loading="savingPosPayType" />
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosPayType=false" />
+              </div>
+            </div>
+            <DataTable :value="posPaymentTypes" dataKey="TypeId" size="small">
+              <Column field="Code"         header="Code"  style="width:100px" />
+              <Column field="Name"         header="Name"  style="min-width:160px" />
+              <Column field="ShopCode"     header="Shop"  style="width:90px" />
+              <Column field="PaymentClass" header="Class" style="width:110px" />
+              <Column field="SortOrder"    header="Sort"  style="width:55px" />
+              <Column header="Active" style="width:70px">
+                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              </Column>
+              <Column header="" style="width:80px">
+                <template #body="{ data }">
+                  <div class="row-actions">
+                    <Button icon="pi pi-pencil" text size="small" @click="editPosPayType(data)" />
+                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deletePosPayType(data)" />
+                  </div>
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          </details>
+
+          <!-- Contacts -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-users" /> Walk-in Contacts <span class="acc-count-sm">{{ posContacts.length }}</span></summary>
+          <div class="pos-setup-section">
+            <div class="builder-panel-head">
+              <h4>Walk-in Contacts</h4>
+              <Button label="Import from BC" icon="pi pi-download" text size="small" @click="showContactPicker=true" />
+            </div>
+            <p class="text-muted text-sm">Contacts imported from BC filtered by each shop's salesperson code. Used for promotions tracking at the POS terminal. Grouped by salesperson (SP) code — click a group to expand its members.</p>
+
+            <div v-if="!posContacts.length" class="text-muted text-sm" style="padding:8px 0">
+              No walk-in contacts imported yet — click "Import from BC" above.
+            </div>
+            <details v-for="grp in walkInGroups" :key="grp.spCode || '__no_sp__'" class="walkin-group">
+              <summary>
+                <i class="pi pi-id-card" />
+                <span class="walkin-group-name">SP {{ grp.spCode || '(unassigned)' }}</span>
+                <span class="acc-count-sm">{{ grp.contacts.length }} contact{{ grp.contacts.length === 1 ? '' : 's' }}</span>
+              </summary>
+              <DataTable :value="grp.contacts" dataKey="ContactId" size="small" responsive-layout="scroll">
+                <Column field="BcContactNo"     header="Contact No" style="width:110px" />
+                <Column field="Name"            header="Name"       style="min-width:180px" />
+                <Column field="MobileNo"        header="Mobile"     style="width:120px" />
+                <Column field="KraPin"          header="KRA PIN"    style="width:110px" />
+                <Column field="ShopCode"        header="Shop"       style="width:90px" />
+                <Column field="SalespersonCode" header="SP Code"    style="width:90px" />
+                <Column header="" style="width:60px">
+                  <template #body="{ data }">
+                    <Button icon="pi pi-trash" text severity="danger" size="small"
+                            v-tooltip.left="'Delete this walk-in contact'"
+                            @click="deleteWalkIn(data)" />
+                  </template>
+                </Column>
+              </DataTable>
+            </details>
+          </div>
+          </details>
+
+        </div>
+      </details>
+
     </div>
   </div>
+
+  <!-- BC Contact picker dialog -->
+  <Dialog v-model:visible="showContactPicker" header="Import Walk-in Contacts from BC" :modal="true" :style="{ width: '680px' }">
+    <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <Select v-model="contactShopFilter" :options="posShops" option-label="Name" option-value="Code"
+        placeholder="Filter by shop" show-clear style="min-width:160px" />
+      <span class="text-muted text-sm">{{ bcContacts.length }} contacts found.</span>
+      <Button v-if="loadingBcContacts" label="Loading…" :loading="true" text size="small" />
+    </div>
+    <DataTable :value="bcContacts" v-model:selection="bcContactsSelected" dataKey="contactNo" size="small"
+      responsive-layout="scroll" :scrollable="true" scrollHeight="340px">
+      <Column selectionMode="multiple" style="width:40px" />
+      <Column field="contactNo"  header="No"     style="width:90px" />
+      <Column field="name"       header="Name"   style="min-width:180px" />
+      <Column field="mobileNo"   header="Mobile" style="width:120px" />
+      <Column field="kraPin"     header="KRA PIN" style="width:110px" />
+      <Column field="routeCode"  header="Route"   style="width:90px" />
+      <Column field="email"      header="Email"  style="min-width:160px" />
+    </DataTable>
+    <template #footer>
+      <Button label="Cancel" text @click="showContactPicker=false" />
+      <Button label="Import Selected" icon="pi pi-download" severity="success"
+        :disabled="!bcContactsSelected.length" :loading="importingBcContacts"
+        @click="importBcContacts" />
+    </template>
+  </Dialog>
+
+  <!-- BC Item picker dialog -->
+  <Dialog v-model:visible="showBcPicker" header="Import from BC (PDA Items)" :modal="true" :style="{ width: '700px' }">
+    <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
+      <span class="text-muted text-sm">{{ bcItems.length }} PDA items found. Select items to import.</span>
+      <Button v-if="loadingBcItems" label="Loading…" :loading="true" text size="small" />
+    </div>
+    <DataTable :value="bcItems" v-model:selection="bcItemsSelected" dataKey="itemNo" size="small"
+      responsive-layout="scroll" :scrollable="true" scrollHeight="350px">
+      <Column selectionMode="multiple" style="width:40px" />
+      <Column field="itemNo"      header="No"          style="width:90px" />
+      <Column field="description" header="Description" style="min-width:180px" />
+      <Column field="categoryName" header="Category"   style="width:130px" />
+      <Column field="unitPrice"   header="Price"       style="width:90px;text-align:right">
+        <template #body="{ data }">{{ Number(data.unitPrice||0).toFixed(2) }}</template>
+      </Column>
+    </DataTable>
+    <template #footer>
+      <Button label="Cancel" text @click="showBcPicker=false" />
+      <Button label="Import Selected" icon="pi pi-download" severity="success"
+        :disabled="!bcItemsSelected.length" :loading="importingBcItems"
+        @click="importBcItems" />
+    </template>
+  </Dialog>
+
+  <!-- Special prices CSV import -->
+  <Dialog v-model:visible="spImport.visible" header="Import special prices (CSV)" :modal="true" :style="{ width: '780px' }">
+    <p class="text-muted text-sm">
+      CSV columns (header row required):
+      <strong>ItemNo, ShopCode, UnitPrice, StartingDate, EndingDate, Description, IsActive</strong>.
+      Dates use <code>YYYY-MM-DD</code>. Existing rows with the same (ItemNo + ShopCode + StartingDate) are updated; new ones are inserted.
+    </p>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      <input ref="spImportFileRef" type="file" accept=".csv,text/csv" @change="onSpImportFile" style="flex:1" />
+      <Button label="Download template" icon="pi pi-download" text size="small" @click="downloadSpTemplate" />
+    </div>
+    <p v-if="spImport.parseError" class="text-sm" style="color:#b91c1c;margin-top:4px">{{ spImport.parseError }}</p>
+
+    <DataTable v-if="spImport.rows.length" :value="spImport.rows" size="small" style="margin-top:10px"
+               :scrollable="true" scrollHeight="280px">
+      <Column header="#" style="width:50px"><template #body="{ index }">{{ index + 1 }}</template></Column>
+      <Column field="itemNo"        header="Item No"     style="width:120px" />
+      <Column field="shopCode"      header="Shop"        style="width:90px" />
+      <Column field="unitPrice"     header="Price"       style="width:100px;text-align:right" />
+      <Column field="startingDate"  header="Starts"      style="width:120px" />
+      <Column field="endingDate"    header="Ends"        style="width:120px" />
+      <Column field="description"   header="Description" style="min-width:160px" />
+      <Column field="isActive"      header="Active"      style="width:80px" />
+    </DataTable>
+
+    <div v-if="spImport.result" style="margin-top:10px">
+      <Message :severity="spImport.result.failed ? 'warn' : 'success'" :closable="false">
+        Posted {{ spImport.result.posted }} · Failed {{ spImport.result.failed }}
+        <ul v-if="spImport.result.errors?.length" style="margin:4px 0 0 18px">
+          <li v-for="(e, i) in spImport.result.errors" :key="i">Row {{ e.row }} ({{ e.itemNo }}): {{ e.error }}</li>
+        </ul>
+      </Message>
+    </div>
+
+    <template #footer>
+      <Button label="Close" text @click="spImport.visible = false" />
+      <Button label="Import" icon="pi pi-send" severity="success"
+              :disabled="!spImport.rows.length" :loading="spImport.posting"
+              @click="postSpImport" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
 import Button       from 'primevue/button'
@@ -495,6 +1184,13 @@ import { adminApi }          from '@/services/api.js'
 import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
+import { posSetupApi, yieldApi } from '@/services/pos.js'
+import Dialog from 'primevue/dialog'
+import { useAuthStore } from '@/stores/auth.js'
+import { isGlobalAdmin } from '@/lib/posAccess.js'
+
+const auth        = useAuthStore()
+const isFullAdmin = computed(() => isGlobalAdmin(auth.user?.role))
 
 // ── Option lists ──────────────────────────────────────────────────────────────
 const roleOptions = [
@@ -504,6 +1200,8 @@ const roleOptions = [
   { label: 'Finance',  value: 'finance' },
   { label: 'Dispatch', value: 'dispatch' },
   { label: 'Security', value: 'security' },
+  { label: 'Shop',     value: 'shop' },
+  { label: 'Shop Admin', value: 'shop-admin' },
 ]
 const reportTypeOptions = [
   { label: 'Posting Group',       value: 'postingGroup' },
@@ -860,22 +1558,54 @@ async function deleteMeasure(row) {
 }
 
 // ── Core CRUD (users / SMTP / schedules) ─────────────────────────────────────
+// Lazy-load registry: each section fires its loader at most once per page-open.
+// Calling loadOnce(key, fn, { force: true }) re-runs (used by the manual Refresh button).
+const loaded = reactive({})
+async function loadOnce(key, fn, { force = false } = {}) {
+  if (loaded[key] && !force) return
+  loaded[key] = true
+  try { await fn() }
+  catch (e) { loaded[key] = false; throw e }
+}
+function onAccordionToggle(key, fn, ev) {
+  if (ev?.target?.open) loadOnce(key, fn).catch(() => {})
+}
+
+// Per-section loaders (split from the old loadAll/loadPosSetup so the page paints
+// in milliseconds and only fetches what the user actually opens).
+async function loadUsersData() {
+  try { users.value = (await adminApi.users()).data }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function loadSchedulesData() {
+  try { schedules.value = (await adminApi.schedules()).data }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function loadSmtpData() {
+  try {
+    const r = await adminApi.getSmtpSettings()
+    smtpForm.value = {
+      host:   r.data['smtp.host']   || '',
+      port:   r.data['smtp.port']   || '587',
+      user:   r.data['smtp.user']   || '',
+      pass:   r.data['smtp.pass']   || '',
+      from:   r.data['smtp.from']   || '',
+      secure: String(r.data['smtp.secure'] || '').toLowerCase() === 'true',
+    }
+  } catch (err) { error.value = err.response?.data?.error || err.message }
+}
+
+// Manual "Refresh" button still works — it nukes the cache and reloads only sections
+// that have been opened so far.
 async function loadAll() {
   loading.value = true; error.value = ''
   try {
-    const [usersRes, schedulesRes, smtpRes] = await Promise.all([
-      adminApi.users(), adminApi.schedules(), adminApi.getSmtpSettings(),
-    ])
-    users.value     = usersRes.data
-    schedules.value = schedulesRes.data
-    smtpForm.value  = {
-      host:   smtpRes.data['smtp.host']   || '',
-      port:   smtpRes.data['smtp.port']   || '587',
-      user:   smtpRes.data['smtp.user']   || '',
-      pass:   smtpRes.data['smtp.pass']   || '',
-      from:   smtpRes.data['smtp.from']   || '',
-      secure: String(smtpRes.data['smtp.secure'] || '').toLowerCase() === 'true',
+    const reload = []
+    for (const key of Object.keys(loaded)) {
+      const fn = LOADERS[key]
+      if (fn) { loaded[key] = false; reload.push(loadOnce(key, fn, { force: true })) }
     }
+    await Promise.all(reload)
   } catch (err) { error.value = err.response?.data?.error || err.message }
   finally { loading.value = false }
 }
@@ -883,7 +1613,10 @@ async function loadAll() {
 async function saveUser(user) {
   error.value = ''
   try {
-    await adminApi.updateUser(user.userId, { displayName: user.displayName, email: user.email, role: user.role, isActive: user.isActive })
+    await adminApi.updateUser(user.userId, {
+      displayName: user.displayName, email: user.email, role: user.role,
+      isActive: user.isActive, shopCode: user.shopCode || null,
+    })
   } catch (err) { error.value = err.response?.data?.error || err.message }
 }
 
@@ -926,11 +1659,566 @@ async function deleteSchedule(schedule) {
   } catch (err) { error.value = err.response?.data?.error || err.message }
 }
 
-onMounted(async () => {
-  await loadAll()
-  await loadTemplates()
-  await loadCustPgMappings()
+// ── POS Setup ────────────────────────────────────────────────────────────────
+
+const posShops           = ref([])
+const posShopOptions     = computed(() => [
+  ...posShops.value.map(s => ({ label: `${s.Code} – ${s.Name}`, value: s.Code })),
+])
+
+// shops
+const editingPosShop = ref(false)
+const savingPosShop  = ref(false)
+const posShopForm    = ref({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', isActive: true, sortOrder: 0 })
+
+function newPosShop()  { posShopForm.value = { shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', isActive: true, sortOrder: 0 }; editingPosShop.value = true }
+function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
+
+async function savePosShop() {
+  savingPosShop.value = true
+  try { await posSetupApi.saveShop(posShopForm.value); editingPosShop.value = false; await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingPosShop.value = false }
+}
+async function deletePosShop(d) {
+  try { await posSetupApi.deleteShop(d.ShopId); await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+const posCategories      = ref([])
+const posItems           = ref([])
+const posPaymentTypes    = ref([])
+
+// categories
+const editingPosCategory = ref(false)
+const savingPosCat       = ref(false)
+const posCatForm         = ref({ categoryId: null, code: '', name: '', sortOrder: 0, isActive: true })
+
+function newPosCategory()  { posCatForm.value = { categoryId: null, code: '', name: '', sortOrder: 0, isActive: true }; editingPosCategory.value = true }
+function editPosCategory(d){ posCatForm.value = { categoryId: d.CategoryId, code: d.Code, name: d.Name, sortOrder: d.SortOrder, isActive: Boolean(d.IsActive) }; editingPosCategory.value = true }
+
+async function savePosCategory() {
+  savingPosCat.value = true
+  try { await posSetupApi.saveCategory(posCatForm.value); editingPosCategory.value = false; await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingPosCat.value = false }
+}
+async function deletePosCategory(d) {
+  try { await posSetupApi.deleteCategory(d.CategoryId); await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// items
+const editingPosItem  = ref(false)
+const savingPosItem   = ref(false)
+const posItemForm     = ref({ itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0 })
+
+function newPosItem()  { posItemForm.value = { itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0 }; editingPosItem.value = true }
+function editPosItem(d){ posItemForm.value = { itemId: d.ItemId, itemNo: d.ItemNo, description: d.Description, categoryCode: d.CategoryCode || '', unitPrice: Number(d.UnitPrice||0), barcode: d.Barcode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosItem.value = true }
+
+async function savePosItem() {
+  savingPosItem.value = true
+  try { await posSetupApi.saveItem(posItemForm.value); editingPosItem.value = false; await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingPosItem.value = false }
+}
+async function deletePosItem(d) {
+  try { await posSetupApi.deleteItem(d.ItemId); await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// BC item picker
+const showBcPicker      = ref(false)
+const bcItems           = ref([])
+const bcItemsSelected   = ref([])
+const loadingBcItems    = ref(false)
+const importingBcItems  = ref(false)
+
+async function openBcPicker() {
+  showBcPicker.value = true; loadingBcItems.value = true; bcItems.value = []; bcItemsSelected.value = []
+  try { const { data } = await posSetupApi.listBcItems('FCL'); bcItems.value = data }
+  catch (e) { error.value = e.message }
+  finally { loadingBcItems.value = false }
+}
+
+// watch showBcPicker opening
+watch(showBcPicker, (v) => { if (v) openBcPicker() })
+
+async function importBcItems() {
+  importingBcItems.value = true
+  try {
+    for (const item of bcItemsSelected.value) {
+      await posSetupApi.saveItem({
+        itemNo: item.itemNo, description: item.description,
+        categoryCode: '', unitPrice: item.unitPrice,
+        barcode: item.barcode, isActive: true, sortOrder: 0,
+      })
+    }
+    showBcPicker.value = false; await loadPosSetup()
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { importingBcItems.value = false }
+}
+
+// payment types
+const editingPosPayType  = ref(false)
+const savingPosPayType   = ref(false)
+const posPayTypeForm     = ref({
+  typeId: null, code: '', shopCode: null, name: '',
+  paymentClass: 'Cash', isActive: true, sortOrder: 0, description: '',
+  // Integration (mostly relevant for Mobile / MPESA)
+  useApiEndpoint: false, apiEndpoint: '', apiKey: '',
+  consumerKey: '', consumerSecret: '', shortCode: '', passkey: '',
+  transactionType: 'CustomerPayBillOnline', callbackUrl: '', accountReference: '',
+  paymentFetchUrl: '',
 })
+function emptyPayTypeForm() {
+  return {
+    typeId: null, code: '', shopCode: null, name: '',
+    paymentClass: 'Cash', isActive: true, sortOrder: 0, description: '',
+    useApiEndpoint: false, apiEndpoint: '', apiKey: '',
+    consumerKey: '', consumerSecret: '', shortCode: '', passkey: '',
+    transactionType: 'CustomerPayBillOnline', callbackUrl: '', accountReference: '',
+    paymentFetchUrl: '',
+  }
+}
+const paymentClasses     = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer']
+
+function newPosPayType()  { posPayTypeForm.value = emptyPayTypeForm(); editingPosPayType.value = true }
+function editPosPayType(d){
+  posPayTypeForm.value = {
+    typeId: d.TypeId, code: d.Code, shopCode: d.ShopCode||null, name: d.Name,
+    paymentClass: d.PaymentClass, isActive: Boolean(d.IsActive),
+    sortOrder: d.SortOrder, description: d.Description||'',
+    useApiEndpoint: Boolean(d.UseApiEndpoint), apiEndpoint: d.ApiEndpoint||'', apiKey: d.ApiKey||'',
+    consumerKey: d.ConsumerKey||'', consumerSecret: d.ConsumerSecret||'',
+    shortCode: d.ShortCode||'', passkey: d.Passkey||'',
+    transactionType: d.TransactionType||'CustomerPayBillOnline',
+    callbackUrl: d.CallbackUrl||'', accountReference: d.AccountReference||'',
+    paymentFetchUrl: d.PaymentFetchUrl||'',
+  }
+  editingPosPayType.value = true
+}
+
+// Special prices CRUD
+const specialPrices  = ref([])
+const editingSpecial = ref(false)
+const savingSpecial  = ref(false)
+const specialForm    = ref({ specialPriceId: null, itemNo: '', shopCode: null, unitPrice: 0,
+                             startingDate: new Date(), endingDate: null, description: '', isActive: true })
+
+function newSpecialPrice()  { specialForm.value = { specialPriceId: null, itemNo: '', shopCode: null, unitPrice: 0, startingDate: new Date(), endingDate: null, description: '', isActive: true }; editingSpecial.value = true }
+function editSpecialPrice(d){ specialForm.value = { specialPriceId: d.SpecialPriceId, itemNo: d.ItemNo, shopCode: d.ShopCode||null, unitPrice: Number(d.UnitPrice), startingDate: d.StartingDate ? new Date(d.StartingDate) : new Date(), endingDate: d.EndingDate ? new Date(d.EndingDate) : null, description: d.Description||'', isActive: Boolean(d.IsActive) }; editingSpecial.value = true }
+
+function isoDate(d) {
+  if (!d) return null
+  if (typeof d === 'string') return d
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+async function saveSpecialPrice() {
+  savingSpecial.value = true
+  try {
+    await posSetupApi.saveSpecialPrice({
+      ...specialForm.value,
+      startingDate: isoDate(specialForm.value.startingDate),
+      endingDate:   isoDate(specialForm.value.endingDate),
+    })
+    editingSpecial.value = false
+    await loadPosSetup()
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingSpecial.value = false }
+}
+async function deleteSpecialPrice(d) {
+  try { await posSetupApi.deleteSpecialPrice(d.SpecialPriceId); await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// ── Special prices CSV import / export ─────────────────────────────────────
+const exportingSp = ref(false)
+const spImportFileRef = ref(null)
+const spImport = reactive({ visible: false, rows: [], parseError: '', posting: false, result: null })
+
+function downloadBlob(res, filename) {
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a'); a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function downloadSpTemplate() {
+  try { downloadBlob(await posSetupApi.specialPricesTemplate(), 'special-prices-template.csv') }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function exportSp() {
+  exportingSp.value = true
+  try {
+    const stamp = new Date().toISOString().slice(0,10)
+    downloadBlob(await posSetupApi.exportSpecialPricesCsv(), `special-prices-${stamp}.csv`)
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { exportingSp.value = false }
+}
+
+function openSpImport() {
+  spImport.visible = true
+  spImport.rows = []; spImport.parseError = ''; spImport.result = null
+  if (spImportFileRef.value) spImportFileRef.value.value = ''
+}
+function parseSpCsv(text) {
+  text = String(text || '').replace(/^﻿/, '')
+  const out = []; let cur = []; let buf = ''; let inQ = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQ) {
+      if (ch === '"' && text[i+1] === '"') { buf += '"'; i++ }
+      else if (ch === '"') inQ = false
+      else buf += ch
+    } else {
+      if (ch === '"') inQ = true
+      else if (ch === ',') { cur.push(buf); buf = '' }
+      else if (ch === '\r') {}
+      else if (ch === '\n') { cur.push(buf); out.push(cur); cur = []; buf = '' }
+      else buf += ch
+    }
+  }
+  if (buf.length || cur.length) { cur.push(buf); out.push(cur) }
+  return out.filter(r => r.length && r.some(c => String(c).trim() !== ''))
+}
+function onSpImportFile(ev) {
+  spImport.parseError = ''; spImport.result = null; spImport.rows = []
+  const file = ev.target?.files?.[0]; if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const rows = parseSpCsv(String(reader.result || ''))
+    if (rows.length < 2) { spImport.parseError = 'CSV must include a header row and at least one data row.'; return }
+    const header = rows[0].map(h => String(h).trim().toLowerCase())
+    const idx = (...names) => names.map(n => header.indexOf(n)).find(i => i >= 0) ?? -1
+    const cItem = idx('itemno', 'item no', 'sku')
+    const cShop = idx('shopcode', 'shop')
+    const cPrc  = idx('unitprice', 'price')
+    const cFrom = idx('startingdate', 'starts', 'startdate', 'startingdate')
+    const cTo   = idx('endingdate', 'ends', 'enddate')
+    const cDesc = idx('description', 'desc')
+    const cActv = idx('isactive', 'active')
+    if (cItem < 0 || cPrc < 0 || cFrom < 0) {
+      spImport.parseError = 'CSV must include at least: ItemNo, UnitPrice, StartingDate'
+      return
+    }
+    const out = []
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r]
+      const itemNo = String(row[cItem] || '').trim().toUpperCase()
+      if (!itemNo) continue
+      out.push({
+        itemNo,
+        shopCode:     cShop >= 0 ? (String(row[cShop] || '').trim().toUpperCase() || null) : null,
+        unitPrice:    Number(row[cPrc] || 0),
+        startingDate: String(row[cFrom] || '').trim(),
+        endingDate:   cTo   >= 0 ? (String(row[cTo]   || '').trim() || null) : null,
+        description:  cDesc >= 0 ? (String(row[cDesc] || '').trim() || null) : null,
+        isActive:     cActv >= 0 ? (String(row[cActv] || '').trim() !== '0') : true,
+      })
+    }
+    spImport.rows = out
+    if (!out.length) spImport.parseError = 'No usable rows after parsing.'
+  }
+  reader.readAsText(file)
+}
+async function postSpImport() {
+  spImport.posting = true; spImport.result = null
+  try {
+    const { data } = await posSetupApi.importSpecialPrices(spImport.rows)
+    spImport.result = data
+    if (data?.posted) await loadPosSetup()
+  } catch (e) {
+    spImport.parseError = e.response?.data?.error || e.message
+  } finally {
+    spImport.posting = false
+  }
+}
+
+async function savePosPayType() {
+  savingPosPayType.value = true
+  try { await posSetupApi.savePaymentType(posPayTypeForm.value); editingPosPayType.value = false; await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingPosPayType.value = false }
+}
+async function deletePosPayType(d) {
+  try { await posSetupApi.deletePaymentType(d.TypeId); await loadPosSetup() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// contacts
+const posContacts          = ref([])
+const showContactPicker    = ref(false)
+const bcContacts           = ref([])
+const bcContactsSelected   = ref([])
+const loadingBcContacts    = ref(false)
+const importingBcContacts  = ref(false)
+const contactShopFilter    = ref('')
+
+// Group walk-ins by SP (salesperson) code — collapsed by default, expand to see members.
+const walkInGroups = computed(() => {
+  const map = new Map()
+  for (const c of (posContacts.value || [])) {
+    const key = (c.SalespersonCode || '').toUpperCase()
+    if (!map.has(key)) map.set(key, { spCode: key, contacts: [] })
+    map.get(key).contacts.push(c)
+  }
+  return [...map.values()].sort((a, b) => (a.spCode || 'zzz').localeCompare(b.spCode || 'zzz'))
+})
+
+async function deleteWalkIn(c) {
+  if (!confirm(`Delete walk-in contact "${c.Name}" (${c.BcContactNo})?`)) return
+  try {
+    await posSetupApi.deleteSetupContact(c.ContactId)
+    await loadPosSetup()
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  }
+}
+
+async function openContactPicker() {
+  loadingBcContacts.value = true; bcContacts.value = []; bcContactsSelected.value = []
+  // Use the first shop's salesperson code as default, or load all
+  const shop = posShops.value.find(s => s.SalespersonCode) || posShops.value[0]
+  contactShopFilter.value = shop?.Code || ''
+  try {
+    const spCode = shop?.SalespersonCode || ''
+    if (!spCode) { error.value = 'Configure a Salesperson Code on a shop first'; showContactPicker.value = false; return }
+    const { data } = await posSetupApi.listBcContacts('FCL', spCode)
+    bcContacts.value = data
+  } catch (e) { error.value = e.message }
+  finally { loadingBcContacts.value = false }
+}
+
+watch(showContactPicker, (v) => { if (v) openContactPicker() })
+
+async function importBcContacts() {
+  importingBcContacts.value = true
+  try {
+    const { data } = await posSetupApi.importContacts(bcContactsSelected.value, contactShopFilter.value)
+    showContactPicker.value = false
+    await loadPosSetup()
+    error.value = ''
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { importingBcContacts.value = false }
+}
+
+// Third Parties enrolment
+const thirdParties = ref([])
+const editingTp    = ref(false)
+const savingTp     = ref(false)
+const tpForm       = ref({ thirdPartyId: null, code: '', name: '', shopCode: null, isActive: true, notes: '' })
+
+function newTp()  { tpForm.value = { thirdPartyId: null, code: '', name: '', shopCode: null, isActive: true, notes: '' }; editingTp.value = true }
+function editTp(d){ tpForm.value = { thirdPartyId: d.ThirdPartyId, code: d.Code, name: d.Name, shopCode: d.ShopCode || null, isActive: Boolean(d.IsActive), notes: d.Notes || '' }; editingTp.value = true }
+
+async function saveTp() {
+  savingTp.value = true
+  try { await yieldApi.saveThirdParty(tpForm.value); editingTp.value = false; await loadThirdParties() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingTp.value = false }
+}
+async function deleteTp(d) {
+  try { await yieldApi.deleteThirdParty(d.ThirdPartyId); await loadThirdParties() }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function loadThirdParties() {
+  try { thirdParties.value = (await yieldApi.listThirdParties()).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// eTIMS config (per shop)
+const etimsShop      = ref('')   // '' = global / fallback
+const etimsCfg       = ref({ invoiceUrl: '', invoiceNumUrl: '', creditNoteUrl: '', apiKey: '',
+                              branchId: '00', companyPin: '', qrServiceUrl: '', paymentService: '' })
+const savingEtimsCfg = ref(false)
+const loadingEtimsBc = ref(false)
+const etimsBcResult  = ref(null)
+
+const etimsShopOpts = computed(() => [
+  { label: 'Global / fallback', value: '' },
+  ...posShops.value.map(s => ({ label: `${s.Code} – ${s.Name}`, value: s.Code })),
+])
+
+async function loadEtimsCfg() {
+  try { etimsCfg.value = (await posSetupApi.getEtimsConfig(etimsShop.value)).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function saveEtimsCfg() {
+  savingEtimsCfg.value = true
+  try {
+    etimsCfg.value = (await posSetupApi.saveEtimsConfig({
+      shopCode: etimsShop.value || null,
+      ...etimsCfg.value,
+    })).data
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingEtimsCfg.value = false }
+}
+async function loadEtimsBcDefaults() {
+  loadingEtimsBc.value = true; etimsBcResult.value = null
+  try {
+    const { data } = await posSetupApi.fetchEtimsBcDefaults('FCL')
+    // Only fill fields that are blank locally, so we don't overwrite an admin-changed value
+    for (const k of Object.keys(data)) {
+      if (!etimsCfg.value[k]) etimsCfg.value[k] = data[k]
+    }
+    etimsBcResult.value = { ok: true, message: 'Defaults loaded from BC. Review and click Save eTIMS Config to persist.' }
+  } catch (e) {
+    etimsBcResult.value = { ok: false, message: e.response?.data?.error || e.message }
+  } finally {
+    loadingEtimsBc.value = false
+  }
+}
+
+// Print config (per shop)
+const printShop         = ref('')
+const printCfg          = ref({ format: 'a4', invoicePrinter: '', thermalWidthMm: 72, copies: 1 })
+const installedPrinters = ref([])
+const loadingPrinters   = ref(false)
+const savingPrintCfg    = ref(false)
+const formatOpts        = [{ label: 'A4', value: 'a4' }, { label: 'Thermal', value: 'thermal' }]
+
+const printShopOpts = computed(() => [
+  { label: 'Global / fallback', value: '' },
+  ...posShops.value.map(s => ({ label: `${s.Code} – ${s.Name}`, value: s.Code })),
+])
+const printShopLabel = computed(() => printShopOpts.value.find(o => o.value === printShop.value)?.label || 'Global')
+
+async function loadPrinters() {
+  loadingPrinters.value = true
+  try { installedPrinters.value = (await posSetupApi.listPrinters()).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { loadingPrinters.value = false }
+}
+
+async function loadPrintCfg() {
+  try { printCfg.value = (await posSetupApi.getPrintConfig(printShop.value)).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// ── Inventory display config (POS terminal item cards) ──────────────────────
+const invCfg       = ref({ hideOutOfStock: false })
+const savingInvCfg = ref(false)
+async function loadInvCfg() {
+  try { invCfg.value = (await posSetupApi.getInventoryConfig()).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function saveInvCfg() {
+  savingInvCfg.value = true
+  try {
+    invCfg.value = (await posSetupApi.saveInventoryConfig({
+      hideOutOfStock: !!invCfg.value.hideOutOfStock,
+    })).data
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingInvCfg.value = false }
+}
+
+async function savePrintCfg() {
+  savingPrintCfg.value = true
+  try {
+    printCfg.value = (await posSetupApi.savePrintConfig({
+      shopCode: printShop.value || null,
+      ...printCfg.value,
+    })).data
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingPrintCfg.value = false }
+}
+
+// sync from BC
+const syncingFromBc = ref(false)
+const syncingStep   = ref('')
+const syncSteps = [
+  { kind: 'shops',         label: 'Shops / Terminals', icon: 'pi pi-building' },
+  { kind: 'walk-ins',      label: 'Walk-ins',       icon: 'pi pi-user' },
+  { kind: 'contacts',      label: 'Contacts',       icon: 'pi pi-users' },
+  { kind: 'categories',    label: 'Categories',     icon: 'pi pi-th-large' },
+  { kind: 'items',         label: 'Items',          icon: 'pi pi-box' },
+  { kind: 'payment-types', label: 'Payment Methods',icon: 'pi pi-credit-card' },
+]
+async function syncStep(kind) {
+  // Steps that support wipe-then-reimport: ask the user.
+  let opts = {}
+  if (kind === 'items') {
+    const wipe = confirm(
+      'Wipe the current PosItem catalogue and re-import from BC?\n\n' +
+      'OK = wipe + fresh import (also clears favourites & special prices).\n' +
+      'Cancel = upsert (keep existing items, refresh changed ones).'
+    )
+    opts.wipe = !!wipe
+  } else if (kind === 'shops') {
+    const wipe = confirm(
+      'Wipe existing shops/terminals and re-import from BC?\n\n' +
+      'OK = drop everything (also clears user→shop assignments) and re-import fresh.\n' +
+      'Cancel = upsert (keep existing shops; new BC customers added, existing ones updated).'
+    )
+    opts.wipe = !!wipe
+  }
+  syncingStep.value = kind; syncResult.value = null
+  try {
+    const { data } = await posSetupApi.syncStepFromBc(kind, 'FCL', opts)
+    syncResult.value = { ...data, errors: data.errors || [] }
+  } catch (e) {
+    syncResult.value = { kind, count: 0, errors: [e.response?.data?.error || e.message] }
+  } finally {
+    syncingStep.value = ''
+  }
+}
+const syncResult    = ref(null)
+
+async function syncFromBc() {
+  syncingFromBc.value = true; syncResult.value = null
+  try {
+    const { data } = await posSetupApi.syncFromBc('FCL')
+    syncResult.value = data
+    await loadPosSetup()
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    syncingFromBc.value = false
+  }
+}
+
+// Always pre-load just the shop list (small, used by many dropdowns).
+async function loadPosShopsOnly() {
+  try { posShops.value = (await posSetupApi.listShops()).data }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// All POS-Setup heavy loads — fired the first time the POS Setup accordion opens.
+async function loadPosSetup() {
+  try {
+    const [shops, cats, items, pts, contacts, sp] = await Promise.all([
+      posSetupApi.listShops(),
+      posSetupApi.listCategories(),
+      posSetupApi.listItems(),
+      posSetupApi.listPaymentTypes(),
+      posSetupApi.listSetupContacts(),
+      posSetupApi.listSpecialPrices(),
+    ])
+    posShops.value        = shops.data
+    posCategories.value   = cats.data
+    posItems.value        = items.data
+    posPaymentTypes.value = pts.data
+    posContacts.value     = contacts.data
+    specialPrices.value   = sp.data
+    // Print config + installed printers + eTIMS config + third parties (parallel)
+    Promise.all([loadPrintCfg(), loadPrinters(), loadEtimsCfg(), loadThirdParties(), loadInvCfg()]).catch(() => {})
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+// Loader registry — keyed by accordion id; loadAll() re-runs only the ones already opened.
+const LOADERS = {
+  users:         loadUsersData,
+  schedules:     loadSchedulesData,
+  smtp:          loadSmtpData,
+  templates:     loadTemplates,
+  custPg:        loadCustPgMappings,
+  posSetup:      loadPosSetup,
+}
+
+// Mount as cheap as possible: only the shop list (used in dropdowns elsewhere).
+onMounted(() => { loadPosShopsOnly() })
 </script>
 
 <style scoped>
@@ -995,6 +2283,112 @@ onMounted(async () => {
 .guide-table code { background:#f3f4f6; padding:1px 4px; border-radius:3px; font-size:11px; }
 .guide-example { margin:6px 0 2px; font-size:12px; }
 .guide-pre { background:#1e293b; color:#e2e8f0; padding:10px 12px; border-radius:6px; font-size:11px; line-height:1.6; overflow-x:auto; white-space:pre; margin:6px 0 0; }
+
+.pos-setup-section { margin-bottom: 20px; }
+.pos-setup-section:last-child { margin-bottom: 0; }
+.text-success { color: #16a34a; }
+.text-muted   { color: var(--text-color-secondary, #888); }
+
+.cf-field { display:flex; flex-direction:column; gap:4px; }
+.cf-field label { font-size:12px; color:#374151; font-weight:500; }
+
+/* Walk-in contacts grouped by ship code (route) */
+.walkin-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin: 6px 0;
+  background: #fafafa;
+  color: #111827;
+  color-scheme: light;
+}
+.walkin-group > summary {
+  display:flex; align-items:center; gap:8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background:#f3f4f6;
+  font-weight:600; color:#1f2937;
+  border-radius:6px;
+  user-select:none;
+}
+.walkin-group[open] > summary { border-radius:6px 6px 0 0; border-bottom:1px solid #e5e7eb; }
+.walkin-group > summary::-webkit-details-marker { display:none; }
+.walkin-group > summary::before {
+  content:'▸'; transition: transform 0.15s; display:inline-block; font-size:11px; opacity:0.7;
+}
+.walkin-group[open] > summary::before { transform: rotate(90deg); }
+.walkin-group .walkin-group-name { flex:1; }
+.walkin-group :deep(.p-datatable-thead > tr > th)  { background:#fff !important; color:#111827 !important; }
+.walkin-group :deep(.p-datatable-tbody > tr > td)  { background:#fff !important; color:#111827 !important; }
+
+/* Nested POS Setup sub-accordions — explicit colours so Chrome dark mode doesn't invert text */
+.pos-sub-accordion {
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: #ffffff !important;
+  color: #111827;
+  overflow: hidden;
+  color-scheme: light;
+}
+.pos-sub-accordion,
+.pos-sub-accordion * {
+  color: #111827;
+}
+.pos-sub-accordion .text-muted    { color: #6b7280 !important; }
+.pos-sub-accordion .text-success  { color: #15803d !important; }
+.pos-sub-accordion p              { color: #4b5563 !important; }
+.pos-sub-accordion :deep(.p-inputtext),
+.pos-sub-accordion :deep(.p-select-label),
+.pos-sub-accordion :deep(.p-inputnumber-input),
+.pos-sub-accordion :deep(.p-textarea) {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-thead > tr > th) {
+  background: #f3f4f6 !important; color: #111827 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-tbody > tr) {
+  background: #ffffff !important; color: #111827 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-tbody > tr > td) { color: #111827 !important; }
+
+.pos-sub-accordion > summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  font-size: 13px; font-weight: 600;
+  color: #1f2937 !important;
+  background: #f9fafb !important;
+  cursor: pointer; user-select: none;
+  list-style: none;
+  transition: background 0.12s;
+}
+.pos-sub-accordion > summary::-webkit-details-marker { display: none; }
+.pos-sub-accordion > summary::before {
+  content: '▶'; font-size: 9px; color: #6b7280;
+  transition: transform 0.15s; display: inline-block;
+}
+.pos-sub-accordion[open] > summary::before { transform: rotate(90deg); }
+.pos-sub-accordion[open] > summary { background: #f1f5f9 !important; }
+.pos-sub-accordion > summary:hover { background: #eff6ff !important; }
+.pos-sub-accordion > summary > .pi { color: #2563eb !important; font-size: 14px; }
+.pos-sub-accordion > .pos-setup-section { padding: 12px 14px; margin-bottom: 0; background: #ffffff; }
+.acc-count-sm {
+  margin-left: auto;
+  font-size: 11px; font-weight: 600;
+  color: #4b5563 !important; background: #e5e7eb !important;
+  border-radius: 10px; padding: 1px 8px;
+}
+
+.sync-bar {
+  display: flex; align-items: center; gap: 12px; justify-content: space-between;
+  padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;
+  margin-bottom: 12px;
+}
+.sync-info { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; }
+.sync-info > .pi { font-size: 22px; color: #0369a1; flex-shrink: 0; }
+.sync-title { font-size: 13px; font-weight: 600; color: #0c4a6e; }
+.sync-sub   { font-size: 11px; color: #475569; margin-top: 2px; }
+.sync-steps { display:flex; flex-wrap:wrap; gap:6px; margin: 8px 0 12px; }
 
 @media (max-width: 900px) {
   .schedule-form, .filter-grid { grid-template-columns:1fr 1fr; }

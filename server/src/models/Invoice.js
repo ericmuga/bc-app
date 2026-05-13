@@ -119,6 +119,7 @@ export class Invoice extends BaseDocument {
         ih.input('ETIMSInvoiceNo',  sql.NVarChar(60),      invoiceData.etimsInvoiceNo  || null);
         ih.input('ETIMSData',       sql.NVarChar(sql.MAX), invoiceData.etimsData ? JSON.stringify(invoiceData.etimsData) : null);
         ih.input('QRCodeUrl',       sql.NVarChar(500),     invoiceData.qrcodeUrl       || null);
+        ih.input('Barcode',         sql.NVarChar(60),      invoiceData.barcode         || invoiceData.invoiceNo);
 
         await ih.query(`
           IF NOT EXISTS (SELECT 1 FROM ${schema}.[InvoiceHeader] WHERE [InvoiceNo] = @InvoiceNo)
@@ -128,14 +129,14 @@ export class Invoice extends BaseDocument {
              [ShipToName],[ShipmentMethod],[PaymentTerms],[ExternalDocNo],
              [CompanyName],[CompanyPin],[CompanyEmail],[CompanyVatReg],[NoPrinted],
              [OrderDate],[PostingDate],[PrintingDatetime],[BCUserId],[InvoicedAt],
-             [ETIMSInvoiceNo],[ETIMSData],[QRCodeUrl])
+             [ETIMSInvoiceNo],[ETIMSData],[QRCodeUrl],[Barcode])
           VALUES
             (@InvoiceNo,'',@CustomerNo,@CustomerName,@CustomerPin,
              @SalespersonCode,@SalespersonName,@RouteCode,@SectorCode,
              @ShipToName,@ShipmentMethod,@PaymentTerms,@ExternalDocNo,
              @CompanyName,@CompanyPin,@CompanyEmail,@CompanyVatReg,@NoPrinted,
              @OrderDate,@PostingDate,@PrintingDatetime,@BCUserId,@InvoicedAt,
-             @ETIMSInvoiceNo,@ETIMSData,@QRCodeUrl)
+             @ETIMSInvoiceNo,@ETIMSData,@QRCodeUrl,@Barcode)
         `);
 
         for (const line of lines) {
@@ -172,6 +173,24 @@ export class Invoice extends BaseDocument {
         await transaction.rollback();
         throw err;
       }
+    });
+  }
+
+  /** Look up by barcode value (treated as the printed scan code on a receipt). */
+  async findByBarcode(companyId, barcode) {
+    return db.query(companyId, async (pool, schema) => {
+      const req = pool.request().input('Barcode', sql.NVarChar(60), barcode);
+      // The barcode normally encodes the InvoiceNo itself, so accept either match.
+      const headerResult = await req.query(`
+        SELECT TOP 1 * FROM ${schema}.[InvoiceHeader]
+        WHERE [Barcode] = @Barcode OR [InvoiceNo] = @Barcode
+      `);
+      if (!headerResult.recordset.length) return null;
+      const invoiceNo = headerResult.recordset[0].InvoiceNo;
+      const linesResult = await pool.request()
+        .input('DocNo', sql.NVarChar(30), invoiceNo)
+        .query(`SELECT * FROM ${schema}.[InvoiceLine] WHERE [InvoiceNo]=@DocNo ORDER BY [LineNo]`);
+      return { header: headerResult.recordset[0], lines: linesResult.recordset };
     });
   }
 

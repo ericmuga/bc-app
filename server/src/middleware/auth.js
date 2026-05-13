@@ -33,15 +33,46 @@ export function requireRole(...roles) {
   };
 }
 
-/** For BC webhook endpoints – validate HMAC header instead of JWT */
+/** For BC webhook endpoints – validate a shared secret in the request headers.
+ *  Tolerates multiple header names + a Bearer prefix + surrounding whitespace, so
+ *  a BC config that uses any of these will work:
+ *    X-BC-Signature: <secret>
+ *    X-Webhook-Secret: <secret>
+ *    X-Webhook-Signature: <secret>
+ *    Authorization: Bearer <secret>
+ *  On failure, the response includes a non-revealing hint so the operator can
+ *  see what BC is actually sending.
+ */
 export function webhookAuth(req, res, next) {
-  const secret = process.env.BC_WEBHOOK_SECRET;
+  const secret = String(process.env.BC_WEBHOOK_SECRET || '').trim();
   if (!secret) return next(); // Secret not configured – allow all (dev only)
-  const provided = req.headers['x-bc-signature'];
-  if (!provided || provided !== secret) {
-    return res.status(401).json({ error: 'Invalid webhook signature' });
-  }
-  next();
+
+  const headers = req.headers || {};
+  const candidates = [
+    headers['x-bc-signature'],
+    headers['x-webhook-secret'],
+    headers['x-webhook-signature'],
+    // Authorization: Bearer <secret> or just the bare secret
+    headers['authorization'] && String(headers['authorization']).replace(/^bearer\s+/i, ''),
+  ].map(v => (v == null ? '' : String(v).trim()))
+   .filter(Boolean);
+
+  // Constant-time compare to avoid timing leaks
+  const eq = (a, b) => {
+    if (a.length !== b.length) return false;
+    let r = 0;
+    for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return r === 0;
+  };
+  const match = candidates.find(c => eq(c, secret));
+  if (match) return next();
+
+  // Build a safe debug hint without leaking either the secret or the received value.
+  const received = candidates[0] || '';
+  const hint = received
+    ? `received header looks ${received.length === secret.length ? 'same length' : `length ${received.length} vs expected ${secret.length}`} starting with "${received.slice(0, 2)}…"`
+    : 'no recognised auth header on the request (expected X-BC-Signature, X-Webhook-Secret, X-Webhook-Signature, or Authorization: Bearer)';
+  return res.status(401).json({ error: 'Invalid webhook signature', hint });
 }
 
 /**

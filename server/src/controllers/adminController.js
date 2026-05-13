@@ -3,7 +3,7 @@ import logger from '../services/logger.js';
 import { ROLES } from '../services/access.js';
 import { computeNextRunAt, runScheduledReportNow } from '../services/reportScheduler.js';
 
-const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST];
+const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN];
 const VALID_REPORT_TYPES = ['postingGroup', 'sector', 'salesperson', 'route', 'weekOnWeek', 'productPerformance'];
 const VALID_FORMATS = ['xlsx', 'pdf'];
 const VALID_FREQUENCIES = ['interval', 'daily', 'weekly', 'monthly'];
@@ -69,6 +69,7 @@ export async function updateUser(req, res) {
     role: String(req.body.role || '').trim().toLowerCase(),
     isActive: req.body.isActive !== false,
     receiveScheduledReports: Boolean(req.body.receiveScheduledReports),
+    shopCode: String(req.body.shopCode || '').trim() || null,
   };
   if (!payload.displayName) return res.status(400).json({ error: 'displayName is required' });
   if (!VALID_ROLES.includes(payload.role)) return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });

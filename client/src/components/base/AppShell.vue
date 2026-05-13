@@ -35,33 +35,49 @@
         />
       </div>
 
+      <!-- Role switcher — global admins only (UI preview / impersonation) -->
+      <div v-if="auth.isGlobalAdmin" class="role-switcher">
+        <label class="section-label">View as</label>
+        <Select
+          :model-value="auth.impersonatedRole || ''"
+          :options="roleOptions"
+          option-label="label"
+          option-value="value"
+          class="role-select"
+          @update:model-value="onSwitchRole"
+        />
+        <p v-if="auth.impersonatedRole" class="impersonation-hint">
+          <i class="pi pi-eye" /> viewing as {{ auth.impersonatedRole }}
+        </p>
+      </div>
+
       <nav class="sidebar-nav">
-        <div class="nav-section">
-          <span class="section-label">Orders</span>
-          <RouterLink v-if="canViewOrders" to="/orders/scan" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+        <details v-if="canViewOrders" class="nav-section" :open="navOpen.orders" @toggle="onNavToggle('orders', $event)">
+          <summary class="section-label">Orders</summary>
+          <RouterLink to="/orders/scan" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-qrcode" />
             <span>Scan / Search</span>
           </RouterLink>
-          <RouterLink v-if="canViewOrders" to="/orders" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+          <RouterLink to="/orders" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-list" />
             <span>All Orders</span>
           </RouterLink>
-        </div>
+        </details>
 
-        <div class="nav-section">
-          <span class="section-label">Invoices</span>
-          <RouterLink v-if="canViewInvoices" to="/invoices/scan" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+        <details v-if="canViewInvoices" class="nav-section" :open="navOpen.invoices" @toggle="onNavToggle('invoices', $event)">
+          <summary class="section-label">Invoices</summary>
+          <RouterLink to="/invoices/scan" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-qrcode" />
             <span>Scan / Search</span>
           </RouterLink>
-          <RouterLink v-if="canViewInvoices" to="/invoices" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+          <RouterLink to="/invoices" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-file-check" />
             <span>All Invoices</span>
           </RouterLink>
-        </div>
+        </details>
 
-        <div class="nav-section">
-          <span class="section-label">Analytics</span>
+        <details v-if="canViewReports || canViewFinance" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
+          <summary class="section-label">Analytics</summary>
           <RouterLink v-if="canViewReports" to="/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-chart-bar" />
             <span>Reports</span>
@@ -74,11 +90,71 @@
             <i class="pi pi-money-bill" />
             <span>Finance Reports</span>
           </RouterLink>
-          <RouterLink v-if="isAdmin" to="/admin/setup" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+        </details>
+
+        <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
+          <summary class="section-label">Point of Sale</summary>
+          <RouterLink to="/pos" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-shopping-cart" />
+            <span>POS Terminal</span>
+          </RouterLink>
+          <RouterLink to="/pos/orders" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-receipt" />
+            <span>POS Orders</span>
+          </RouterLink>
+          <RouterLink to="/pos/stock-requests" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-truck" />
+            <span>Stock Requests</span>
+          </RouterLink>
+          <RouterLink to="/pos/stock-report" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-chart-line" />
+            <span>Stock Movements</span>
+          </RouterLink>
+          <RouterLink to="/pos/stock-take" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-clipboard" />
+            <span>Stock Take</span>
+          </RouterLink>
+          <RouterLink to="/pos/till" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-money-bill" />
+            <span>Cash Till</span>
+          </RouterLink>
+          <RouterLink to="/pos/yield" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-percentage" />
+            <span>Yield &amp; Loss</span>
+          </RouterLink>
+          <RouterLink v-if="isAdmin" to="/pos/targets" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-flag" />
+            <span>Daily Targets</span>
+          </RouterLink>
+          <RouterLink v-if="isAdmin" to="/pos/coupons" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-ticket" />
+            <span>Coupons</span>
+          </RouterLink>
+          <RouterLink to="/pos/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-chart-bar" />
+            <span>POS Reports</span>
+          </RouterLink>
+          <RouterLink to="/pos/help" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-book" />
+            <span>Documentation</span>
+          </RouterLink>
+        </details>
+
+        <details v-if="isAdmin" class="nav-section" :open="navOpen.admin" @toggle="onNavToggle('admin', $event)">
+          <summary class="section-label">Administration</summary>
+          <RouterLink to="/admin/setup" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-cog" />
             <span>Admin Setup</span>
           </RouterLink>
-        </div>
+          <RouterLink to="/admin/cashier-shops" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-id-card" />
+            <span>Cashiers ↔ Shops</span>
+          </RouterLink>
+          <RouterLink to="/admin/audit" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-history" />
+            <span>Audit Log</span>
+          </RouterLink>
+        </details>
       </nav>
 
       <div class="sidebar-footer">
@@ -115,6 +191,7 @@ import { useCompanyStore } from '@/stores/company.js'
 import { companiesApi } from '@/services/api.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/lib/access.js'
 import { canAccessFinance } from '@/lib/financeAccess.js'
+import { canAccessPos, isGlobalAdmin } from '@/lib/posAccess.js'
 
 const auth    = useAuthStore()
 const company = useCompanyStore()
@@ -125,12 +202,60 @@ window.addEventListener('resize', () => {
   if (window.innerWidth >= 768 && !sidebarOpen.value) sidebarOpen.value = true
 })
 
+// Sidebar section open/closed state (persisted per browser)
+const NAV_KEY = 'bcapp.navOpen'
+const navOpenDefault = { orders: true, invoices: true, analytics: true, pos: true, admin: true }
+let saved = navOpenDefault
+try {
+  const raw = localStorage.getItem(NAV_KEY)
+  if (raw) saved = { ...navOpenDefault, ...JSON.parse(raw) }
+} catch {}
+const navOpen = ref(saved)
+function onNavToggle(key, ev) {
+  navOpen.value = { ...navOpen.value, [key]: ev.target.open }
+  try { localStorage.setItem(NAV_KEY, JSON.stringify(navOpen.value)) } catch {}
+}
+
 const userInitial    = computed(() => auth.user?.userName?.[0]?.toUpperCase() ?? 'U')
-const isAdmin = computed(() => auth.user?.role === ROLES.ADMIN)
-const canViewOrders = computed(() => canAccessOrders(auth.user?.role))
-const canViewInvoices = computed(() => canAccessInvoices(auth.user?.role))
-const canViewReports = computed(() => canAccessReports(auth.user?.role))
-const canViewFinance = computed(() => canAccessFinance(auth.user?.role))
+// All sidebar / route-guard checks read `effectiveRole` so the role switcher
+// (admin → preview another role) re-renders the nav reactively.
+const role           = computed(() => auth.effectiveRole)
+// Show "Admin Setup" link for full admin and shop-admin (latter sees POS-only sections)
+const isAdmin       = computed(() => role.value === ROLES.ADMIN || role.value === 'shop-admin')
+const isFullAdmin   = computed(() => isGlobalAdmin(role.value))
+const canViewOrders = computed(() => canAccessOrders(role.value))
+const canViewInvoices = computed(() => canAccessInvoices(role.value))
+const canViewReports = computed(() => canAccessReports(role.value))
+const canViewFinance = computed(() => canAccessFinance(role.value))
+const canViewPos     = computed(() => canAccessPos(role.value))
+
+// Role switcher (admin only)
+const roleOptions = [
+  { label: '(actual: admin)', value: '' },
+  { label: 'shop-admin',      value: 'shop-admin' },
+  { label: 'shop (cashier)',  value: 'shop' },
+  { label: 'dispatch',        value: 'dispatch' },
+  { label: 'security',        value: 'security' },
+  { label: 'sales',           value: 'sales' },
+  { label: 'analyst',         value: 'analyst' },
+  { label: 'finance',         value: 'finance' },
+]
+function defaultRouteForRole(r) {
+  if (canAccessOrders(r))   return '/orders/scan'
+  if (canAccessInvoices(r)) return '/invoices/scan'
+  if (canAccessReports(r))  return '/reports'
+  if (canAccessFinance(r))  return '/finance'
+  if (canAccessPos(r))      return '/pos'
+  return '/'
+}
+
+function onSwitchRole(value) {
+  auth.setImpersonatedRole(value || null)
+  // Push to the default landing for the effective role so the user lands
+  // somewhere they're allowed to view. The sidebar already re-renders via
+  // the `role` computed above.
+  router.push(defaultRouteForRole(auth.effectiveRole))
+}
 
 const companyOptions = computed(() =>
   company.companies.length
@@ -246,24 +371,50 @@ function closeSidebarOnMobile() {
 }
 .sidebar-collapse-btn:hover { color: var(--bc-text); background: var(--bc-surface-raised); }
 
-.company-switcher {
+.company-switcher,
+.role-switcher {
   padding: 12px 12px 8px;
   border-bottom: 1px solid var(--bc-border);
   flex-shrink: 0;
 }
-.company-select { width: 100%; font-size: 13px; }
+.company-select,
+.role-select { width: 100%; font-size: 13px; }
+
+.role-switcher { padding-top: 8px; padding-bottom: 8px; }
+.impersonation-hint {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: #f59e0b;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .section-label {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--bc-text-muted);
-  padding: 0 12px;
-  margin-bottom: 4px;
+  padding: 6px 12px;
+  margin: 0;
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  transition: color 0.12s, background 0.12s;
+  border-radius: 4px;
 }
+.section-label::-webkit-details-marker { display: none; }
+.section-label::before {
+  content: '▶'; font-size: 7px; color: var(--bc-text-muted);
+  transition: transform 0.15s; display: inline-block;
+}
+details.nav-section[open] > .section-label::before { transform: rotate(90deg); }
+details.nav-section > .section-label:hover { color: #fff; background: rgba(255,255,255,0.04); }
 
 .sidebar-nav {
   flex: 1;
@@ -274,11 +425,13 @@ function closeSidebarOnMobile() {
 }
 
 .nav-section {
-  padding: 10px 0 6px;
+  padding: 4px 0 6px;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
+details.nav-section { display: block; }
+details.nav-section[open] { padding-bottom: 8px; }
 
 .nav-item {
   display: flex;

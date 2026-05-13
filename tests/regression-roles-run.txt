@@ -1,0 +1,49 @@
+API_BASE = http://localhost:4000/api
+── Phase 0: anonymous access ──────────────────────
+  anon: 27 pass, 0 fail (expected 401 on every route)
+── Phase 1: login each role ───────────────────────
+  ok   login admin      as reg_admin
+  ok   login shop-admin as reg_shopadmin
+  ok   login shop       as reg_shop
+  ok   login dispatch   as reg_dispatch
+  ok   login security   as reg_security
+  ok   login sales      as reg_sales
+  ok   login analyst    as reg_analyst
+  ok   login finance    as reg_finance
+── Phase 2: role × route matrix ───────────────────
+                                        admin   shop-a  shop    dispat  securi  sales   analys  financ  
+  GET /orders                             200✓    403✓    403✓    200✓    403✓    403✓    403✓    403✓    
+  GET /orders/summary                     200✓    403✓    403✓    403✓    403✓    200✓    200✓    403✓    
+  GET /invoices                           500✓    403✓    403✓    403✓    500✓    403✓    403✓    403✓    
+  GET /invoices/summary                   200✓    403✓    403✓    403✓    403✓    200✓    200✓    403✓    
+  GET /bc-reports/companies               200✓    403✓    403✓    403✓    403✓    200✓    200✓    403✓    
+  GET /admin/users                        200✓    403✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /admin/settings/smtp                200✓    403✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /finance/gl-mappings                200✓    403✓    403✓    403✓    403✓    403✓    200✓    200✓    
+  GET /pos/items                          200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/payment-types                  200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/my-shop                        200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/contacts                       200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/orders                         200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/till/current                   200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/stock-requests                 200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/transfers                      200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/portionings                    200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/write-offs                     200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/manual-sales                   200✓    200✓    200✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/targets                        400✓    400✓    400✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/shops                    200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/items                    200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/categories               200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/cashier-shops            200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/print-config             200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/setup/etims-config             200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+  GET /pos/coupons                        200✓    200✓    403✓    403✓    403✓    403✓    403✓    403✓    
+
+── Summary ────────────────────────────────────────
+  Anonymous   : 27/27 passed (401 expected on every route)
+  Allow gates : 68/68 passed (non-401/403 expected)
+  Deny  gates : 148/148 passed (403 expected)
+  Mismatches  : 0
+
+✓ ALL PASS — exit 0
