@@ -23,8 +23,20 @@ export async function receiveOrder(req, res) {
     logger.info('Order received from BC', { company: req.companyId, orderNo: header.orderNo });
     return res.status(201).json({ message: 'Order saved', orderNo: header.orderNo });
   } catch (err) {
-    logger.error('receiveOrder error', { error: err.message });
-    return res.status(500).json({ error: err.message });
+    logger.error('receiveOrder error', {
+      error:    err.message,
+      sqlState: err.code || err.number,
+      orderNo:  req.body?.header?.orderNo,
+      company:  req.companyId,
+      stack:    err.stack,
+    });
+    // Surface enough context that the BC operator can act on the response
+    return res.status(500).json({
+      error:   err.message,
+      orderNo: req.body?.header?.orderNo || null,
+      company: req.companyId || null,
+      sqlCode: err.code || err.number || null,
+    });
   }
 }
 
@@ -36,6 +48,66 @@ export async function listOrders(req, res) {
     return res.json(orders);
   } catch (err) {
     logger.error('listOrders error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/orders/:orderNo/parts — order grouped by Part, with per-part confirmation status. */
+export async function getOrderParts(req, res) {
+  try {
+    const result = await Order.getParts(req.companyId, req.params.orderNo);
+    if (!result) return res.status(404).json({ error: 'Order not found' });
+    return res.json(result);
+  } catch (err) {
+    logger.error('getOrderParts error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** POST /api/orders/:orderNo/parts/:part/confirm — confirm a single part. Idempotent. */
+export async function confirmOrderPart(req, res) {
+  try {
+    const { orderNo, part } = req.params;
+    const { userId, userName } = req.user;
+
+    const r = await Order.confirmPart(req.companyId, orderNo, part, userId, userName);
+
+    if (r?.duplicate) {
+      // Audit the duplicate attempt — useful for forensics, mirrors OrderCopy semantics.
+      await Order.audit(req.companyId, 'OrderPartCopy', `${orderNo}/${part}`, 'OrderPart', userId, userName, {
+        attemptedAt:        new Date().toISOString(),
+        previousConfirmedAt: r.ConfirmedAt,
+        previousConfirmedBy: r.ConfirmedBy,
+      });
+      return res.status(409).json({
+        error: 'Part already confirmed',
+        code: 'ALREADY_CONFIRMED',
+        confirmedAt: r.ConfirmedAt,
+        confirmedBy: r.ConfirmedBy,
+        confirmedByName: r.ConfirmedByName,
+      });
+    }
+
+    await Order.audit(req.companyId, 'OrderPartConfirmed', `${orderNo}/${part}`, 'OrderPart', userId, userName, {
+      part,
+      orderNo,
+      allConfirmed: !!r?.allConfirmed,
+    });
+
+    if (r?.allConfirmed) {
+      await Order.audit(req.companyId, 'OrderConfirmed', orderNo, 'Order', userId, userName, {
+        viaPartConfirmation: true,
+      });
+    }
+
+    return res.json({
+      message: 'Part confirmed',
+      orderNo, part,
+      allConfirmed: !!r?.allConfirmed,
+    });
+  } catch (err) {
+    if (err.code === 'PART_NOT_FOUND') return res.status(404).json({ error: err.message });
+    logger.error('confirmOrderPart error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 }

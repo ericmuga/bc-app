@@ -13,10 +13,22 @@ import * as reportCtrl  from '../controllers/reportController.js';
 import * as adminCtrl   from '../controllers/adminController.js';
 import * as financeCtrl from '../controllers/financeController.js';
 import * as mgmtCtrl    from '../controllers/mgmtController.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES } from '../services/access.js';
+import * as posCtrl     from '../controllers/posController.js';
+import * as posStockCtrl from '../controllers/posStockController.js';
+import * as posTillCtrl  from '../controllers/posTillController.js';
+import * as posYieldCtrl  from '../controllers/posYieldController.js';
+import * as posTargetCtrl from '../controllers/posTargetController.js';
+import * as posCouponCtrl from '../controllers/posCouponController.js';
+import * as auditCtrl     from '../controllers/auditController.js';
+import { auditMiddleware } from '../services/audit.js';
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
+
+// Mount audit middleware: records every successful POS mutation after the response is sent.
+// Sits before the controllers so it can read req.body; uses res.on('finish') so it never blocks.
+router.use(auditMiddleware);
 
 // ── Companies ─────────────────────────────────────────────────────────────────
 router.get( '/companies', authMiddleware, companyCtrl.listCompanies);
@@ -31,15 +43,19 @@ router.post('/webhook/invoices', webhookAuth, company, invoiceCtrl.receiveInvoic
 router.get( '/orders',                   authMiddleware, requireRole(...ORDER_ROLES), company, orderCtrl.listOrders);
 router.get( '/orders/summary',           authMiddleware, requireRole(...REPORT_ROLES), company, orderCtrl.orderSummary);
 router.get( '/orders/lines',             authMiddleware, requireRole(...REPORT_ROLES), company, orderCtrl.exportOrderLines);
-router.get( '/orders/:orderNo',          authMiddleware, requireRole(...ORDER_ROLES), company, orderCtrl.getOrder);
-router.post('/orders/:orderNo/confirm',  authMiddleware, requireRole(...ORDER_ROLES), company, orderCtrl.confirmOrder);
-router.get( '/orders/:orderNo/audit',    authMiddleware, requireRole(...ORDER_ROLES), company, orderCtrl.getOrderAudit);
+router.get( '/orders/:orderNo',                ...[authMiddleware, requireRole(...ORDER_ROLES), company], orderCtrl.getOrder);
+router.post('/orders/:orderNo/confirm',        ...[authMiddleware, requireRole(...ORDER_ROLES), company], orderCtrl.confirmOrder);
+router.get( '/orders/:orderNo/audit',          ...[authMiddleware, requireRole(...ORDER_ROLES), company], orderCtrl.getOrderAudit);
+// Per-part confirmation (orders only — invoices are not parts-based)
+router.get( '/orders/:orderNo/parts',                  ...[authMiddleware, requireRole(...ORDER_ROLES), company], orderCtrl.getOrderParts);
+router.post('/orders/:orderNo/parts/:part/confirm',    ...[authMiddleware, requireRole(...ORDER_ROLES), company], orderCtrl.confirmOrderPart);
 
 // ── Invoice routes (App UI) ──────────────────────────────────────────────────
 router.get( '/invoices',                   authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.listInvoices);
 router.get( '/invoices/summary',           authMiddleware, requireRole(...REPORT_ROLES), company, invoiceCtrl.invoiceSummary);
 router.get( '/invoices/lines',             authMiddleware, requireRole(...REPORT_ROLES), company, invoiceCtrl.exportInvoiceLines);
 router.get( '/invoices/by-qrcode',         authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getByQRCode);
+router.get( '/invoices/by-barcode/:code',  authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getByBarcode);
 router.get( '/invoices/:invoiceNo',        authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getInvoice);
 router.post('/invoices/:invoiceNo/confirm',authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.confirmInvoice);
 router.get( '/invoices/:invoiceNo/audit',  authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getInvoiceAudit);
@@ -108,6 +124,196 @@ router.get('/mgmt/templates/:templateId/measures',               ...canMgmt,   m
 router.post('/mgmt/templates/:templateId/measures',              ...adminOnly, mgmtCtrl.saveMeasure);
 router.patch('/mgmt/templates/:templateId/measures/:measureId',  ...adminOnly, mgmtCtrl.saveMeasure);
 router.delete('/mgmt/templates/:templateId/measures/:measureId', ...adminOnly, mgmtCtrl.deleteMeasure);
+
+// ── POS terminal ─────────────────────────────────────────────────────────────
+const canPos    = [authMiddleware, requireRole(...POS_ROLES)];
+const canManage = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
+router.get( '/pos/items',                          ...canPos, posCtrl.getItems);
+router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
+router.get( '/pos/my-shop',                        ...canPos, posCtrl.getMyShop);
+router.get( '/pos/contacts',                       ...canPos, posCtrl.listContacts);
+router.post('/pos/contacts',                       ...canPos, posCtrl.createContact);
+router.get( '/pos/walk-in',                        ...canPos, posCtrl.getMyWalkIn);
+router.post('/pos/orders',                         ...canPos, posCtrl.createOrder);
+router.get( '/pos/orders',                         ...canPos, posCtrl.listOrders);
+router.get( '/pos/orders/:orderId',                ...canPos, posCtrl.getOrder);
+router.put( '/pos/orders/:orderId/lines',          ...canPos, posCtrl.setOrderLines);
+router.post('/pos/orders/:orderId/checkout',       ...canPos, posCtrl.checkout);
+router.post('/pos/orders/:orderId/checkout-multi', ...canPos, posCtrl.checkoutMulti);
+router.post('/pos/orders/:orderId/complete',       ...canPos, posCtrl.completeOrder);
+router.patch('/pos/orders/:orderId/contact',       ...canPos, posCtrl.setOrderContact);
+router.post('/pos/orders/:orderId/cancel',         ...canPos, posCtrl.cancelOrder);
+router.post('/pos/orders/:orderId/save',           ...canPos, posCtrl.saveCart);
+router.post('/pos/orders/:orderId/resume',         ...canPos, posCtrl.resumeCart);
+router.post('/pos/orders/:orderId/reprint',        ...canPos, posCtrl.reprintOrder);
+router.post('/pos/orders/:orderId/sign',           ...canPos, posCtrl.signOrder);
+router.get( '/pos/orders/:orderId/etims-preview',  ...canPos, posCtrl.previewEtimsPayload);
+router.get( '/pos/orders/:orderId/pdf',            ...canPos, posCtrl.getOrderPdf);
+router.post('/pos/orders/:orderId/print-confirmation', ...canPos, posCtrl.printConfirmation);
+router.post('/pos/orders/:orderId/stk-push',       ...canPos, posCtrl.stkPush);
+router.get( '/pos/payments/fetch',                 ...canPos, posCtrl.fetchPayments);
+router.get( '/pos/payments/fetch-mpesa',           ...canPos, posCtrl.fetchMpesaLocal);
+// Daraja STK callback — public, no auth (Safaricom posts here). Tolerates duplicates / unmatched.
+router.post('/pos/payments/mpesa-callback',        posCtrl.mpesaCallback);
+
+router.get( '/pos/favourites',                     ...canPos, posCtrl.listFavourites);
+router.post('/pos/favourites',                     ...canPos, posCtrl.addFavourite);
+router.delete('/pos/favourites/:itemNo',           ...canPos, posCtrl.removeFavourite);
+
+router.get( '/pos/shops',                          ...canPos, posCtrl.listShopsForTerminal);
+router.get( '/pos/price-list/pdf',                 ...canPos, posCtrl.getPriceListPdf);
+router.post('/pos/payments/:paymentId/confirm',    ...canPos, posCtrl.confirmPayment);
+
+// ── POS Stock: requests, daily report, stock take ───────────────────────────
+router.get(  '/pos/stock-requests',                            ...canPos, posStockCtrl.listRequests);
+router.post( '/pos/stock-requests',                            ...canPos, posStockCtrl.createRequest);
+router.get(  '/pos/stock-requests/:requestId',                 ...canPos, posStockCtrl.getRequest);
+router.put(  '/pos/stock-requests/:requestId/lines',           ...canPos, posStockCtrl.setRequestLines);
+router.post( '/pos/stock-requests/:requestId/submit',          ...canPos, posStockCtrl.submitRequest);
+router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, posStockCtrl.approveRequest);
+router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
+router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
+
+router.get(  '/pos/stock/daily-movements',                     ...canPos, posStockCtrl.dailyReport);
+
+// ── POS Reports hub (admin / shop-admin shop-comparison; others scope to own shop) ──
+router.get(  '/pos/reports/stock-position',                    ...canPos,    posStockCtrl.reportStockPosition);
+router.get(  '/pos/reports/sales-by-item',                     ...canPos,    posStockCtrl.reportSalesByItem);
+router.get(  '/pos/reports/sales-by-contact',                  ...canPos,    posStockCtrl.reportSalesByContact);
+router.get(  '/pos/reports/shop-comparison',                   ...canManage, posStockCtrl.reportShopComparison);
+router.get(  '/pos/reports/cash-movement',                     ...canPos,    posTillCtrl.reportCashMovement);
+router.get(  '/pos/stock/daily-movements.csv',                 ...canPos, posStockCtrl.dailyReportCsv);
+router.get(  '/pos/stock/item-transactions',                   ...canPos, posStockCtrl.itemTransactions);
+
+// ── POS Till (cash sessions, transactions, cash report) ────────────────────
+router.get(  '/pos/till/current',                              ...canPos, posTillCtrl.currentSession);
+router.get(  '/pos/till/sessions',                             ...canPos, posTillCtrl.listSessions);
+router.post( '/pos/till/sessions',                             ...canPos, posTillCtrl.openSession);
+router.get(  '/pos/till/sessions/:sessionId',                  ...canPos, posTillCtrl.getSession);
+router.post( '/pos/till/sessions/:sessionId/transactions',     ...canPos, posTillCtrl.addTransaction);
+router.post( '/pos/till/sessions/:sessionId/close',            ...canPos, posTillCtrl.closeSession);
+router.get(  '/pos/till/sessions/:sessionId/report',           ...canPos, posTillCtrl.getCashReport);
+
+// ── POS Yield: third-party enrolment, transfers, portioning, write-offs ───
+
+router.get(  '/pos/third-parties',                             ...canPos, posYieldCtrl.listThirdParties);
+router.post( '/pos/third-parties',                             ...canManage, posYieldCtrl.saveThirdParty);
+router.patch('/pos/third-parties/:thirdPartyId',               ...canManage, posYieldCtrl.saveThirdParty);
+router.delete('/pos/third-parties/:thirdPartyId',              ...canManage, posYieldCtrl.deleteThirdParty);
+
+router.get(  '/pos/transfers',                                 ...canPos, posYieldCtrl.listTransfers);
+router.post( '/pos/transfers',                                 ...canManage, posYieldCtrl.createTransfer);
+router.get(  '/pos/transfers/:transferId',                     ...canPos, posYieldCtrl.getTransfer);
+router.put(  '/pos/transfers/:transferId/lines',               ...canManage, posYieldCtrl.setTransferLines);
+router.post( '/pos/transfers/:transferId/post',                ...canManage, posYieldCtrl.postTransfer);
+
+router.get(  '/pos/portionings',                               ...canPos, posYieldCtrl.listPortionings);
+router.post( '/pos/portionings',                               ...canManage, posYieldCtrl.createPortioning);
+router.get(  '/pos/portionings/:portioningId',                 ...canPos, posYieldCtrl.getPortioning);
+router.put(  '/pos/portionings/:portioningId/lines',           ...canManage, posYieldCtrl.setPortioningLines);
+router.post( '/pos/portionings/:portioningId/post',            ...canManage, posYieldCtrl.postPortioning);
+
+router.get(  '/pos/write-offs',                                ...canPos, posYieldCtrl.listWriteOffs);
+router.post( '/pos/write-offs',                                ...canManage, posYieldCtrl.postWriteOff);
+
+router.get(  '/pos/manual-sales',                              ...canPos, posYieldCtrl.listManualSales);
+router.post( '/pos/manual-sales',                              ...canManage, posYieldCtrl.recordManualSale);
+router.post( '/pos/manual-sales/batch',                        ...canManage, posYieldCtrl.recordManualSaleBatch);
+
+router.get(  '/pos/reports/yield',                             ...canPos, posYieldCtrl.yieldReport);
+router.get(  '/pos/exports/:kind',                             ...canPos, posYieldCtrl.exportYieldCsv);
+
+// ── POS Coupons (admin / shop-admin) ───────────────────────────────────────
+router.get(  '/pos/coupons',                              ...canManage, posCouponCtrl.listCoupons);
+router.post( '/pos/coupons',                              ...canManage, posCouponCtrl.issueCoupon);
+router.get(  '/pos/coupons/:code',                        ...canPos,    posCouponCtrl.getCoupon);
+router.get(  '/pos/coupons/:code/ledger',                 ...canManage, posCouponCtrl.listLedger);
+router.post( '/pos/coupons/:code/redeem',                 ...canPos,    posCouponCtrl.redeemCoupon);
+router.post( '/pos/coupons/:code/void',                   ...canManage, posCouponCtrl.voidCoupon);
+router.get(  '/pos/coupons/:code/pdf',                    ...canManage, posCouponCtrl.couponPdf);
+router.post( '/pos/coupons/:code/email',                  ...canManage, posCouponCtrl.emailCoupon);
+
+// ── POS Targets (shop-admin) ───────────────────────────────────────────────
+router.get(  '/pos/targets',                                   ...canPos,    posTargetCtrl.listTargets);
+router.post( '/pos/targets',                                   ...canManage, posTargetCtrl.saveTarget);
+router.delete('/pos/targets/:targetId',                        ...canManage, posTargetCtrl.deleteTarget);
+router.post( '/pos/targets/batch',                             ...canManage, posTargetCtrl.saveTargetsBatch);
+router.post( '/pos/targets/copy',                              ...canManage, posTargetCtrl.copyTargets);
+router.get(  '/pos/targets/achievement',                       ...canPos,    posTargetCtrl.achievementReport);
+
+// ── Audit log (admin / shop-admin) ─────────────────────────────────────────
+const auditOnly = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
+router.get(  '/audit',          ...auditOnly, auditCtrl.listEntries);
+router.get(  '/audit/by-user',  ...auditOnly, auditCtrl.listByUser);
+router.get(  '/audit.csv',      ...auditOnly, auditCtrl.exportCsv);
+
+router.get(  '/pos/stock-takes',                               ...canPos, posStockCtrl.listTakes);
+router.post( '/pos/stock-takes',                               ...canPos, posStockCtrl.createTake);
+router.get(  '/pos/stock-takes/:stockTakeId',                  ...canPos, posStockCtrl.getTake);
+router.patch('/pos/stock-takes/:stockTakeId/lines/:lineId',    ...canPos, posStockCtrl.updateTakeLine);
+router.post( '/pos/stock-takes/:stockTakeId/complete',         ...canPos, posStockCtrl.completeTake);
+router.post( '/pos/stock-takes/:stockTakeId/submit',           ...canPos,    posStockCtrl.submitTake);
+router.post( '/pos/stock-takes/:stockTakeId/approve',          ...canManage, posStockCtrl.approveTake);
+router.get(  '/pos/stock-takes/:stockTakeId/bc-journal.csv',   ...canManage, posStockCtrl.exportTakeBcJournal);
+router.get(  '/pos/stock-requests/:requestId/bc-journal.csv',  ...canManage, posStockCtrl.exportRequestBcJournal);
+
+// ── POS admin setup ───────────────────────────────────────────────────────────
+// POS setup is scoped to POS_MANAGER_ROLES (admin + shop-admin). Global admin
+// concerns (Users, SMTP, schedules, finance) stay on adminOnly above.
+router.get(   '/pos/setup/shops',                  ...canManage, posCtrl.listShops);
+router.post(  '/pos/setup/shops',                  ...canManage, posCtrl.saveShop);
+router.patch( '/pos/setup/shops/:shopId',          ...canManage, posCtrl.saveShop);
+router.delete('/pos/setup/shops/:shopId',          ...canManage, posCtrl.deleteShop);
+
+router.get(   '/pos/setup/categories',             ...canManage, posCtrl.listCategories);
+router.post(  '/pos/setup/categories',             ...canManage, posCtrl.saveCategory);
+router.patch( '/pos/setup/categories/:categoryId', ...canManage, posCtrl.saveCategory);
+router.delete('/pos/setup/categories/:categoryId', ...canManage, posCtrl.deleteCategory);
+
+router.get(   '/pos/setup/items',                  ...canManage, posCtrl.listSetupItems);
+router.get(   '/pos/setup/bc-items',               ...canManage, posCtrl.listBcItems);
+router.get(   '/pos/setup/bc-contacts',            ...canManage, posCtrl.listBcContacts);
+router.post(  '/pos/setup/contacts/import',        ...canManage, posCtrl.importContacts);
+router.get(   '/pos/setup/contacts',               ...canManage, posCtrl.listSetupContacts);
+router.delete('/pos/setup/contacts/:contactId',    ...canManage, posCtrl.deleteSetupContact);
+router.post(  '/pos/setup/items',                  ...canManage, posCtrl.saveItem);
+router.patch( '/pos/setup/items/:itemId',          ...canManage, posCtrl.saveItem);
+router.delete('/pos/setup/items/:itemId',          ...canManage, posCtrl.deleteItem);
+
+router.post(  '/pos/setup/sync-from-bc',           ...canManage, posCtrl.syncFromBc);
+router.post(  '/pos/setup/sync-from-bc/:kind',     ...canManage, posCtrl.syncStepFromBc);
+
+// Cashier ↔ Shops
+router.get(   '/pos/setup/cashier-shops',          ...canManage, posCtrl.listCashiersWithShops);
+router.get(   '/pos/setup/cashier-shops/:userId',  ...canManage, posCtrl.getCashierShops);
+router.put(   '/pos/setup/cashier-shops/:userId',  ...canManage, posCtrl.setCashierShops);
+router.get(   '/pos/setup/vat-rates',              ...canManage, posCtrl.listVatRates);
+router.post(  '/pos/setup/vat-rates',              ...canManage, posCtrl.saveVatRate);
+router.patch( '/pos/setup/vat-rates/:vatRateId',   ...canManage, posCtrl.saveVatRate);
+router.delete('/pos/setup/vat-rates/:vatRateId',   ...canManage, posCtrl.deleteVatRate);
+
+router.get(   '/pos/setup/special-prices',                       ...canManage, posCtrl.listSpecialPrices);
+router.post(  '/pos/setup/special-prices',                       ...canManage, posCtrl.saveSpecialPrice);
+router.patch( '/pos/setup/special-prices/:specialPriceId',       ...canManage, posCtrl.saveSpecialPrice);
+router.delete('/pos/setup/special-prices/:specialPriceId',       ...canManage, posCtrl.deleteSpecialPrice);
+router.post(  '/pos/setup/special-prices/import',                ...canManage, posCtrl.importSpecialPricesBatch);
+router.get(   '/pos/setup/special-prices.csv',                   ...canManage, posCtrl.exportSpecialPricesCsv);
+router.get(   '/pos/setup/special-prices/template.csv',          ...canManage, posCtrl.specialPricesTemplate);
+
+router.get(   '/pos/setup/print-config',           ...canManage, posCtrl.getPrintCfg);
+router.post(  '/pos/setup/print-config',           ...canManage, posCtrl.savePrintCfg);
+router.get(   '/pos/setup/printers',               ...canManage, posCtrl.listPrinters);
+
+router.get(   '/pos/setup/etims-config',           ...canManage, posCtrl.getEtimsCfg);
+router.post(  '/pos/setup/etims-config',           ...canManage, posCtrl.saveEtimsCfg);
+router.get(   '/pos/setup/etims-config/bc-defaults', ...canManage, posCtrl.getEtimsBcDefaults);
+
+router.get(   '/pos/setup/inventory-config',       ...canManage, posCtrl.getInventoryCfg);
+router.post(  '/pos/setup/inventory-config',       ...canManage, posCtrl.saveInventoryCfg);
+router.get(   '/pos/setup/payment-types',          ...canManage, posCtrl.listSetupPaymentTypes);
+router.post(  '/pos/setup/payment-types',          ...canManage, posCtrl.savePaymentType);
+router.patch( '/pos/setup/payment-types/:typeId',  ...canManage, posCtrl.savePaymentType);
+router.delete('/pos/setup/payment-types/:typeId',  ...canManage, posCtrl.deletePaymentType);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login);

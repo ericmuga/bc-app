@@ -11,7 +11,7 @@ export async function receiveInvoice(req, res) {
   try {
     const {
       orderNo, invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
-      etimsInvoiceNo, etimsData, qrcodeUrl, lines,
+      etimsInvoiceNo, etimsData, qrcodeUrl, barcode, lines,
       customerPin, salespersonName, shipToName, shipmentMethod, paymentTerms, externalDocNo,
       companyName, companyPin, companyEmail, companyVatReg, noPrinted,
     } = req.body;
@@ -22,6 +22,9 @@ export async function receiveInvoice(req, res) {
     const invoiceFields = {
       invoiceNo, invoicedAt, postingDate, printingDatetime, bcUserId,
       etimsInvoiceNo, etimsData, qrcodeUrl,
+      // Default the barcode to the invoice number itself when BC doesn't supply one — that way
+      // the printed receipt's barcode and the InvoiceNo / QR all resolve to the same record.
+      barcode: barcode || invoiceNo,
       customerPin, salespersonName, shipToName, shipmentMethod, paymentTerms, externalDocNo,
       companyName, companyPin, companyEmail, companyVatReg, noPrinted,
     };
@@ -115,6 +118,20 @@ export async function getInvoiceAudit(req, res) {
     const log = await Invoice.getAuditLog(req.companyId, req.params.invoiceNo);
     return res.json(log);
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/invoices/by-barcode/:code  — used by the scanner */
+export async function getByBarcode(req, res) {
+  try {
+    const code = String(req.params.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'barcode required' });
+    const doc = await Invoice.findByBarcode(req.companyId, code);
+    if (!doc) return res.status(404).json({ error: 'Invoice not found for this barcode' });
+    return res.json(doc);
+  } catch (err) {
+    logger.error('getByBarcode error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 }

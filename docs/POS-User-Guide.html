@@ -1,0 +1,114 @@
+<!doctype html><html><head><meta charset="utf-8"><title>POS-User-Guide</title>
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; max-width: 1080px; margin: 24px auto; padding: 0 20px; color: #1f2937; }
+  h1, h2, h3, h4 { color: #0f172a; }
+  h1 { border-bottom: 2px solid #0f7173; padding-bottom: 6px; }
+  h2 { border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; margin-top: 28px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.92em; }
+  pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 10px 12px; overflow: auto; }
+  pre code { background: transparent; padding: 0; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 16px 0; }
+</style></head><body><h1>POS Module — User Guide</h1>
+<p><strong>Version:</strong> 1.0  ·  <strong>Audience:</strong> Cashiers, Shop Managers, IT Admins, Finance</p>
+<hr/>
+<h2>Contents</h2>
+<ol><li>Logging in</li><li>Roles</li><li>Cashier — Daily routine</li><li>Cashier — Taking a sale</li><li>Cashier — Stock requests</li><li>Cashier — Stock take</li><li>Manager — Transfers, portioning, write-offs</li><li>Manager — Manual sales</li><li>Manager — Targets and coupons</li><li>Reports</li><li>IT Admin — BC sync (catalogue &amp; shops)</li><li>IT Admin — Users, roles, cashier-shop assignment</li><li>IT Admin — Setups (eTIMS, MPESA, printer, SMTP, schedules)</li><li>Troubleshooting</li></ol>
+<hr/>
+<h2>1. Logging in</h2>
+<p>Open <code>https://&lt;your-host&gt;/login</code>.</p>
+<ul><li><strong>Local account</strong> — Username + Password (assigned by IT).</li><li><strong>Active Directory</strong> — Click <em>AD Login</em>; enter your domain credentials.</li></ul>
+<p>After login the system routes you to the page that matches your role:</p>
+<table>
+<thead><tr><th>Role</th><th>Default page</th></tr></thead>
+<tbody><tr><td><code>admin</code></td><td>Orders Scan</td></tr><tr><td><code>dispatch</code></td><td>Orders Scan</td></tr><tr><td><code>security</code></td><td>Invoice Scan</td></tr><tr><td><code>sales</code>, <code>analyst</code></td><td>Reports</td></tr><tr><td><code>finance</code></td><td>Finance Reports</td></tr><tr><td><code>shop</code>, <code>shop-admin</code></td><td>POS terminal</td></tr></tbody>
+</table>
+<p>If you ever land on Login again right after entering correct credentials, your role isn't mapped — contact IT.</p>
+<hr/>
+<h2>2. Roles</h2>
+<table>
+<thead><tr><th>Role</th><th>Can do</th></tr></thead>
+<tbody><tr><td><code>admin</code></td><td>Everything</td></tr><tr><td><code>shop-admin</code></td><td>All POS scope (cart, checkout, transfers, portioning, write-offs, manual sales, master-data sync, cashier-shop assignment). <strong>Cannot</strong> access Users, SMTP, Schedules, Finance</td></tr><tr><td><code>shop</code> (cashier)</td><td>Cart, checkout, view shop reports, stock requests, stock take. <strong>Cannot</strong> post transfers/portioning/write-offs</td></tr><tr><td><code>dispatch</code></td><td>Orders only (scan, confirm)</td></tr><tr><td><code>security</code></td><td>Invoices only (scan, confirm)</td></tr><tr><td><code>sales</code>, <code>analyst</code></td><td>Reports only</td></tr><tr><td><code>finance</code></td><td>Finance reports + GL queries</td></tr></tbody>
+</table>
+<hr/>
+<h2>3. Cashier — Daily routine</h2>
+<p><strong>Opening the shift</strong> 1. Log in. POS terminal loads. 2. <em>Top right</em> → <strong>Open Till</strong>. Enter your opening cash float. Press <strong>Open</strong>. 3. The till banner shows <em>Open since hh:mm — Float Ksh n,nnn</em>.</p>
+<p>You cannot take card or cash payments without an open till.</p>
+<p><strong>During the shift</strong> - Take orders (Section 4). - Add cash payouts (e.g. petty cash) via <em>Till → Add Transaction → Type: Payout</em>. - Suspend a cart with <strong>Save</strong> if a customer steps away. Resume it from <em>Saved Carts</em>.</p>
+<p><strong>Closing the shift</strong> 1. <em>Top right</em> → <strong>Close Till</strong>. 2. Count the drawer; enter counted cash. 3. The system computes variance = counted − (float + cash sales − payouts). 4. Confirm. The shift report PDF prints automatically.</p>
+<hr/>
+<h2>4. Cashier — Taking a sale</h2>
+<ol><li>Choose customer:</li></ol>
+<ul><li><strong>Walk-in</strong> (default) — no KRA PIN on receipt.</li><li><strong>Sub-contact</strong> — type 3+ chars; pick from the list. Receipt will show their KRA PIN.</li></ul>
+<ol><li>Add items:</li></ol>
+<ul><li><strong>Tap</strong> an item card.</li><li>Or scan a barcode (works across categories).</li><li>Set quantity in the cart line.</li></ul>
+<ol><li><strong>Discounts:</strong> apply a coupon code in the cart footer. The discount line appears below subtotal.</li><li><strong>Checkout</strong> → choose payment method(s):</li></ol>
+<ul><li>Single tender — pick one method, type amount.</li><li>Split tender — <em>Add Method</em>; the remainder auto-fills.</li></ul>
+<ol><li><strong>MPESA STK push:</strong></li></ol>
+<ul><li>Enter customer phone, <em>Push</em>.</li><li>Phone receives prompt; customer enters PIN.</li><li>Terminal polls; on confirmation the receipt prints.</li><li>If timeout: switch to another tender or save as abandoned.</li></ul>
+<ol><li><strong>Cash:</strong> enter received cash; change due is shown and printed.</li><li>Receipt prints automatically (72 mm thermal). eTIMS submission happens in the background; the control unit code is included.</li></ol>
+<p><strong>Failure paths</strong> - <em>No stock</em> → the item shows Remaining = 0 and the Add button is disabled. - <em>eTIMS down</em> → checkout still completes, payload is queued for retry; manager sees pending eTIMS in the report hub. - <em>Printer offline</em> → receipt still saved; reprint from Orders list once the printer is back.</p>
+<hr/>
+<h2>5. Cashier — Stock requests</h2>
+<p>Use this when you need stock from the central store.</p>
+<ol><li><em>Sidebar</em> → <strong>Stock Requests</strong> → <strong>New</strong>.</li><li>Add items + quantity needed.</li><li><strong>Submit</strong>. The request enters <em>pending approval</em>.</li><li>Admin approves it. You'll see status update.</li><li>When the goods arrive, open the request → <em>Receive Lines</em>. Enter received qty + comments per line.</li><li><strong>Complete</strong>. Stock is added to your shop's location.</li></ol>
+<p>The admin can export a BC item-journal CSV for the request from the same page.</p>
+<hr/>
+<h2>6. Cashier — Stock take</h2>
+<p>Run periodically to reconcile system stock with what's physically on the shelf.</p>
+<ol><li><strong>Stock Take → New</strong>. Lines pre-fill with all shop items + system quantity.</li><li>Walk the shop, count, type <strong>Counted Qty</strong>.</li><li><strong>Complete</strong> — variance per line is shown.</li><li><strong>Submit</strong> → admin reviews, approves.</li><li>Once approved, the BC physical-inventory journal CSV is available; importing it in BC reconciles the books.</li></ol>
+<hr/>
+<h2>7. Manager — Transfers, portioning, write-offs</h2>
+<p>Available to <code>shop-admin</code> and <code>admin</code> only.</p>
+<p><strong>Transfer</strong> - Move stock from one shop to another, or to a third party. - <em>POS → Transfers → New</em> → pick origin, destination, lines. <strong>Save &amp; Post</strong>.</p>
+<p><strong>Portioning</strong> - One input item becomes several output items (e.g., whole carcass → cuts). - <em>POS → Yield → Portioning</em> → input card (item + qty), output card (items + qty). Footer shows gain/loss kg. - <strong>Save &amp; Post</strong> to commit.</p>
+<p><strong>Write-off</strong> - <em>POS → Yield → Write-Off</em> → item, qty, reason. - The deduction appears in the Yield report.</p>
+<hr/>
+<h2>8. Manager — Manual sales</h2>
+<p>For sales completed outside the POS terminal (e.g., off-site events).</p>
+<ul><li><em>POS → Yield → Manual Sales → New</em> — record per-line.</li><li>Or <strong>Batch</strong> upload a CSV.</li><li>Resulting orders are tagged <code>Source='manual'</code>.</li></ul>
+<hr/>
+<h2>9. Manager — Targets and coupons</h2>
+<p><strong>Targets</strong> - <em>POS → Targets</em> — set per shop / per item daily targets. - Copy previous-period targets in one click. - <em>Achievement</em> tab shows actual vs target.</p>
+<p><strong>Coupons</strong> - <em>POS → Coupons</em> — issue a coupon: amount, expiry, recipient email. - The system emails a PDF with QR. - At checkout the cashier scans the QR; the discount applies and the coupon ledger debits.</p>
+<hr/>
+<h2>10. Reports</h2>
+<p>Hub at <code>/pos/reports</code>:</p>
+<ul><li><strong>Stock Position</strong> — current stock by shop &amp; category.</li><li><strong>Sales by Item</strong> — qty + revenue per item over a date range.</li><li><strong>Sales by Contact</strong> — top sub-contacts.</li><li><strong>Shop Comparison</strong> — side-by-side rev/qty/AOV.</li><li><strong>Cash Movement</strong> — across till sessions.</li><li><strong>Yield</strong> — gain/loss summation across portionings.</li><li><strong>Targets vs Actual</strong> — achievement %.</li><li><strong>Audit Log</strong> — full action trail (admin only).</li></ul>
+<p>All reports support Excel + PDF export.</p>
+<hr/>
+<h2>11. IT Admin — BC sync (catalogue &amp; shops)</h2>
+<p><em>Admin Setup → POS Setup → Sync from BC</em></p>
+<p>For each company you can run individual steps or a bulk sync.</p>
+<p><strong>Recommended order</strong> for a fresh tenant:</p>
+<ol><li><strong>Shops (FCL, with WIPE)</strong> — clears <code>PosShop</code> + <code>PosUserShop</code>. Imports outlets where <code>Customer Price Group = 'FCL SHOPS'</code>.</li><li><strong>Shops (CM, no wipe)</strong> — folds in CM customers; merges by Name (case-insensitive). Each row now has both <code>FclCustomerNo</code> and <code>CmCustomerNo</code>.</li><li><strong>Walk-in Customers (FCL)</strong> — one walk-in <code>PosContact</code> per shop.</li><li><strong>Contacts (FCL)</strong> — sub-contacts.</li><li><strong>Categories (FCL)</strong> — only categories with at least one eligible item.</li><li><strong>Items (FCL, with WIPE)</strong> — clears <code>PosItem</code>, then imports items where <code>PDA Item=1</code>, eTIMS Item Code present, sales price ≠ 0, Description ≠ 'Discontiued'. VAT% is derived (<code>VAT16 → 16</code>, else 0).</li><li><strong>Items (CM)</strong> — adds CM-sourced items (<code>SourceCompany='CM'</code>).</li><li><strong>Payment Types (FCL)</strong>.</li></ol>
+<p><strong>Per-company filter override</strong> (set in server <code>.env</code>):</p>
+<pre><code>BC_SHOP_FILTER_RMK=Customer Posting Group=RMK SHOPS</code></pre>
+<p>The default sources are: FCL = <code>Customer Price Group</code>, CM = <code>Customer Posting Group</code>. Other companies return 0 unless overridden.</p>
+<hr/>
+<h2>12. IT Admin — Users, roles, cashier-shop assignment</h2>
+<p><strong>Users</strong> <em>Admin Setup → Users</em>: add, deactivate, reset password, change role.</p>
+<p><strong>Cashiers ↔ Shops</strong> (<code>/admin/cashier-shops</code>) - Each cashier can be tagged to multiple shops (multi-company outlets). - Mark <strong>one</strong> shop as Primary — that's the default the POS opens to. - Saving writes <code>PosUserShop</code> rows and mirrors the primary to the legacy <code>Users.ShopCode</code>.</p>
+<hr/>
+<h2>13. IT Admin — Setups</h2>
+<p><strong>eTIMS</strong> — endpoint URL, PIN, customer branch ID. Test with the <em>eTIMS Payload Tester</em>.</p>
+<p><strong>MPESA / Daraja</strong> — per payment method, configure paybill, passkey, callback URL. The "STK push" toggle on a payment method enables the prompt at checkout.</p>
+<p><strong>Printer</strong> — pick the Windows printer queue and format (A4 or 72mm). Receipt format defaults to 72mm thermal.</p>
+<p><strong>SMTP</strong> — server, port, TLS, sender. Use <em>Send Test Email</em> to validate.</p>
+<p><strong>Schedules</strong> — add cron-style entries for scheduled emails (daily sales report, etc.). Recipients picked from <code>Users</code> where <code>ReceiveScheduledReports=1</code>.</p>
+<p><strong>Customer PG mapper</strong> — map BC <code>Customer Price Group</code> → POS Category for default category presentation.</p>
+<hr/>
+<h2>14. Troubleshooting</h2>
+<table>
+<thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+<tbody><tr><td>Login bounces back to /login after correct credentials</td><td>Role has no default route</td><td>IT: add the role to router-local default-route fallback (currently handles admin/sales/dispatch/security/analyst/finance/shop-admin/shop)</td></tr><tr><td>"Insufficient stock" at checkout</td><td>Live BC inventory ≤ 0 at the shop's <code>LocationCode</code></td><td>Move stock via Transfer or Stock Request → Receive</td></tr><tr><td>Item missing from POS</td><td>Filtered out by eTIMS rule (no eTIMS code, blank price, Description = 'Discontiued')</td><td>Fix in BC, then re-sync items</td></tr><tr><td>MPESA STK never confirms</td><td>Network/Daraja issue, or callback URL wrong</td><td>Check Daraja keys + callback URL in payment method config; <em>Fetch Payments</em> to reconcile</td></tr><tr><td>Receipt cuts letters</td><td>Old PDF generator</td><td>Already fixed (text baseline = 'top'); ensure server is on latest build</td></tr><tr><td>Categories list missing some</td><td>Empty (no active items) — by design</td><td>Sync items first, then categories will repopulate</td></tr><tr><td>Sync runs but 0 shops imported</td><td>Wrong filter for company</td><td>Set <code>BC_SHOP_FILTER_&lt;COMPANY&gt;</code> env or use FCL/CM defaults</td></tr><tr><td>Audit log empty</td><td><code>auditMiddleware</code> not loaded</td><td>Restart server; check <code>services/audit.js</code></td></tr><tr><td>Shop-admin sees Users section</td><td>Role mis-tagged</td><td>Ensure role string is exactly <code>shop-admin</code> (hyphenated)</td></tr></tbody>
+</table>
+<hr/>
+<h2>Appendix — Keyboard shortcuts on POS terminal</h2>
+<table>
+<thead><tr><th>Key</th><th>Action</th></tr></thead>
+<tbody><tr><td><code>F2</code></td><td>Focus search bar</td></tr><tr><td><code>F4</code></td><td>Open Cart</td></tr><tr><td><code>F8</code></td><td>Checkout</td></tr><tr><td><code>F9</code></td><td>Save cart</td></tr><tr><td><code>Esc</code></td><td>Close dialog</td></tr><tr><td><code>Enter</code> (in qty)</td><td>Confirm qty change</td></tr></tbody>
+</table>
+<p>(Available where the page sets keydown handlers — see <code>PosPage.vue</code>.)</p></body></html>

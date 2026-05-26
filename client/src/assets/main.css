@@ -168,3 +168,95 @@ html, body, #app {
   color: var(--bc-text);
   padding: 16px 18px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   GLOBAL DIALOG OVERRIDES
+   PrimeVue Dialog teleports to <body>, so scoped :deep() rules from page
+   components can't reach it. The app sets color-scheme:dark on body, which
+   makes form inputs render in dark mode and content text becomes invisible
+   on the white surface. Force light mode + explicit colors here, globally.
+   ───────────────────────────────────────────────────────────────────────── */
+.p-dialog,
+.p-dialog * {
+  color-scheme: light;
+}
+.p-dialog .p-dialog-header,
+.p-dialog .p-dialog-content,
+.p-dialog .p-dialog-footer {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+.p-dialog .p-dialog-header {
+  border-bottom: 1px solid #e5e7eb;
+}
+.p-dialog .p-dialog-title { color: #111827 !important; }
+.p-dialog label,
+.p-dialog h1, .p-dialog h2, .p-dialog h3, .p-dialog h4, .p-dialog h5,
+.p-dialog p,
+.p-dialog span,
+.p-dialog strong,
+.p-dialog div { color: #111827; }
+.p-dialog .text-muted, .p-dialog .text-sm.text-muted {
+  color: #6b7280 !important;
+}
+
+/* Form controls inside dialogs — light surface, dark text */
+.p-dialog .p-inputtext,
+.p-dialog .p-inputnumber-input,
+.p-dialog .p-select,
+.p-dialog .p-select-label,
+.p-dialog .p-textarea,
+.p-dialog .p-datepicker-input,
+.p-dialog input[type="text"],
+.p-dialog input[type="number"],
+.p-dialog input[type="tel"],
+.p-dialog input[type="search"],
+.p-dialog textarea {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+.p-dialog input::placeholder,
+.p-dialog textarea::placeholder { color: #9ca3af !important; }
+
+/* DataTables inside dialogs */
+.p-dialog .p-datatable-thead > tr > th {
+  background: #f3f4f6 !important;
+  color: #111827 !important;
+  border-color: #e5e7eb !important;
+}
+.p-dialog .p-datatable-tbody > tr {
+  background: #ffffff !important;
+}
+.p-dialog .p-datatable-tbody > tr > td {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border-color: #f3f4f6 !important;
+}
+.p-dialog .p-datatable-tbody > tr:hover > td {
+  background: #f9fafb !important;
+}
+
+/* Select / dropdown panels (also teleported) */
+.p-select-overlay,
+.p-select-list,
+.p-select-option,
+.p-datepicker,
+.p-datepicker-panel,
+.p-autocomplete-overlay,
+.p-popover,
+.p-popover-content {
+  color-scheme: light;
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+.p-select-option { color: #111827 !important; }
+.p-select-option-selected,
+.p-select-option-focus { background: #eff6ff !important; color: #1d4ed8 !important; }
+.p-datepicker-day { color: #111827 !important; }
+
+/* Tooltip stays dark on purpose */
+.p-tooltip-text { background: #111827 !important; color: #fff !important; }
+
+/* Tags inside dialogs */
+.p-dialog .p-tag { color: #fff !important; }
