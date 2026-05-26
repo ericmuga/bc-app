@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>POS-BA-Release-Readiness</title>
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; max-width: 1080px; margin: 24px auto; padding: 0 20px; color: #1f2937; }
+  h1, h2, h3, h4 { color: #0f172a; }
+  h1 { border-bottom: 2px solid #0f7173; padding-bottom: 6px; }
+  h2 { border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; margin-top: 28px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.92em; }
+  pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 10px 12px; overflow: auto; }
+  pre code { background: transparent; padding: 0; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 16px 0; }
+</style></head><body><h1>POS Module — Business Analyst Release Readiness</h1>
+<p><strong>Audience:</strong> Business Analyst, QA Lead, Operations Lead, IT Lead   <strong>Purpose:</strong> Provide a release-facing view of the POS module, the acceptance evidence required before rollout, and the go/no-go checklist for merging <code>feat/pos-module</code> to <code>main</code>.</p>
+<hr/>
+<h2>1. Rollout Summary</h2>
+<p>The POS module adds shop-level selling, inventory control, till management, coupons, POS reporting, and Business Central master-data synchronization to the existing BC app.</p>
+<p>The rollout should be treated as a controlled business process release because it affects:</p>
+<ul><li>Cashier sales and receipts.</li><li>Stock movements and shop inventory balances.</li><li>eTIMS receipt compliance.</li><li>MPESA/cash/card payment reconciliation.</li><li>BC item-journal export files.</li><li>Role-based access for shop users and shop administrators.</li></ul>
+<hr/>
+<h2>2. Feature Coverage Matrix</h2>
+<table>
+<thead><tr><th>Feature Area</th><th>Business Outcome</th><th>Primary Users</th><th>UAT Evidence</th></tr></thead>
+<tbody><tr><td>BC to POS sync</td><td>Shops, items, categories, walk-in customers, contacts, and payment methods are loaded from BC with company-specific rules</td><td>IT Admin, BA</td><td><code>POS-Test-Plan.md</code> Section A</td></tr><tr><td>Role and access control</td><td>Users see only the modules they are allowed to operate</td><td>BA, IT Admin</td><td><code>POS-Test-Plan.md</code> Section B and <code>tests/pos-unit.mjs</code></td></tr><tr><td>POS setup</td><td>Shops, items, payment methods, printers, eTIMS, MPESA, special prices, VAT, and inventory display options are maintained</td><td>IT Admin, Shop Admin</td><td><code>POS-Test-Plan.md</code> Section C</td></tr><tr><td>Cart and checkout</td><td>Cashiers sell items, select customer contacts, take split tenders, print receipts, and submit/sign eTIMS payloads</td><td>Cashier, Shop Admin</td><td><code>POS-Test-Plan.md</code> Section D and <code>pos-smoke.mjs</code></td></tr><tr><td>Stock operations</td><td>Requests, stock take, transfers, portioning, write-offs, and manual sales update shop stock movements</td><td>Cashier, Shop Admin</td><td><code>POS-Test-Plan.md</code> Section E</td></tr><tr><td>POS reports</td><td>BA and operations can validate stock, sales, cash movement, yield, targets, and audit history</td><td>BA, Operations, Shop Admin</td><td><code>POS-Test-Plan.md</code> Section F</td></tr><tr><td>Non-functional controls</td><td>Auth, concurrency, print quality, SQL injection, XSS, TLS, and rate limiting are checked</td><td>QA, IT Admin</td><td><code>POS-Test-Plan.md</code> Section G</td></tr></tbody>
+</table>
+<hr/>
+<h2>3. Acceptance Evidence</h2>
+<p>Before production rollout, attach or reference the following evidence in the release ticket:</p>
+<table>
+<thead><tr><th>Evidence</th><th>Owner</th><th>Required Result</th></tr></thead>
+<tbody><tr><td><code>npm test</code> output</td><td>Developer</td><td>All POS unit tests pass</td></tr><tr><td><code>npm run build</code> output</td><td>Developer</td><td>Client build completes</td></tr><tr><td><code>node --test tests/pos-smoke.mjs</code> against test API</td><td>QA / Developer</td><td>All non-skipped tests pass with QA admin and cashier users</td></tr><tr><td><code>node tests/pos-roles.mjs</code> against seeded test API</td><td>QA / Developer</td><td>Role matrix shows no mismatches</td></tr><tr><td>Completed <code>POS-Test-Plan.md</code> sign-off table</td><td>BA / QA</td><td>All critical and high cases passed or formally waived</td></tr><tr><td>Receipt print sample</td><td>Operations</td><td>72 mm receipt prints cleanly and QR scans</td></tr><tr><td>eTIMS sandbox sample</td><td>Finance / IT</td><td>Control unit response captured for a paid test order</td></tr><tr><td>MPESA test payment sample</td><td>Finance / IT</td><td>STK or fetch reconciliation confirms payment</td></tr><tr><td>BC journal CSV sample</td><td>Finance / Operations</td><td>CSV accepted by BC test import</td></tr></tbody>
+</table>
+<hr/>
+<h2>4. Rollout Decision</h2>
+<p>Use this as the final go/no-go check before merging to <code>main</code>.</p>
+<table>
+<thead><tr><th>Check</th><th>Go Criteria</th><th>Status</th></tr></thead>
+<tbody><tr><td>Business process</td><td>BA confirms Sections A to G of the UAT plan cover current rollout scope</td><td></td></tr><tr><td>Access control</td><td>No unauthorized role can access POS setup, finance, dispatch, or security functions</td><td></td></tr><tr><td>Data sync</td><td>FCL and CM syncs produce expected shop and item counts</td><td></td></tr><tr><td>Checkout</td><td>Cash, MPESA, split tender, coupon, receipt, and eTIMS paths are accepted</td><td></td></tr><tr><td>Stock</td><td>Stock deductions, requests, stock take, and transfers reconcile to expected balances</td><td></td></tr><tr><td>Reporting</td><td>POS reports reconcile with order, payment, and movement tables</td><td></td></tr><tr><td>Build/test</td><td><code>npm test</code> and <code>npm run build</code> pass on the release branch</td><td></td></tr><tr><td>Rollback</td><td>IT has database backup and deployment rollback steps ready</td><td></td></tr></tbody>
+</table>
+<p><strong>Decision:</strong> Go / No-Go   <strong>Approvers:</strong> BA ____________  QA ____________  Operations ____________  IT ____________  Date ____________</p>
+<hr/>
+<h2>5. Related Documents</h2>
+<ul><li><code>POS-Test-Plan.md</code> — feature-based UAT execution workbook.</li><li><code>POS-User-Guide.md</code> — user and administrator operating guide.</li><li><code>tests/README.md</code> — runnable test commands and environment setup.</li></ul></body></html>

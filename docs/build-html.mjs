@@ -1,10 +1,10 @@
 /**
- * Tiny markdown → HTML for our 2 docs. No external deps.
+ * Tiny markdown → HTML for our POS docs. No external deps.
  * Handles: headings, paragraphs, ul, ol, code blocks, inline code, tables,
  * **bold**, *italic*, links. Enough for our test plan / user guide.
  *
  * Usage: node docs/build-html.mjs
- * Outputs: docs/POS-Test-Plan.html, docs/POS-User-Guide.html
+ * Outputs: docs/POS-Test-Plan.html, docs/POS-User-Guide.html, docs/POS-BA-Release-Readiness.html
  *
  * To convert to .docx: open the .html in Word → File → Save As → .docx.
  */
@@ -125,5 +125,6 @@ function build(name) {
   console.log(`wrote ${name}.html (${html.length} bytes)`);
 }
 
-build('POS-Test-Plan');
-build('POS-User-Guide');
+for (const name of ['POS-Test-Plan', 'POS-User-Guide', 'POS-BA-Release-Readiness']) {
+  build(name);
+}

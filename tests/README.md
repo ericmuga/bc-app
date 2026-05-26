@@ -1,5 +1,21 @@
 # Tests
 
+## `pos-unit.mjs`
+
+DB-free release checks using Node's built-in test runner.
+
+### Run
+
+```bash
+npm test
+```
+
+### Coverage
+
+- Server POS role constants and manager/global-admin separation.
+- Client POS access helpers.
+- BA/UAT documentation completeness checks for the rollout pack.
+
 ## `pos-smoke.mjs`
 
 Read-only API smoke test using Node's built-in test runner. No external deps.

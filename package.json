@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "concurrently --names API,WEB --prefix-colors cyan,green \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
     "build": "npm run build --workspace=client",
+    "test": "node --test tests/pos-unit.mjs",
+    "test:pos:smoke": "node --test tests/pos-smoke.mjs",
+    "test:pos:roles": "node tests/pos-roles.mjs",
     "start": "npm run start --workspace=server",
     "migrate": "npm run migrate --workspace=server",
     "seed": "npm run seed --workspace=server"
