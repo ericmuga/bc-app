@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, ROLES } from '@/lib/access.js'
 import { canAccessFinance, FINANCE_ROLE } from '@/lib/financeAccess.js'
 import { canAccessPos, POS_ROLE, SHOP_ADMIN_ROLE } from '@/lib/posAccess.js'
+import { canAccessCosting, COSTING_ROLE } from '@/lib/costingAccess.js'
 
 // Local replacement for the lib/access.js default-route helper, which is missing
 // the POS / Finance fall-throughs (so shop-admin / shop / finance roles get
@@ -15,6 +16,7 @@ function defaultRouteForRole(role) {
   if (canAccessReports(r))  return '/reports'
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
+  if (canAccessCosting(r))  return '/costing'
   return '/login'
 }
 
@@ -33,6 +35,9 @@ const routes = [
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'finance',        name: 'Finance',      component: () => import('@/pages/FinanceReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.ANALYST, FINANCE_ROLE] } },
+      { path: 'costing',        name: 'Costing',      component: () => import('@/pages/CostingPage.vue'), props: { company: 'FCL' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
+      { path: 'costing/cm',     name: 'CostingCM',    component: () => import('@/pages/CostingPage.vue'), props: { company: 'CM' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
+      { path: 'costing/templates', name: 'CostingTemplates', component: () => import('@/pages/CostingTemplatesPage.vue'), meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
       { path: 'pos',            name: 'Pos',          component: () => import('@/pages/PosPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/orders',     name: 'PosOrders',    component: () => import('@/pages/PosOrdersPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/stock-requests', name: 'StockRequests', component: () => import('@/pages/StockRequestsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
@@ -42,6 +47,8 @@ const routes = [
       { path: 'pos/yield',          name: 'PosYield',      component: () => import('@/pages/YieldPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/targets',        name: 'PosTargets',    component: () => import('@/pages/TargetsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/coupons',        name: 'PosCoupons',    component: () => import('@/pages/CouponsPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'pos/mpesa-matching', name: 'MpesaMatching', component: () => import('@/pages/MpesaMatchingPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'admin/setup',          name: 'AdminSetup',    component: () => import('@/pages/AdminSetupPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
@@ -72,6 +79,7 @@ router.beforeEach((to) => {
       if (canAccessReports(role)) return '/reports'
       if (canAccessFinance(role)) return '/finance'
       if (canAccessPos(role)) return '/pos'
+      if (canAccessCosting(role)) return '/costing'
       return '/login'
     }
   }

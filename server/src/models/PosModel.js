@@ -5,8 +5,9 @@
  */
 import { db as appDb, sql } from '../db/pool.js';
 import { bcDb } from '../db/bcPool.js';
-import { bcTable, extCol, resolveCompanies } from '../services/bcTables.js';
+import { bcTable, extCol, resolveCompanies, ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
+import bcrypt from 'bcryptjs';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,19 @@ function num(v) { return isNaN(Number(v)) ? 0 : Number(v); }
 function bool(v) { return v === true || v === 1 || v === '1' || v === 'true'; }
 
 async function appPool() { return appDb.getPool(); }
+
+async function columnExists(pool, tableName, columnName) {
+  const r = await pool.request()
+    .input('tableName', sql.NVarChar(128), tableName)
+    .input('columnName', sql.NVarChar(128), columnName)
+    .query(`
+      SELECT 1 AS ok
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.' + @tableName)
+        AND name = @columnName
+    `);
+  return r.recordset.length > 0;
+}
 
 // ── PosCategory ───────────────────────────────────────────────────────────────
 
@@ -69,15 +83,44 @@ export async function deleteCategory(categoryId) {
 
 // ── PosItem ───────────────────────────────────────────────────────────────────
 
-export async function listPosItems() {
+// Pagination helper: returns sanitised page/pageSize/offset.
+// pageSize is clamped to [1,500]; pass pageSize falsy to disable paging.
+function pageArgs({ page, pageSize } = {}) {
+  if (!pageSize) return null;
+  const ps = Math.min(Math.max(parseInt(pageSize, 10) || 50, 1), 500);
+  const p  = Math.max(parseInt(page, 10) || 1, 1);
+  return { page: p, pageSize: ps, offset: (p - 1) * ps };
+}
+
+/**
+ * List PosItem rows. When { pageSize } is given returns
+ * { rows, total, page, pageSize }; otherwise returns the full array (back-compat).
+ * @param {Object} [opts] { page, pageSize, q }
+ */
+export async function listPosItems(opts = {}) {
   const pool = await appPool();
-  const r = await pool.request().query(`
-    SELECT [ItemId],[ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],
-           [ImageUrl],[IsActive],[SortOrder],[CreatedAt],[UpdatedAt]
-    FROM [dbo].[PosItem]
+  const cols = `[ItemId],[ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],
+           [ImageUrl],[IsActive],[SortOrder],[CreatedAt],[UpdatedAt],
+           [EtimsItemCode],[EtimsItemClassCode],[TaxType],[UnitOfMeasure],
+           [VatPostingGroup],[VatPercent],[PackagingUnit],[QuantityUnit]`;
+  const req = pool.request();
+  let where = '';
+  if (opts.q) {
+    req.input('q', sql.NVarChar(200), `%${opts.q}%`);
+    where = `WHERE [ItemNo] LIKE @q OR [Description] LIKE @q OR [Barcode] LIKE @q`;
+  }
+  const pg = pageArgs(opts);
+  if (!pg) {
+    const r = await req.query(`SELECT ${cols} FROM [dbo].[PosItem] ${where} ORDER BY [SortOrder],[Description]`);
+    return r.recordset;
+  }
+  const cnt = await req.query(`SELECT COUNT(*) AS n FROM [dbo].[PosItem] ${where}`);
+  req.input('off', sql.Int, pg.offset).input('lim', sql.Int, pg.pageSize);
+  const r = await req.query(`
+    SELECT ${cols} FROM [dbo].[PosItem] ${where}
     ORDER BY [SortOrder],[Description]
-  `);
-  return r.recordset;
+    OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY`);
+  return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
 export async function listPosItemsGrouped({ shopCode = null, userId = null } = {}) {
@@ -305,7 +348,8 @@ export async function listBcShopSalespersons(companyId = 'FCL') {
   //   PosShop.Email           ← Customer.[E-Mail]
   const resolved = resolveCompanies([companyId]);
   const c = resolved[0] || 'FCL';
-  const custTable = bcTable(c, 'Customer');
+  const custTable  = bcTable(c, 'Customer');
+  const spExtTable = bcTable(c, 'Salesperson_Purchaser', { coreExt: true });
 
   // Per-company filter rule. BC tenants use different fields to tag a
   // customer as a "shop":
@@ -335,16 +379,20 @@ export async function listBcShopSalespersons(companyId = 'FCL') {
   const pool = await bcDb.getPool();
   const querySql = `
     SELECT
-      [No_]                       AS WalkInCustomerNo,
-      [Name]                      AS Name,
-      [Salesperson Code]          AS SalespersonCode,
-      [Location Code]             AS LocationCode,
-      [VAT Bus_ Posting Group]    AS VatBusPostingGroup,
-      [E-Mail]                    AS Email
-    FROM   ${custTable}
-    WHERE  [${filterCol}] = '${filterVal}'
-      AND  ISNULL([Blocked], 0) = 0
-    ORDER BY [Name]
+      cu.[No_]                       AS WalkInCustomerNo,
+      cu.[Name]                      AS Name,
+      cu.[Salesperson Code]          AS SalespersonCode,
+      cu.[Location Code]             AS LocationCode,
+      cu.[VAT Bus_ Posting Group]    AS VatBusPostingGroup,
+      cu.[E-Mail]                    AS Email,
+      sx.${extCol('Default Location')}  AS SpDefaultLocation,
+      sx.${extCol('Current Route')}     AS CurrentRoute,
+      sx.${extCol('TPT Location Code')} AS TptLocationCode
+    FROM   ${custTable} cu
+    LEFT JOIN ${spExtTable} sx ON sx.[Code] = cu.[Salesperson Code]
+    WHERE  cu.[${filterCol}] = '${filterVal}'
+      AND  ISNULL(cu.[Blocked], 0) = 0
+    ORDER BY cu.[Name]
   `;
   logger.info('pos/listBcShopSalespersons', { company: c, filterCol, filterVal });
   const result = await pool.request().query(querySql);
@@ -362,11 +410,121 @@ export async function listBcShopSalespersons(companyId = 'FCL') {
       phone:               '',
       walkInCustomerNo:    cust,
       salespersonCode:     sp,
-      defaultLocation:     r.LocationCode?.trim() ?? '',
+      // Prefer the salesperson's Default Location; fall back to the customer's Location Code.
+      defaultLocation:     r.SpDefaultLocation?.trim() || r.LocationCode?.trim() || '',
       vatBusPostingGroup:  r.VatBusPostingGroup?.trim() ?? '',
-      currentRoute:        '',
+      currentRoute:        r.CurrentRoute?.trim() ?? '',
+      tptLocationCode:     r.TptLocationCode?.trim() ?? '',
     };
   });
+}
+
+// ── BC salespersons (full Salesperson_Purchaser table, for terminals reference) ─
+// Returns every salesperson with all core + extension fields, including the
+// custom CustomerNo / Default Location / Current Route / TPT Location Code that
+// live on the Salesperson_Purchaser $ext table.
+export async function listBcSalespersons(companyId = 'FCL') {
+  const resolved = resolveCompanies([companyId]);
+  const c = resolved[0] || 'FCL';
+  const spTable    = bcTable(c, 'Salesperson_Purchaser');
+  const spExtTable = bcTable(c, 'Salesperson_Purchaser', { coreExt: true });
+  const pool = await bcDb.getPool();
+  const querySql = `
+    SELECT
+      a.[Code]                       AS Code,
+      a.[Name]                       AS Name,
+      a.[Commission _]               AS CommissionPct,
+      a.[E-Mail]                     AS Email,
+      a.[Phone No_]                  AS PhoneNo,
+      a.[Job Title]                  AS JobTitle,
+      a.[E-Mail 2]                   AS Email2,
+      a.[Global Dimension 1 Code]    AS GlobalDim1,
+      a.[Global Dimension 2 Code]    AS GlobalDim2,
+      ISNULL(a.[Blocked], 0)         AS Blocked,
+      ISNULL(a.[Privacy Blocked], 0) AS PrivacyBlocked,
+      x.${extCol('CustomerNo')}             AS CustomerNo,
+      x.${extCol('Default Location')}       AS DefaultLocation,
+      x.${extCol('Current Route')}          AS CurrentRoute,
+      x.${extCol('TPT Location Code')}      AS TptLocationCode,
+      x.${extCol('RCTAmt')}                 AS RctAmt,
+      ISNULL(x.${extCol('Enforce Full Allocation')}, 0) AS EnforceFullAllocation,
+      ISNULL(x.${extCol('Location Locked')}, 0)         AS LocationLocked,
+      -- Dept Signature is an image blob; expose only whether one exists here.
+      -- Fetch the actual image via getSalespersonSignature().
+      CASE WHEN DATALENGTH(x.${extCol('Dept Signature')}) > 0 THEN 1 ELSE 0 END AS HasDeptSignature
+    FROM ${spTable} a
+    LEFT JOIN ${spExtTable} x ON x.[Code] = a.[Code]
+    ORDER BY a.[Code]
+  `;
+  logger.info('pos/listBcSalespersons', { company: c });
+  const result = await pool.request().query(querySql);
+  return result.recordset.map(r => ({
+    code:                  r.Code?.trim() ?? '',
+    name:                  r.Name?.trim() ?? '',
+    commissionPct:         Number(r.CommissionPct ?? 0),
+    email:                 r.Email?.trim() ?? '',
+    phoneNo:               r.PhoneNo?.trim() ?? '',
+    jobTitle:              r.JobTitle?.trim() ?? '',
+    email2:                r.Email2?.trim() ?? '',
+    globalDim1:            r.GlobalDim1?.trim() ?? '',
+    globalDim2:            r.GlobalDim2?.trim() ?? '',
+    blocked:               Boolean(r.Blocked),
+    privacyBlocked:        Boolean(r.PrivacyBlocked),
+    customerNo:            r.CustomerNo?.trim() ?? '',
+    defaultLocation:       r.DefaultLocation?.trim() ?? '',
+    currentRoute:          r.CurrentRoute?.trim() ?? '',
+    tptLocationCode:       r.TptLocationCode?.trim() ?? '',
+    rctAmt:                Number(r.RctAmt ?? 0),
+    enforceFullAllocation: Boolean(r.EnforceFullAllocation),
+    locationLocked:        Boolean(r.LocationLocked),
+    hasDeptSignature:      Boolean(r.HasDeptSignature),
+  }));
+}
+
+/**
+ * Fetch the Dept Signature image for a single salesperson.
+ * Returns { code, mime, base64, dataUrl } or null when no signature is stored.
+ * (Dept Signature is an `image` blob on the Salesperson_Purchaser $ext table.)
+ */
+export async function getSalespersonSignature(companyId = 'FCL', code) {
+  if (!code) return null;
+  const resolved = resolveCompanies([companyId]);
+  const c = resolved[0] || 'FCL';
+  const spExtTable = bcTable(c, 'Salesperson_Purchaser', { coreExt: true });
+  const pool = await bcDb.getPool();
+  const result = await pool.request()
+    .input('code', sql.NVarChar(20), code.trim())
+    .query(`
+      SELECT x.${extCol('Dept Signature')} AS Signature
+      FROM ${spExtTable} x
+      WHERE x.[Code] = @code
+    `);
+  let buf = result.recordset[0]?.Signature;
+  if (!buf || !buf.length) return null;
+  buf = Buffer.from(buf);
+
+  // BC/NAV often prefixes BLOB pictures with a few bytes before the real image
+  // header. Locate the actual image signature in the first 64 bytes and trim.
+  const sigs = [
+    { mime: 'image/png',  magic: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+    { mime: 'image/jpeg', magic: Buffer.from([0xff, 0xd8, 0xff]) },
+    { mime: 'image/gif',  magic: Buffer.from([0x47, 0x49, 0x46, 0x38]) },
+    { mime: 'image/bmp',  magic: Buffer.from([0x42, 0x4d]) },
+  ];
+  let mime = 'application/octet-stream';
+  const scan = buf.subarray(0, 64);
+  for (const s of sigs) {
+    const at = scan.indexOf(s.magic);
+    if (at !== -1) { mime = s.mime; buf = buf.subarray(at); break; }
+  }
+  const base64 = buf.toString('base64');
+  return {
+    code: code.trim(),
+    mime,
+    base64,
+    // dataUrl only when we recognised an image format; otherwise raw base64 only.
+    dataUrl: mime === 'application/octet-stream' ? null : `data:${mime};base64,${base64}`,
+  };
 }
 
 // ── BC customers (walk-in customer for each shop) ─────────────────────────────
@@ -508,6 +666,7 @@ export async function listBcPdaItems(companyId = 'FCL', shopCode = null) {
   //    PDA Item = 1
   //    E-Tims Item Code <> ''
   //    Unit Price (Sales Unit) <> 0
+  //    Blocked/Sales Blocked = 0
   //    Description <> 'Discontiued' (note: BC's typo, kept verbatim)
   // Across companies (FCL, CM, RMK, FLM) the prefix changes — that's already
   // baked into bcTable(c, 'Item') / bcTable(c, 'Item', {coreExt:true}).
@@ -547,6 +706,8 @@ export async function listBcPdaItems(companyId = 'FCL', shopCode = null) {
     WHERE  a.${etimsCodeCol} <> ''
       AND  a.${pdaCol} = 1
       AND  a.${salesPriceCol} <> 0
+      AND  ISNULL(b.[Blocked], 0) = 0
+      AND  ISNULL(b.[Sales Blocked], 0) = 0
       AND  b.[Description] <> 'Discontiued'
     ORDER BY b.[Inventory Posting Group], b.[Description]
   `;
@@ -611,14 +772,35 @@ export async function listPaymentTypes({ activeOnly = false, shopCode = null } =
     conditions.push('([ShopCode]=@shopCode OR [ShopCode] IS NULL)');
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const r = await req.query(`
-    SELECT [TypeId],[Code],[ShopCode],[Name],[PaymentClass],[IsActive],[SortOrder],
+  const cols = `[TypeId],[Code],[ShopCode],[Name],[PaymentClass],[IsActive],[SortOrder],
            [ApiEndpoint],[UseApiEndpoint],[BalanceAcctType],[BalanceAcctNo],[BcSourceNo],
            [Description],
            [ConsumerKey],[ConsumerSecret],[ShortCode],[Passkey],
            [TransactionType],[CallbackUrl],[AccountReference],
            [PaymentFetchUrl],[ApiKey],
-           [CreatedAt],[UpdatedAt]
+           [CreatedAt],[UpdatedAt]`;
+
+  // For a specific terminal, collapse to one row per Code — the shop-specific row
+  // wins over the global (ShopCode IS NULL) one, so the checkout list is unique.
+  if (shopCode) {
+    const r = await req.query(`
+      WITH Ranked AS (
+        SELECT ${cols},
+               ROW_NUMBER() OVER (
+                 PARTITION BY [Code]
+                 ORDER BY CASE WHEN [ShopCode]=@shopCode THEN 0 ELSE 1 END, [SortOrder], [Name]
+               ) AS rn
+        FROM [dbo].[PosPaymentType]
+        ${where}
+      )
+      SELECT ${cols} FROM Ranked WHERE rn=1
+      ORDER BY [SortOrder],[Name]
+    `);
+    return r.recordset;
+  }
+
+  const r = await req.query(`
+    SELECT ${cols}
     FROM [dbo].[PosPaymentType]
     ${where}
     ORDER BY [SortOrder],[Name]
@@ -781,13 +963,21 @@ export async function saveEtimsConfig(shopCode, cfg) {
  */
 export async function fetchBcEtimsDefaults(companyId = 'FCL') {
   const resolved = resolveCompanies([companyId]);
-  const c = resolved[0] || 'FCL';
+  const c = resolved[0] || 'FCL'; // FCL maps to the BC table prefix FCL1$.
   const setupTable = bcTable(c, 'FCL Integration Setup', { ext: true });
+  const companyTable = bcTable(c, 'Company Information');
+  const companyExtTable = bcTable(c, 'Company Information', { coreExt: true });
   const pool = await bcDb.getPool();
   try {
-    const r = await pool.request().query(`SELECT TOP 1 * FROM ${setupTable}`);
+    const [r, cr, cer] = await Promise.all([
+      pool.request().query(`SELECT TOP 1 * FROM ${setupTable}`),
+      pool.request().query(`SELECT TOP 1 * FROM ${companyTable}`),
+      pool.request().query(`SELECT TOP 1 * FROM ${companyExtTable}`),
+    ]);
     if (!r.recordset.length) return null;
     const row = r.recordset[0];
+    const company = cr.recordset[0] || {};
+    const companyExt = cer.recordset[0] || {};
     // Strip the $<EXT_GUID> suffix from column names so we can look them up by plain name
     const get = (key) => {
       const exact = row[key];
@@ -795,7 +985,7 @@ export async function fetchBcEtimsDefaults(companyId = 'FCL') {
       const found = Object.keys(row).find(k => k.split('$')[0] === key);
       return found ? row[found] : '';
     };
-    return {
+    const result = {
       invoiceUrl:     String(get('eTims Invoice URL')      || '').trim(),
       invoiceNumUrl:  String(get('eTims InvoiceNum URL')   || '').trim(),
       creditNoteUrl:  String(get('eTims Credit Note URL')  || '').trim(),
@@ -805,6 +995,16 @@ export async function fetchBcEtimsDefaults(companyId = 'FCL') {
       qrServiceUrl:   String(get('QRCodeServiceURL')       || '').trim(),
       paymentService: String(get('Payment Service')        || '').trim(),
     };
+    if (!result.companyPin) {
+      const extPinCol = extCol('PIN').slice(1, -1);
+      result.companyPin = String(
+        companyExt[extPinCol] ||
+        companyExt.PIN ||
+        company.PIN ||
+        ''
+      ).trim();
+    }
+    return result;
   } catch (e) {
     logger.warn('fetchBcEtimsDefaults failed', { error: e.message });
     return null;
@@ -858,17 +1058,47 @@ export async function savePrintConfig(shopCode, cfg) {
 
 // ── PosSpecialPrice (date-bound offers) ───────────────────────────────────────
 
-export async function listSpecialPrices() {
+/**
+ * List PosSpecialPrice rows (with item description). When { pageSize } is given
+ * returns { rows, total, page, pageSize }; otherwise the full array.
+ * @param {Object} [opts] { page, pageSize, q }
+ */
+/** Set the photo URL on an item. */
+export async function setItemImageUrl(itemId, imageUrl) {
   const pool = await appPool();
-  const r = await pool.request().query(`
-    SELECT sp.[SpecialPriceId],sp.[ItemNo],sp.[ShopCode],sp.[UnitPrice],
+  const r = await pool.request()
+    .input('id',  sql.UniqueIdentifier, itemId)
+    .input('url', sql.NVarChar(500), imageUrl || null)
+    .query(`UPDATE [dbo].[PosItem] SET [ImageUrl]=@url,[UpdatedAt]=GETUTCDATE() WHERE [ItemId]=@id;
+            SELECT [ImageUrl] FROM [dbo].[PosItem] WHERE [ItemId]=@id`);
+  return r.recordset[0]?.ImageUrl || null;
+}
+
+export async function listSpecialPrices(opts = {}) {
+  const pool = await appPool();
+  const from = `FROM [dbo].[PosSpecialPrice] sp
+    LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = sp.[ItemNo]`;
+  const cols = `sp.[SpecialPriceId],sp.[ItemNo],sp.[ShopCode],sp.[UnitPrice],
            sp.[StartingDate],sp.[EndingDate],sp.[Description],sp.[IsActive],
-           pi.[Description] AS ItemDescription
-    FROM [dbo].[PosSpecialPrice] sp
-    LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = sp.[ItemNo]
+           pi.[Description] AS ItemDescription`;
+  const req = pool.request();
+  let where = '';
+  if (opts.q) {
+    req.input('q', sql.NVarChar(200), `%${opts.q}%`);
+    where = `WHERE sp.[ItemNo] LIKE @q OR sp.[ShopCode] LIKE @q OR sp.[Description] LIKE @q OR pi.[Description] LIKE @q`;
+  }
+  const pg = pageArgs(opts);
+  if (!pg) {
+    const r = await req.query(`SELECT ${cols} ${from} ${where} ORDER BY sp.[StartingDate] DESC, sp.[ItemNo]`);
+    return r.recordset;
+  }
+  const cnt = await req.query(`SELECT COUNT(*) AS n ${from} ${where}`);
+  req.input('off', sql.Int, pg.offset).input('lim', sql.Int, pg.pageSize);
+  const r = await req.query(`
+    SELECT ${cols} ${from} ${where}
     ORDER BY sp.[StartingDate] DESC, sp.[ItemNo]
-  `);
-  return r.recordset;
+    OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY`);
+  return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
 export async function saveSpecialPrice({ specialPriceId, itemNo, shopCode = null, unitPrice,
@@ -1102,6 +1332,8 @@ export async function syncShopsFromBc(companyId = 'FCL', { wipe = false } = {}) 
         .input('walkInCustomerNo',   sql.NVarChar(20),  s.walkInCustomerNo || null)
         .input('vatBusPostingGroup', sql.NVarChar(50),  s.vatBusPostingGroup || null)
         .input('email',              sql.NVarChar(200), s.email || null)
+        .input('currentRoute',       sql.NVarChar(200), s.currentRoute || null)
+        .input('tptLocationCode',    sql.NVarChar(200), s.tptLocationCode || null)
         .input('compCust',           sql.NVarChar(20),  s.walkInCustomerNo || null);
 
       // If we know which per-company column to set, write it; otherwise just upsert the rest.
@@ -1119,13 +1351,15 @@ export async function syncShopsFromBc(companyId = 'FCL', { wipe = false } = {}) 
           [WalkInCustomerNo]=COALESCE([WalkInCustomerNo],@walkInCustomerNo),
           [VatBusPostingGroup]=COALESCE(@vatBusPostingGroup,[VatBusPostingGroup]),
           [Email]=COALESCE(@email,[Email]),
+          [CurrentRoute]=COALESCE(@currentRoute,[CurrentRoute]),
+          [TptLocationCode]=COALESCE(@tptLocationCode,[TptLocationCode]),
           [IsActive]=1,[UpdatedAt]=GETUTCDATE()
           ${compSet}
         WHEN NOT MATCHED THEN INSERT
           ([Code],[Name],[LocationCode],[SalespersonCode],[WalkInCustomerNo],
-           [VatBusPostingGroup],[Email],[IsActive]${compIns})
+           [VatBusPostingGroup],[Email],[CurrentRoute],[TptLocationCode],[IsActive]${compIns})
           VALUES (@code,@name,@locationCode,@salespersonCode,@walkInCustomerNo,
-                  @vatBusPostingGroup,@email,1${compVal});
+                  @vatBusPostingGroup,@email,@currentRoute,@tptLocationCode,1${compVal});
       `);
       out.count++;
     }
@@ -1137,10 +1371,32 @@ export async function syncShopsFromBc(companyId = 'FCL', { wipe = false } = {}) 
 }
 
 export async function syncWalkInCustomersFromBc(companyId = 'FCL') {
-  const out = { count: 0, errors: [] };
+  const out = { count: 0, deleted: 0, terminals: 0, errors: [] };
   try {
-    const pool    = await appPool();
-    const bcShops = await listBcShopSalespersons(companyId);
+    const pool = await appPool();
+
+    // Existing terminals only. A "terminal" is an active PosShop; its Code and
+    // SalespersonCode are the keys a BC shop-salesperson must match. Walk-ins for
+    // salesperson codes that aren't set up as a terminal are skipped entirely.
+    const termRes = await pool.request().query(
+      `SELECT [Code],[SalespersonCode] FROM [dbo].[PosShop] WHERE [IsActive]=1`);
+    const termKeys = new Set(
+      termRes.recordset
+        .flatMap(r => [r.Code, r.SalespersonCode])
+        .filter(Boolean)
+        .map(x => x.trim().toUpperCase()));
+    out.terminals = termRes.recordset.length;
+
+    // Wipe every existing walk-in before reinserting (regular contacts untouched).
+    const delRes = await pool.request().query(
+      `DELETE FROM [dbo].[PosContact] WHERE [IsWalkIn]=1; SELECT @@ROWCOUNT AS N;`);
+    out.deleted = Number(delRes.recordset?.[0]?.N || 0);
+    if (!termKeys.size) return out;
+
+    // Keep only BC shop-salespersons that map to an existing terminal.
+    const bcShops = (await listBcShopSalespersons(companyId)).filter(s =>
+      termKeys.has((s.code || '').toUpperCase()) ||
+      termKeys.has((s.salespersonCode || '').toUpperCase()));
     const custNos = bcShops.map(s => s.walkInCustomerNo).filter(Boolean);
     if (!custNos.length) return out;
     const bcCusts = await listBcCustomersByNo(companyId, [...new Set(custNos)]);
@@ -1160,6 +1416,7 @@ export async function syncWalkInCustomersFromBc(companyId = 'FCL') {
     for (const cust of bcCusts) {
       if (!cust.no) continue;
       const shopCode = shopByCustNo.get(cust.no) || null;
+      if (!shopCode) continue;   // only walk-ins tied to an existing terminal
       await pool.request()
         .input('bcNo',     sql.NVarChar(20),  cust.no.toUpperCase())
         .input('name',     sql.NVarChar(200), cust.name)
@@ -1192,10 +1449,19 @@ export async function syncContactsFromBc(companyId = 'FCL') {
   const out = { count: 0, errors: [] };
   try {
     const pool    = await appPool();
-    const bcShops = await listBcShopSalespersons(companyId);
-    for (const s of bcShops) {
-      if (!s.code) continue;
-      const bcContacts = await listBcShopContacts(companyId, s.code);
+    // Only sync contacts whose salesperson code is in the shop terminal list
+    // (PosShop). Terminal Code == Salesperson Code. Contacts for salespersons
+    // that aren't set up as a terminal are skipped.
+    const termRes = await pool.request().query(
+      `SELECT [Code], [SalespersonCode] FROM [dbo].[PosShop] WHERE [IsActive]=1`);
+    const spCodes = [...new Set(
+      termRes.recordset
+        .map(r => (r.SalespersonCode || r.Code || '').trim().toUpperCase())
+        .filter(Boolean)
+    )];
+    out.terminals = spCodes.length;
+    for (const spCode of spCodes) {
+      const bcContacts = await listBcShopContacts(companyId, spCode);
       for (const ct of bcContacts) {
         if (!ct.contactNo) continue;
         await pool.request()
@@ -1204,8 +1470,8 @@ export async function syncContactsFromBc(companyId = 'FCL') {
           .input('mobileNo',     sql.NVarChar(30),  ct.mobileNo || ct.phoneNo || null)
           .input('email',        sql.NVarChar(200), ct.email || null)
           .input('kraPin',       sql.NVarChar(30),  ct.kraPin || null)
-          .input('spCode',       sql.NVarChar(20),  ct.salespersonCode || s.code)
-          .input('shopCode',     sql.NVarChar(50),  s.code.toUpperCase())
+          .input('spCode',       sql.NVarChar(20),  ct.salespersonCode || spCode)
+          .input('shopCode',     sql.NVarChar(50),  spCode)
           .input('routeCode',    sql.NVarChar(20),  ct.routeCode || null)
           .input('contactType',  sql.NVarChar(20),  ct.contactType || null)
           .input('companyName',  sql.NVarChar(200), ct.companyName || null)
@@ -1266,8 +1532,8 @@ export async function syncCategoriesFromBc(companyId = 'FCL') {
  * Pass { wipe: true } to clear PosItem first (drops dependent rows so the slate is clean
  * for a fresh re-import — used when switching companies or the BC catalogue has been pruned).
  */
-export async function syncItemsFromBc(companyId = 'FCL', { wipe = false } = {}) {
-  const out = { count: 0, errors: [], wiped: 0 };
+export async function syncItemsFromBc(companyId = 'FCL', { wipe = false, prune = false } = {}) {
+  const out = { count: 0, errors: [], wiped: 0, pruned: 0 };
   try {
     const pool    = await appPool();
 
@@ -1336,6 +1602,7 @@ export async function syncItemsFromBc(companyId = 'FCL', { wipe = false } = {}) 
             [QuantityUnit]       = @quantityUnit,
             [IsByproduct]        = @isByproduct,
             [SourceCompany]      = @sourceCompany,
+            [IsActive]           = 1,
             [UpdatedAt]          = GETUTCDATE()
           WHEN NOT MATCHED THEN INSERT
             ([ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],
@@ -1348,6 +1615,37 @@ export async function syncItemsFromBc(companyId = 'FCL', { wipe = false } = {}) 
                     @productionCategory,@packagingUnit,@quantityUnit,@isByproduct,@sourceCompany,1);
         `);
       out.count++;
+    }
+    if (prune) {
+      if (bcItems.length) {
+        const req = pool.request()
+          .input('sourceCompany', sql.NVarChar(20), String(companyId).toUpperCase());
+        const names = [];
+        bcItems.forEach((it, i) => {
+          const name = `item${i}`;
+          names.push(`@${name}`);
+          req.input(name, sql.NVarChar(30), it.itemNo.toUpperCase());
+        });
+        const pr = await req.query(`
+          UPDATE [dbo].[PosItem]
+          SET [IsActive]=0,[UpdatedAt]=GETUTCDATE()
+          WHERE [SourceCompany]=@sourceCompany
+            AND [ItemNo] NOT IN (${names.join(',')})
+            AND [IsActive]=1;
+          SELECT @@ROWCOUNT AS Pruned;
+        `);
+        out.pruned = Number(pr.recordset?.[0]?.Pruned || 0);
+      } else {
+        const pr = await pool.request()
+          .input('sourceCompany', sql.NVarChar(20), String(companyId).toUpperCase())
+          .query(`
+            UPDATE [dbo].[PosItem]
+            SET [IsActive]=0,[UpdatedAt]=GETUTCDATE()
+            WHERE [SourceCompany]=@sourceCompany AND [IsActive]=1;
+            SELECT @@ROWCOUNT AS Pruned;
+          `);
+        out.pruned = Number(pr.recordset?.[0]?.Pruned || 0);
+      }
     }
   } catch (e) {
     out.errors.push(e.message);
@@ -1403,13 +1701,177 @@ export async function syncPaymentTypesFromBc(companyId = 'FCL') {
   return out;
 }
 
+// ── Shop prices (BC Sales Price → PosSpecialPrice, per shop) ───────────────────
+// Pulls every BC Sales Price row for each shop's customer price group and writes
+// it as a date-bound PosSpecialPrice (Source='BC'). At sell time the existing
+// ActivePrice CTE in listPosItemsGrouped picks the row whose [StartingDate..EndingDate]
+// covers the selling date; outside any window the POS falls back to the item-card
+// price (PosItem.UnitPrice).
+//
+// VAT: BC prices (both the item card and the Sales Price table) are VAT-EXCLUSIVE,
+// but PosItem.UnitPrice is stored VAT-INCLUSIVE — so we gross each Sales Price up by
+// the item's VatPercent to keep both on the same basis for the receipt VAT split.
+//
+// Price group per shop: resolved from the BC Customer table via the shop's walk-in
+// customer no (which itself comes from the salesperson's CustomerNo). Shops with no
+// resolvable group fall back to 'FCL SHOPS'.
+export async function syncShopPricesFromBc(companyId = 'FCL') {
+  const out = { count: 0, shops: 0, priceGroups: [], pruned: 0, byCompany: {}, errors: [] };
+  try {
+    const pool = await appPool();
+    // companyId only drives the per-shop price-group lookup below; Sales Prices are
+    // pulled from ALL companies' tables (each item priced from its own SourceCompany).
+    const c = resolveCompanies([companyId])[0] || 'FCL';
+
+    // 1. Active shops + their walk-in customer no.
+    const shopRes = await pool.request().query(`
+      SELECT [Code], [WalkInCustomerNo] FROM [dbo].[PosShop] WHERE [IsActive]=1`);
+    const shops = shopRes.recordset;
+    out.shops = shops.length;
+    if (!shops.length) return out;
+
+    // 2. Resolve each shop's BC customer price group.
+    const custNos = [...new Set(shops.map(s => (s.WalkInCustomerNo || '').trim()).filter(Boolean))];
+    const groupByCust = new Map();
+    if (custNos.length) {
+      const bcPool = await bcDb.getPool();
+      const custTable = bcTable(c, 'Customer');
+      const req = bcPool.request();
+      const params = custNos.map((no, i) => { req.input(`cn${i}`, sql.NVarChar(20), no); return `@cn${i}`; }).join(',');
+      const gr = await req.query(`
+        SELECT [No_] AS No, [Customer Price Group] AS Grp
+        FROM ${custTable} WHERE [No_] IN (${params})`);
+      gr.recordset.forEach(r => groupByCust.set((r.No || '').trim(), (r.Grp || '').trim()));
+    }
+    const groupByShop = new Map();
+    for (const s of shops) {
+      const grp = (groupByCust.get((s.WalkInCustomerNo || '').trim()) || 'FCL SHOPS').toUpperCase();
+      groupByShop.set(s.Code, grp);
+    }
+    const groups = [...new Set([...groupByShop.values()])];
+    out.priceGroups = groups;
+
+    // 3. POS catalogue: VAT% + which company each item was synced from.
+    //    (only items we actually sell get a synced price)
+    const itemRes = await pool.request().query(
+      `SELECT [ItemNo],[VatPercent],[SourceCompany] FROM [dbo].[PosItem] WHERE [IsActive]=1`);
+    const vatByItem = new Map();
+    const compByItem = new Map();
+    for (const r of itemRes.recordset) {
+      const no = (r.ItemNo || '').toUpperCase();
+      vatByItem.set(no, Number(r.VatPercent || 0));
+      compByItem.set(no, (r.SourceCompany || 'FCL').toUpperCase());
+    }
+
+    // 4. Pull Sales Price rows for those groups across EVERY company's table
+    //    (FCL1, CM3, FLM1, RMK — all live in the same DB). Each item's price comes
+    //    from the company it was synced from (PosItem.SourceCompany). Local currency,
+    //    no variant; dedupe to the lowest Minimum Quantity per (item, group, start date).
+    const bcPool = await bcDb.getPool();
+    const rowsByGroup = new Map();
+    out.byCompany = {};
+    for (const comp of ALL_COMPANIES) {
+      let priceTable;
+      try { priceTable = bcTable(comp, 'Sales Price'); } catch { continue; }
+      const preq = bcPool.request();
+      const gparams = groups.map((g, i) => { preq.input(`g${i}`, sql.NVarChar(40), g); return `@g${i}`; }).join(',');
+      let priceRes;
+      try {
+        priceRes = await preq.query(`
+          WITH P AS (
+            SELECT
+              UPPER(LTRIM(RTRIM([Item No_])))   AS ItemNo,
+              UPPER(LTRIM(RTRIM([Sales Code]))) AS SalesCode,
+              [Unit Price]                      AS UnitPrice,
+              ISNULL([Price Includes VAT], 0)   AS PriceInclVat,
+              CAST([Starting Date] AS DATE)     AS StartingDate,
+              CASE WHEN [Ending Date] IS NULL OR [Ending Date] <= '1753-01-01'
+                   THEN NULL ELSE CAST([Ending Date] AS DATE) END AS EndingDate,
+              ROW_NUMBER() OVER (
+                PARTITION BY UPPER(LTRIM(RTRIM([Item No_]))), UPPER(LTRIM(RTRIM([Sales Code]))), CAST([Starting Date] AS DATE)
+                ORDER BY ISNULL([Minimum Quantity], 0) ASC, [Unit Price] ASC
+              ) AS rn
+            FROM ${priceTable}
+            WHERE [Sales Type] = 1
+              AND UPPER(LTRIM(RTRIM([Sales Code]))) IN (${gparams})
+              AND [Unit Price] <> 0
+              AND ISNULL(LTRIM(RTRIM([Variant Code])), '') = ''
+              AND ISNULL(LTRIM(RTRIM([Currency Code])), '') = ''
+          )
+          SELECT ItemNo, SalesCode, UnitPrice, PriceInclVat, StartingDate, EndingDate
+          FROM P WHERE rn = 1`);
+      } catch (e) {
+        out.errors.push(`${comp} sales price: ${e.message}`);
+        continue;
+      }
+      let kept = 0;
+      for (const r of priceRes.recordset) {
+        if (compByItem.get(r.ItemNo) !== comp) continue;   // item belongs to another company (or not a POS item)
+        if (!rowsByGroup.has(r.SalesCode)) rowsByGroup.set(r.SalesCode, []);
+        rowsByGroup.get(r.SalesCode).push(r);
+        kept++;
+      }
+      out.byCompany[comp] = kept;
+    }
+
+    // 5. Fan out to shops, grossing to VAT-inclusive.
+    const toInsert = [];
+    for (const [shopCode, grp] of groupByShop) {
+      for (const r of (rowsByGroup.get(grp) || [])) {
+        const vat = vatByItem.get(r.ItemNo) || 0;
+        const incl = r.PriceInclVat
+          ? Number(r.UnitPrice)
+          : Math.round(Number(r.UnitPrice) * (1 + vat / 100) * 10000) / 10000;
+        toInsert.push({
+          itemNo: r.ItemNo, shopCode, unitPrice: incl,
+          startingDate: r.StartingDate, endingDate: r.EndingDate,
+          description: `BC ${grp}`,
+        });
+      }
+    }
+
+    // 6. Replace this run's BC rows for the synced shops; manual offers untouched.
+    const delReq = pool.request();
+    const codeParams = shops.map((s, i) => { delReq.input(`sh${i}`, sql.NVarChar(50), s.Code); return `@sh${i}`; }).join(',');
+    const delRes = await delReq.query(`
+      DELETE FROM [dbo].[PosSpecialPrice]
+      WHERE [Source]='BC' AND [ShopCode] IN (${codeParams});
+      SELECT @@ROWCOUNT AS N;`);
+    out.pruned = Number(delRes.recordset?.[0]?.N || 0);
+
+    const CHUNK = 100;
+    for (let i = 0; i < toInsert.length; i += CHUNK) {
+      const chunk = toInsert.slice(i, i + CHUNK);
+      const rq = pool.request();
+      const values = chunk.map((row, j) => {
+        rq.input(`in${j}`, sql.NVarChar(30),   row.itemNo);
+        rq.input(`sc${j}`, sql.NVarChar(50),   row.shopCode);
+        rq.input(`up${j}`, sql.Decimal(18, 4), row.unitPrice);
+        rq.input(`sd${j}`, sql.Date,           row.startingDate);
+        rq.input(`ed${j}`, sql.Date,           row.endingDate);
+        rq.input(`ds${j}`, sql.NVarChar(200),  row.description);
+        return `(@in${j},@sc${j},@up${j},@sd${j},@ed${j},@ds${j},1,'BC')`;
+      }).join(',');
+      await rq.query(`
+        INSERT INTO [dbo].[PosSpecialPrice]
+          ([ItemNo],[ShopCode],[UnitPrice],[StartingDate],[EndingDate],[Description],[IsActive],[Source])
+        VALUES ${values}`);
+      out.count += chunk.length;
+    }
+    logger.info('pos/syncShopPricesFromBc', { shops: out.shops, groups, byCompany: out.byCompany, inserted: out.count, pruned: out.pruned });
+  } catch (e) {
+    out.errors.push(e.message);
+  }
+  return out;
+}
+
 // ── Bulk sync from BC: shops, walk-in customers, contacts, categories, items, payment types
 //    Composes the per-step helpers above; preserves the legacy { shops, walkInCustomers, … } shape.
 
 export async function syncMasterFromBc(companyId = 'FCL') {
   const result = {
     shops: 0, walkInCustomers: 0, contacts: 0,
-    categories: 0, items: 0, paymentTypes: 0,
+    categories: 0, items: 0, paymentTypes: 0, shopPrices: 0,
     errors: [],
   };
 
@@ -1419,6 +1881,8 @@ export async function syncMasterFromBc(companyId = 'FCL') {
   const r4 = await syncCategoriesFromBc(companyId);       result.categories      = r4.count; r4.errors.forEach(m => result.errors.push(`categories: ${m}`));
   const r5 = await syncItemsFromBc(companyId);            result.items           = r5.count; r5.errors.forEach(m => result.errors.push(`items: ${m}`));
   const r6 = await syncPaymentTypesFromBc(companyId);     result.paymentTypes    = r6.count; r6.errors.forEach(m => result.errors.push(`paymentTypes: ${m}`));
+  // Shop prices last — depends on shops (price group) and items (VAT%) being synced first.
+  const r7 = await syncShopPricesFromBc(companyId);       result.shopPrices      = r7.count; r7.errors.forEach(m => result.errors.push(`shopPrices: ${m}`));
 
   return result;
 }
@@ -1430,6 +1894,7 @@ export async function listShops({ activeOnly = false } = {}) {
   const where = activeOnly ? 'WHERE [IsActive]=1' : '';
   const r = await pool.request().query(`
     SELECT [ShopId],[Code],[Name],[LocationCode],[SalespersonCode],[WalkInCustomerNo],
+           [CurrentRoute],[TptLocationCode],
            [IsActive],[SortOrder],[CreatedAt],[UpdatedAt]
     FROM [dbo].[PosShop]
     ${where}
@@ -1438,13 +1903,16 @@ export async function listShops({ activeOnly = false } = {}) {
   return r.recordset;
 }
 
-export async function saveShop({ shopId, code, name, locationCode = null, salespersonCode = null, isActive = true, sortOrder = 0 }) {
+export async function saveShop({ shopId, code, name, locationCode = null, salespersonCode = null,
+                                 currentRoute = null, tptLocationCode = null, isActive = true, sortOrder = 0 }) {
   const pool = await appPool();
   const req = pool.request()
     .input('code',            sql.NVarChar(50),  str(code, 50).toUpperCase())
     .input('name',            sql.NVarChar(200), str(name))
     .input('locationCode',    sql.NVarChar(20),  str(locationCode, 20).toUpperCase() || null)
     .input('salespersonCode', sql.NVarChar(20),  str(salespersonCode, 20).toUpperCase() || null)
+    .input('currentRoute',    sql.NVarChar(200), str(currentRoute, 200) || null)
+    .input('tptLocationCode', sql.NVarChar(200), str(tptLocationCode, 200) || null)
     .input('isActive',        sql.Bit,           bool(isActive) ? 1 : 0)
     .input('sortOrder',       sql.Int,           num(sortOrder));
   if (shopId) {
@@ -1453,15 +1921,16 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
       UPDATE [dbo].[PosShop]
       SET [Code]=@code,[Name]=@name,[LocationCode]=@locationCode,
           [SalespersonCode]=@salespersonCode,
+          [CurrentRoute]=@currentRoute,[TptLocationCode]=@tptLocationCode,
           [IsActive]=@isActive,[SortOrder]=@sortOrder,[UpdatedAt]=GETUTCDATE()
       WHERE [ShopId]=@shopId
     `);
     return shopId;
   }
   const result = await req.query(`
-    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[IsActive],[SortOrder])
+    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[CurrentRoute],[TptLocationCode],[IsActive],[SortOrder])
     OUTPUT INSERTED.[ShopId]
-    VALUES(@code,@name,@locationCode,@salespersonCode,@isActive,@sortOrder)
+    VALUES(@code,@name,@locationCode,@salespersonCode,@currentRoute,@tptLocationCode,@isActive,@sortOrder)
   `);
   return result.recordset[0].ShopId;
 }
@@ -1598,23 +2067,38 @@ export async function getUserShopCode(userId) {
 
 // ── PosContact ────────────────────────────────────────────────────────────────
 
-export async function listContacts({ shopCode = null, activeOnly = true } = {}) {
+/**
+ * List PosContact rows. When { pageSize } is given returns
+ * { rows, total, page, pageSize }; otherwise the full array (back-compat for
+ * the terminal, which relies on the plain array).
+ * @param {Object} [opts] { shopCode, activeOnly, page, pageSize, q }
+ */
+export async function listContacts({ shopCode = null, activeOnly = true, page, pageSize, q } = {}) {
   const pool = await appPool();
   const conditions = [];
   const req = pool.request();
   if (activeOnly) conditions.push('[IsActive]=1');
   if (shopCode) { conditions.push('[ShopCode]=@shopCode'); req.input('shopCode', sql.NVarChar(50), shopCode); }
+  if (q) {
+    req.input('q', sql.NVarChar(200), `%${q}%`);
+    conditions.push('([Name] LIKE @q OR [MobileNo] LIKE @q OR [BcContactNo] LIKE @q OR [ShopCode] LIKE @q OR [SalespersonCode] LIKE @q)');
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const r = await req.query(`
-    SELECT [ContactId],[BcContactNo],[Name],[MobileNo],[Email],[KraPin],
+  const cols = `[ContactId],[BcContactNo],[Name],[MobileNo],[Email],[KraPin],
            [SalespersonCode],[ShopCode],[RouteCode],[CustomerType],[CompanyName],
-           [ParentContactNo],[IsLocalOnly],
-           [IsWalkIn],[IsActive],[CreatedAt]
-    FROM [dbo].[PosContact]
-    ${where}
+           [ParentContactNo],[IsLocalOnly],[IsWalkIn],[IsActive],[CreatedAt]`;
+  const pg = pageArgs({ page, pageSize });
+  if (!pg) {
+    const r = await req.query(`SELECT ${cols} FROM [dbo].[PosContact] ${where} ORDER BY [IsWalkIn] DESC, [Name]`);
+    return r.recordset;
+  }
+  const cnt = await req.query(`SELECT COUNT(*) AS n FROM [dbo].[PosContact] ${where}`);
+  req.input('off', sql.Int, pg.offset).input('lim', sql.Int, pg.pageSize);
+  const r = await req.query(`
+    SELECT ${cols} FROM [dbo].[PosContact] ${where}
     ORDER BY [IsWalkIn] DESC, [Name]
-  `);
-  return r.recordset;
+    OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY`);
+  return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
 /**
@@ -1731,13 +2215,20 @@ export async function setOrderContact(orderId, { contactNo, contactName, contact
 
 // ── PosOrder ──────────────────────────────────────────────────────────────────
 
-async function nextOrderNo(pool) {
+function terminalOrderPrefix(shopCode) {
+  const raw = String(shopCode || 'POS').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (raw || 'POS').slice(0, 10);
+}
+
+async function nextOrderNo(pool, shopCode = null) {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const prefix = `POS-${today}-`;
-  const r = await pool.request().query(`
+  const prefix = `${terminalOrderPrefix(shopCode)}-${today}-`;
+  const r = await pool.request()
+    .input('prefix', sql.NVarChar(30), `${prefix}%`)
+    .query(`
     SELECT TOP 1 [OrderNo]
     FROM [dbo].[PosOrder]
-    WHERE [OrderNo] LIKE '${prefix}%'
+    WHERE [OrderNo] LIKE @prefix
     ORDER BY [OrderNo] DESC
   `);
   if (!r.recordset.length) return `${prefix}001`;
@@ -1748,7 +2239,7 @@ async function nextOrderNo(pool) {
 
 export async function createOrder(cashierUserId, cashierName, shopCode = null) {
   const pool = await appPool();
-  const orderNo = await nextOrderNo(pool);
+  const orderNo = await nextOrderNo(pool, shopCode);
   const result = await pool.request()
     .input('orderNo',       sql.NVarChar(30),  orderNo)
     .input('shopCode',      sql.NVarChar(50),  shopCode || null)
@@ -1764,12 +2255,14 @@ export async function createOrder(cashierUserId, cashierName, shopCode = null) {
 
 export async function getOrder(orderId) {
   const pool = await appPool();
+  const hasEtimsNo = await columnExists(pool, 'PosOrder', 'EtimsNo');
   const r = await pool.request()
     .input('orderId', sql.UniqueIdentifier, orderId)
     .query(`
       SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierUserId],o.[CashierName],o.[Status],
              o.[Label],
              o.[TotalAmount],o.[Notes],o.[ContactNo],o.[ContactName],o.[ContactPhone],o.[ContactPin],
+             ${hasEtimsNo ? 'o.[EtimsNo]' : 'CAST(NULL AS NVARCHAR(50))'} AS [EtimsNo],
              o.[EtimsInvoiceNo],o.[CuSerialNo],o.[QrUrl],o.[SignedAt],o.[PrintedAt],o.[PdfFileName],
              o.[CreatedAt],o.[UpdatedAt],
              l.[LineId],l.[ItemNo],l.[Description],l.[Quantity],l.[UnitPrice],l.[LineAmount],l.[SortOrder],
@@ -1792,6 +2285,7 @@ export async function getOrder(orderId) {
     notes: first.Notes || '',
     contactNo: first.ContactNo || null, contactName: first.ContactName || null,
     contactPhone: first.ContactPhone || null, contactPin: first.ContactPin || null,
+    etimsNo: first.EtimsNo || null,
     etimsInvoiceNo: first.EtimsInvoiceNo || null,
     cuSerialNo:     first.CuSerialNo     || null,
     qrUrl:          first.QrUrl          || null,
@@ -1847,12 +2341,13 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
 
   const r = await req.query(`
     SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[TotalAmount],
+           o.[EtimsInvoiceNo],
            o.[CreatedAt],o.[UpdatedAt],
            COUNT(l.[LineId]) AS LineCount
     FROM [dbo].[PosOrder] o
     LEFT JOIN [dbo].[PosOrderLine] l ON l.[OrderId]=o.[OrderId]
     ${where}
-    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],
+    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[EtimsInvoiceNo],
              o.[TotalAmount],o.[CreatedAt],o.[UpdatedAt]
     ORDER BY o.[CreatedAt] DESC
   `);
@@ -1904,7 +2399,7 @@ export async function checkoutOrder(orderId, { paymentTypeCode, paymentTypeName,
     .input('orderId',          sql.UniqueIdentifier, orderId)
     .input('paymentTypeCode',  sql.NVarChar(50),  str(paymentTypeCode, 50))
     .input('paymentTypeName',  sql.NVarChar(200), str(paymentTypeName))
-    .input('amount',           sql.Decimal(18, 4), num(amount))
+    .input('amount',           sql.Decimal(18, 4), Math.round(num(amount)))   // KES rounded to whole at checkout
     .input('mobileNo',         sql.NVarChar(30),  str(mobileNo, 30) || null)
     .input('reference',        sql.NVarChar(100), str(reference, 100) || null)
     .query(`
@@ -1982,18 +2477,161 @@ export async function confirmPaymentByReference({ orderNoOrRef, paymentTypeCode,
 export async function storeSignResult(orderId, result) {
   if (!result) return;
   const pool = await appPool();
-  await pool.request()
+  const hasEtimsNo = await columnExists(pool, 'PosOrder', 'EtimsNo');
+  const req = pool.request()
     .input('orderId',        sql.UniqueIdentifier, orderId)
     .input('etimsInvoiceNo', sql.NVarChar(50),  str(result.etimsInvoiceNo, 50) || null)
     .input('cuSerialNo',     sql.NVarChar(50),  str(result.cuSerialNo, 50) || null)
     .input('qrUrl',          sql.NVarChar(500), str(result.qrUrl, 500) || null)
-    .input('signedAt',       sql.NVarChar(100), str(result.signedAt, 100) || null)
-    .query(`
+    .input('signedAt',       sql.NVarChar(100), str(result.signedAt, 100) || null);
+  if (hasEtimsNo) req.input('etimsNo', sql.NVarChar(50), str(result.etimsNo, 50) || null);
+  await req.query(`
       UPDATE [dbo].[PosOrder]
-      SET [EtimsInvoiceNo]=@etimsInvoiceNo,[CuSerialNo]=@cuSerialNo,
+      SET ${hasEtimsNo ? '[EtimsNo]=COALESCE(@etimsNo,[EtimsNo]),' : ''}
+          [EtimsInvoiceNo]=@etimsInvoiceNo,[CuSerialNo]=@cuSerialNo,
           [QrUrl]=@qrUrl,[SignedAt]=@signedAt,[UpdatedAt]=GETUTCDATE()
       WHERE [OrderId]=@orderId
     `);
+}
+
+/**
+ * Verify an admin / shop-admin's username + password (used to elevate a cashier
+ * action like Stock Reset). Throws on any failure; resolves true on success.
+ */
+export async function verifyManagerCredentials(username, password) {
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('u', sql.NVarChar(100), str(username, 100))
+    .query(`SELECT [PasswordHash],[Role],[IsActive] FROM [dbo].[Users] WHERE [Username]=@u AND [IsActive]=1`);
+  if (!r.recordset.length) throw new Error('Admin user not found');
+  const user = r.recordset[0];
+  if (!['admin', 'shop-admin'].includes(user.Role)) throw new Error('Manager or admin role required');
+  if (!user.PasswordHash) throw new Error('Password not set for this account');
+  if (!(await bcrypt.compare(String(password || ''), user.PasswordHash))) throw new Error('Invalid admin password');
+  return true;
+}
+
+export async function verifyAdminPin(userId, pin) {
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('userId', sql.NVarChar(100), str(userId, 100))
+    .query(`
+      SELECT [UserId],[PasswordHash],[Role],[IsActive],[AuthProvider]
+      FROM [dbo].[Users]
+      WHERE [UserId]=@userId AND [IsActive]=1
+    `);
+  if (!r.recordset.length) throw new Error('Admin user not found');
+  const user = r.recordset[0];
+  if (user.Role !== 'admin') throw new Error('Admin role required');
+  if (!user.PasswordHash) throw new Error('Admin PIN/password is not available for this account');
+  const ok = await bcrypt.compare(String(pin || ''), user.PasswordHash);
+  if (!ok) throw new Error('Invalid admin PIN');
+  return true;
+}
+
+// ── M-Pesa application ledger (confirmation code ↔ invoice, partial use) ──────
+function parseDate(v) { try { const d = new Date(v); return isNaN(d.getTime()) ? null : d; } catch { return null; } }
+
+/** Map of UPPER(code) → amount already applied across all invoices. */
+export async function getMpesaUtilization(codes = []) {
+  const map = {};
+  const list = [...new Set(codes.map(c => String(c || '').trim().toUpperCase()).filter(Boolean))];
+  if (!list.length) return map;
+  const pool = await appPool();
+  const req = pool.request();
+  const params = list.map((c, i) => { req.input('c' + i, sql.NVarChar(40), c); return '@c' + i; }).join(',');
+  const r = await req.query(`
+    SELECT UPPER([MpesaCode]) AS Code, SUM([AppliedAmount]) AS Applied
+    FROM [dbo].[PosMpesaApplication] WHERE UPPER([MpesaCode]) IN (${params})
+    GROUP BY UPPER([MpesaCode])`);
+  for (const row of r.recordset) map[row.Code] = Number(row.Applied || 0);
+  return map;
+}
+
+/**
+ * Record M-Pesa code→invoice applications for an order. Re-validates available
+ * balance per code (full txn amount − already applied) to prevent double-use.
+ * @param {Object} p { orderId, matches:[{code,mpesaAmount,applied,phone,name,timestamp}], createdBy }
+ */
+export async function recordMpesaApplications({ orderId, matches = [], createdBy = null }) {
+  if (!orderId) throw new Error('orderId required');
+  if (!Array.isArray(matches) || !matches.length) return { applied: 0, rows: 0 };
+  const pool = await appPool();
+  const ord = await pool.request().input('id', sql.UniqueIdentifier, orderId)
+    .query(`SELECT [OrderNo],[EtimsInvoiceNo],[ShopCode] FROM [dbo].[PosOrder] WHERE [OrderId]=@id`);
+  const o = ord.recordset[0];
+  if (!o) throw new Error('Order not found');
+
+  let appliedTotal = 0, rows = 0;
+  for (const m of matches) {
+    const code = String(m.code || '').trim().toUpperCase();
+    const want = Number(m.applied || 0);
+    if (!code || !(want > 0)) continue;
+    const mpesaAmount = Number(m.mpesaAmount || 0);
+    const util = await getMpesaUtilization([code]);
+    const available = mpesaAmount - (util[code] || 0);
+    const apply = Math.min(want, available);
+    if (!(apply > 0)) throw new Error(`M-Pesa code ${code} is already fully utilised`);
+    await pool.request()
+      .input('code',        sql.NVarChar(40),  code)
+      .input('mpesaAmount', sql.Decimal(18, 2), mpesaAmount)
+      .input('applied',     sql.Decimal(18, 2), Math.round(apply * 100) / 100)
+      .input('phone',       sql.NVarChar(30),  m.phone || null)
+      .input('payer',       sql.NVarChar(200), m.name || null)
+      .input('tt',          sql.DateTime2,     parseDate(m.timestamp))
+      .input('oid',         sql.UniqueIdentifier, orderId)
+      .input('ono',         sql.NVarChar(40),  o.OrderNo)
+      .input('inv',         sql.NVarChar(60),  o.EtimsInvoiceNo || null)
+      .input('shop',        sql.NVarChar(50),  o.ShopCode || null)
+      .input('by',          sql.NVarChar(200), createdBy || null)
+      .query(`INSERT INTO [dbo].[PosMpesaApplication]
+        ([MpesaCode],[MpesaAmount],[AppliedAmount],[Phone],[PayerName],[TransTime],[OrderId],[OrderNo],[InvoiceNo],[ShopCode],[CreatedBy])
+        VALUES(@code,@mpesaAmount,@applied,@phone,@payer,@tt,@oid,@ono,@inv,@shop,@by)`);
+    appliedTotal += apply; rows++;
+  }
+  return { applied: Math.round(appliedTotal * 100) / 100, rows };
+}
+
+/** Report: invoice → its M-Pesa payments (one row per application). */
+export async function mpesaInvoiceReport({ from = null, to = null, shopCode = null } = {}) {
+  const pool = await appPool();
+  const req = pool.request();
+  const conds = [];
+  if (from)     { req.input('from', sql.DateTime2, parseDate(from)); conds.push('a.[CreatedAt] >= @from'); }
+  if (to)       { req.input('to',   sql.DateTime2, parseDate(to + 'T23:59:59')); conds.push('a.[CreatedAt] <= @to'); }
+  if (shopCode) { req.input('shop', sql.NVarChar(50), shopCode); conds.push('a.[ShopCode] = @shop'); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const r = await req.query(`
+    SELECT a.[OrderNo], a.[InvoiceNo], a.[ShopCode], o.[TotalAmount], o.[Status] AS OrderStatus,
+           o.[ContactName], a.[MpesaCode], a.[AppliedAmount], a.[MpesaAmount],
+           a.[Phone], a.[PayerName], a.[TransTime], a.[CreatedAt]
+    FROM [dbo].[PosMpesaApplication] a
+    LEFT JOIN [dbo].[PosOrder] o ON o.[OrderId] = a.[OrderId]
+    ${where}
+    ORDER BY a.[CreatedAt] DESC, a.[OrderNo]`);
+  return r.recordset;
+}
+
+/** Report: M-Pesa payment (code) → invoices it funds. Only codes with a link,
+ *  including partially-utilised ones (Balance = MpesaAmount − Applied). */
+export async function mpesaPaymentReport({ from = null, to = null } = {}) {
+  const pool = await appPool();
+  const req = pool.request();
+  const conds = [];
+  if (from) { req.input('from', sql.DateTime2, parseDate(from)); conds.push('[CreatedAt] >= @from'); }
+  if (to)   { req.input('to',   sql.DateTime2, parseDate(to + 'T23:59:59')); conds.push('[CreatedAt] <= @to'); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const r = await req.query(`
+    SELECT [MpesaCode],
+           MAX([MpesaAmount]) AS MpesaAmount,
+           SUM([AppliedAmount]) AS Applied,
+           MAX([PayerName]) AS PayerName, MAX([Phone]) AS Phone, MAX([TransTime]) AS TransTime,
+           COUNT(DISTINCT [OrderNo]) AS InvoiceCount,
+           STRING_AGG(CONCAT([OrderNo], ' (', CAST([AppliedAmount] AS DECIMAL(18,2)), ')'), ', ') AS Invoices
+    FROM [dbo].[PosMpesaApplication] ${where}
+    GROUP BY [MpesaCode]
+    ORDER BY MAX([TransTime]) DESC`);
+  return r.recordset.map(x => ({ ...x, Balance: Math.round((Number(x.MpesaAmount || 0) - Number(x.Applied || 0)) * 100) / 100 }));
 }
 
 export async function markStkPushSent(orderId, reference) {

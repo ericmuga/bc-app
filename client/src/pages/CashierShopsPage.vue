@@ -173,23 +173,23 @@ onMounted(load)
 </script>
 
 <style scoped>
-.cs-page { padding: 16px 20px; background:#f4f6f8; color:#111827; color-scheme:light; min-height: calc(100vh - 56px); }
+.cs-page { padding: 16px 20px; background:var(--bc-surface); color:var(--bc-text); min-height: calc(100vh - 56px); }
 .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
 .page-title  { font-size:20px; font-weight:700; margin:0 0 2px; }
-.text-muted  { color:#6b7280; }
+.text-muted  { color:var(--bc-text-muted); }
 .text-sm     { font-size:13px; }
 .mb-3        { margin-bottom:12px; }
 .filters     { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin: 14px 0; }
 .filter-field { display:flex; flex-direction:column; gap:4px; min-width:140px; }
-.filter-field label { font-size:12px; color:#374151; font-weight:500; }
+.filter-field label { font-size:12px; color:var(--bc-text-muted); font-weight:500; }
 
 .shop-pill {
   display:inline-block; padding:2px 8px; margin:2px 4px 2px 0;
-  background:#eef2ff; color:#1e3a8a; border-radius:10px; font-size:12px; font-weight:500;
+  background:rgba(59,130,246,0.15); color:#93c5fd; border-radius:10px; font-size:12px; font-weight:500;
 }
-.shop-pill.primary { background:#0f7173; color:#fff; }
+.shop-pill.primary { background:var(--bc-primary); color:#fff; }
 
-.cs-page :deep(.p-inputtext) { background:#fff !important; color:#111827 !important; border-color:#d1d5db !important; color-scheme: light; }
-.cs-page :deep(.p-datatable-thead > tr > th) { background:#f3f4f6 !important; color:#111827 !important; }
-.cs-page :deep(.p-datatable-tbody > tr > td) { background:#fff !important; color:#111827 !important; }
+.cs-page :deep(.p-inputtext) { background:var(--bc-surface-card) !important; color:var(--bc-text) !important; border-color:var(--bc-border) !important; }
+.cs-page :deep(.p-datatable-thead > tr > th) { background:var(--bc-surface-raised) !important; color:var(--bc-text) !important; }
+.cs-page :deep(.p-datatable-tbody > tr > td) { background:transparent !important; color:var(--bc-text) !important; }
 </style>

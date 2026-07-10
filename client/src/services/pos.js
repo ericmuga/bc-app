@@ -82,6 +82,7 @@ export const posApi = {
   confirmPayment: (pid, ref)   => api.post(`/pos/payments/${pid}/confirm`, { reference: ref }),
   reprintOrder:   (id)         => api.post(`/pos/orders/${id}/reprint`),
   signOrder:      (id)         => api.post(`/pos/orders/${id}/sign`),
+  signCreditMemo: (id, body)   => api.post(`/pos/orders/${id}/credit-memo/sign`, body),
   etimsPreview:   (id)         => api.get(`/pos/orders/${id}/etims-preview`),
   fetchPdf:       (id)         => api.get(`/pos/orders/${id}/pdf`, { responseType: 'blob' }),
   printConfirmation: (id)      => api.post(`/pos/orders/${id}/print-confirmation`),
@@ -92,6 +93,9 @@ export const posApi = {
   },
   stkPush:        (id, body)   => api.post(`/pos/orders/${id}/stk-push`, body),
   fetchPayments:  (params)     => api.get('/pos/payments/fetch', { params }),
+  recordMpesaMatch: (orderId, matches) => api.post(`/pos/orders/${orderId}/mpesa-match`, { matches }),
+  mpesaInvoiceReport: (params) => api.get('/pos/reports/mpesa-invoices', { params }),
+  mpesaPaymentReport: (params) => api.get('/pos/reports/mpesa-payments', { params }),
   // shops + favourites + price list
   listShops:      ()           => api.get('/pos/shops'),
   listFavourites: ()           => api.get('/pos/favourites'),
@@ -163,6 +167,12 @@ export const stockApi = {
   cancelRequest:  (id)                        => api.post(`/pos/stock-requests/${id}/cancel`),
   completeRequest:(id, lines)                 => api.post(`/pos/stock-requests/${id}/complete`, { lines }),
 
+  // BC stock baseline (reset to BC on-hand) + incremental ledger loads
+  bcWatermark:    ()                          => api.get('/pos/stock/bc-watermark'),
+  resetFromBc:    (body = {})                 => api.post('/pos/stock/reset-from-bc', body),
+  bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
+  loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),
+
   // Daily movements report
   dailyReport:    (params)                    => api.get('/pos/stock/daily-movements', { params }),
   dailyReportCsv: (params)                    => api.get('/pos/stock/daily-movements.csv', { params, responseType: 'blob' }),
@@ -199,18 +209,20 @@ export const posSetupApi = {
   deleteCategory:  (id)         => api.delete(`/pos/setup/categories/${id}`),
 
   // contacts
-  listSetupContacts: ()                    => api.get('/pos/setup/contacts'),
+  listSetupContacts: (params)              => api.get('/pos/setup/contacts', { params }),
   deleteSetupContact:(id)                  => api.delete(`/pos/setup/contacts/${id}`),
   listBcContacts:    (company, spCode)     => api.get(`/pos/setup/bc-contacts?company=${company||'FCL'}&salespersonCode=${encodeURIComponent(spCode)}`),
+  listBcSalespersons:(company)             => api.get(`/pos/setup/bc-salespersons?company=${company||'FCL'}`),
   importContacts:    (contacts, shopCode)  => api.post('/pos/setup/contacts/import', { contacts, shopCode }),
 
   // items
-  listItems:       ()           => api.get('/pos/setup/items'),
+  listItems:       (params)     => api.get('/pos/setup/items', { params }),
   listBcItems:     (company)    => api.get(`/pos/setup/bc-items?company=${company || 'FCL'}`),
   saveItem:        (body)       => body.itemId
     ? api.patch(`/pos/setup/items/${body.itemId}`, body)
     : api.post('/pos/setup/items', body),
   deleteItem:      (id)         => api.delete(`/pos/setup/items/${id}`),
+  uploadItemPhoto: (id, photoBase64, photoMime) => api.post(`/pos/setup/items/${id}/photo`, { photoBase64, photoMime }),
 
   // payment types
   listPaymentTypes:()           => api.get('/pos/setup/payment-types'),
@@ -237,7 +249,7 @@ export const posSetupApi = {
   deleteVatRate:   (id)         => api.delete(`/pos/setup/vat-rates/${id}`),
 
   // Special prices (offers)
-  listSpecialPrices: ()         => api.get('/pos/setup/special-prices'),
+  listSpecialPrices: (params)   => api.get('/pos/setup/special-prices', { params }),
   saveSpecialPrice:  (body)     => body.specialPriceId
     ? api.patch(`/pos/setup/special-prices/${body.specialPriceId}`, body)
     : api.post('/pos/setup/special-prices', body),

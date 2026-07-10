@@ -346,6 +346,27 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='CustomerPriceGroup')
       ALTER TABLE [dbo].[PosShop] ADD [CustomerPriceGroup] NVARCHAR(50) NULL
   `);
+  // Salesperson ext fields (BC Salesperson_Purchaser) carried onto the terminal
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='CurrentRoute')
+      ALTER TABLE [dbo].[PosShop] ADD [CurrentRoute] NVARCHAR(200) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='TptLocationCode')
+      ALTER TABLE [dbo].[PosShop] ADD [TptLocationCode] NVARCHAR(200) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='VatBusPostingGroup')
+      ALTER TABLE [dbo].[PosShop] ADD [VatBusPostingGroup] NVARCHAR(50) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='Email')
+      ALTER TABLE [dbo].[PosShop] ADD [Email] NVARCHAR(200) NULL
+  `);
   console.log('  [dbo].[PosShop] OK');
 
   // ── [dbo].[PosContact] ────────────────────────────────────────────────────
@@ -430,6 +451,12 @@ async function migrate(companyId) {
     ['VatPostingGroup',    'NVARCHAR(50)  NULL'],
     ['PriceIncludesVat',   'BIT NOT NULL DEFAULT 0'],
     ['VatPercent',         'DECIMAL(8,4)  NOT NULL DEFAULT 0'],
+    // eTIMS / BC sync companions (written by the "Sync from BC" MERGE in PosModel)
+    ['ProductionCategory', 'NVARCHAR(50)  NULL'],
+    ['PackagingUnit',      'NVARCHAR(20)  NULL'],
+    ['QuantityUnit',       'NVARCHAR(20)  NULL'],
+    ['IsByproduct',        'BIT NOT NULL DEFAULT 0'],
+    ['SourceCompany',      'NVARCHAR(20)  NULL'],
   ]) {
     await run(`
       IF NOT EXISTS (SELECT * FROM sys.columns
@@ -513,6 +540,7 @@ async function migrate(companyId) {
       ALTER TABLE [dbo].[PosOrder] ADD [ContactPhone] NVARCHAR(30) NULL
   `);
   for (const [col, def] of [
+    ['EtimsNo',            'NVARCHAR(50)   NULL'],
     ['EtimsInvoiceNo',     'NVARCHAR(50)   NULL'],
     ['CuSerialNo',         'NVARCHAR(50)   NULL'],
     ['QrUrl',              'NVARCHAR(500)  NULL'],
@@ -593,6 +621,13 @@ async function migrate(companyId) {
       [UpdatedAt]      DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
+  // Source tag: 'MANUAL' (admin/CSV offers) vs 'BC' (synced from BC Sales Price).
+  // Lets the shop-price sync prune only its own rows without touching manual offers.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosSpecialPrice]') AND name='Source')
+      ALTER TABLE [dbo].[PosSpecialPrice] ADD [Source] NVARCHAR(20) NOT NULL DEFAULT 'MANUAL'
+  `);
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.indexes
                    WHERE name='IX_PosSpecialPrice_Item_Shop'
@@ -601,6 +636,35 @@ async function migrate(companyId) {
       ON [dbo].[PosSpecialPrice]([ItemNo],[ShopCode],[IsActive])
   `);
   console.log('  [dbo].[PosSpecialPrice] OK');
+
+  // ── [dbo].[PosMpesaApplication] (M-Pesa confirmation-code → invoice ledger) ──
+  // One row per (M-Pesa code applied to an order). A single code can be applied
+  // to several invoices (partial utilization); available balance for a code =
+  // MpesaAmount − SUM(AppliedAmount). Powers the checkout match table + reports.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosMpesaApplication' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosMpesaApplication] (
+      [ApplicationId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [MpesaCode]     NVARCHAR(40)     NOT NULL,
+      [MpesaAmount]   DECIMAL(18,2)    NOT NULL DEFAULT 0,
+      [AppliedAmount] DECIMAL(18,2)    NOT NULL DEFAULT 0,
+      [Phone]         NVARCHAR(30)     NULL,
+      [PayerName]     NVARCHAR(200)    NULL,
+      [TransTime]     DATETIME2        NULL,
+      [OrderId]       UNIQUEIDENTIFIER NULL,
+      [OrderNo]       NVARCHAR(40)     NULL,
+      [InvoiceNo]     NVARCHAR(60)     NULL,
+      [ShopCode]      NVARCHAR(50)     NULL,
+      [CreatedBy]     NVARCHAR(200)    NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_PosMpesaApplication_Code'
+                     AND object_id=OBJECT_ID('[dbo].[PosMpesaApplication]'))
+    CREATE INDEX [IX_PosMpesaApplication_Code] ON [dbo].[PosMpesaApplication]([MpesaCode])
+  `);
+  console.log('  [dbo].[PosMpesaApplication] OK');
 
   // ── [dbo].[PosFavourite] (per-user favourite items) ─────────────────────────
   await run(`
@@ -615,6 +679,22 @@ async function migrate(companyId) {
     )
   `);
   console.log('  [dbo].[PosFavourite] OK');
+
+  // ── [dbo].[PosStockWatermark] (per-terminal BC item-ledger baseline) ─────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockWatermark' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosStockWatermark] (
+      [ShopCode]      NVARCHAR(50)  NOT NULL PRIMARY KEY,
+      [LocationCode]  NVARCHAR(20)  NULL,
+      [SourceCompany] NVARCHAR(20)  NULL,
+      [LastEntryNo]   INT           NOT NULL DEFAULT 0,
+      [ResetAt]       DATETIME2     NULL,
+      [ResetBy]       NVARCHAR(100) NULL,
+      [LastLoadAt]    DATETIME2     NULL,
+      [UpdatedAt]     DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosStockWatermark] OK');
 
   // ── [dbo].[PosTillSession] + balances + transactions ─────────────────────
   await run(`

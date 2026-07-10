@@ -1,23 +1,59 @@
-# Dependencies
+# ---------- Dependencies ----------
 node_modules/
+.pnp
+.pnp.js
 
-# Build output
+# ---------- Build output ----------
 dist/
-.claude/
-.codex
-# Environment — never commit real credentials
+build/
+client/dist/
+*.tsbuildinfo
+
+# ---------- Vite / cache ----------
+.vite/
+.cache/
+.eslintcache
+
+# ---------- Environment / secrets (never commit real credentials) ----------
 .env
-.env.example
-/logs
+.env.local
+.env.*.local
+client/.env
+server/.env
+# keep the templates
+!.env.example
+!server/.env.example
 
-# Logs (keep directory, ignore log files)
-server/logs/*.log
+# ---------- Logs ----------
+logs/
+server/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Editor
+# ---------- Generated / printed output (receipts, pricelists, thermal PDFs) ----------
+server/printed/
+*.pdf
+
+# ---------- Ad-hoc data dumps / spreadsheets ----------
+*.xls
+*.xlsx
+*.csv
+
+# ---------- Editor / IDE ----------
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 
-# OS
+# ---------- Claude / tooling ----------
+.claude/
+.codex
+.tools/
+
+# ---------- OS ----------
 .DS_Store
 Thumbs.db
+desktop.ini

@@ -149,17 +149,18 @@ Severity legend: **C** = Critical · **H** = High · **M** = Medium · **L** = L
 | D7 | Save cart (suspend) | Click "Save"; resume later | Cart restored with same lines; no till impact | M | | |
 | D8 | Cancel order | Click Cancel | Order status `cancelled`; stock not deducted; audit row | H | | |
 | D9 | Checkout — single tender (cash) | Pay 100% cash, exact amount | 200; receipt prints (72mm); stock deducted at shop's `LocationCode` (negative not allowed) | C | | |
-| D10 | Checkout — change due | Cash > total | Change amount displayed and printed | M | | |
-| D11 | Checkout — split tender | 60% cash + 40% MPESA | 200; both `PosOrderPayment` rows; receipt shows split | H | | |
+| D10 | Checkout — change due | Cash > total | Change amount displayed and printed under payment methods on checkout and receipt | M | | |
+| D11 | Checkout — split tender | 60% cash + 40% MPESA; include coupon if available | 200; all `PosPayment` rows recorded; checkout footer and receipt show payment method, amount, coupon code/reference, and change before QR/signing details | H | | |
 | D12 | MPESA STK — happy path | Pay via MPESA → STK push to test number → confirm on phone | Polling completes; payment confirmed; receipt prints | C | | |
 | D13 | MPESA STK — timeout | STK push, do not confirm | Polling times out; order stays in `awaiting_payment`; can retry or revert to other tender | H | | |
 | D14 | Coupon redemption | Apply coupon code at checkout | Discount applied; coupon ledger debited; can't double-redeem | H | | |
 | D15 | Stock check fail-closed | Force BC SQL outage; try checkout | Block checkout with "Cannot verify stock"; no PosOrder created | C | | |
 | D16 | Receipt — VAT split | Cart with mixed VAT16 / VAT0 items | Receipt shows VAT-able subtotal, VAT amount, VAT-exempt subtotal correctly | C | | |
-| D17 | Receipt — eTIMS submit | After successful checkout | eTIMS payload sent; control unit serial + QR printed; receipt has control code | C | | |
+| D17 | Receipt — eTIMS submit | After successful checkout | eTIMS payload sent using POS terminal-prefixed document no.; control unit serial, signing time, and signing-service QR print below payment details | C | | |
 | D18 | Reprint | Order list → Reprint | Same PDF; audit row with `action='reprint'` | M | | |
 | D19 | Abandoned cart label | MPESA timeout → save as abandoned | Cart appears in "Abandoned" filter | L | | |
 | D20 | Close till | End of shift → Close Till; declare counted cash | Session closed; cash variance = counted - (opening + cash sales − payouts); report PDF generated | C | | |
+| D21 | eTIMS credit memo signing | Admin opens paid/signed POS order → Sign Credit Memo → enter admin PIN and reason | eTIMS credit note payload is submitted only for signage; shop role cannot access; no stock/payment reversal occurs | H | | |
 
 ---
 
@@ -222,10 +223,10 @@ Severity legend: **C** = Critical · **H** = High · **M** = Medium · **L** = L
 | A — Inventory | 15 | | | | |
 | B — Users & Access | 20 | | | | |
 | C — Setups | 19 | | | | |
-| D — Terminal & Checkout | 20 | | | | |
+| D — Terminal & Checkout | 21 | | | | |
 | E — Stock Operations | 13 | | | | |
 | F — Reports | 9 | | | | |
 | G — Non-functional | 9 | | | | |
-| **Total** | **105** | | | | |
+| **Total** | **106** | | | | |
 
 **Approvers:** Business lead ____________   QA lead ____________   IT lead ____________   Date ________

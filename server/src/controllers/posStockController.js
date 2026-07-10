@@ -29,6 +29,68 @@ async function userShopCode(req) {
   return Pos.getUserShopCode(req.user.userId);
 }
 
+// Elevation: managers (admin / shop-admin) pass straight through; anyone else
+// must supply a valid admin/shop-admin username + password in the request body.
+async function ensureManager(req) {
+  if (['admin', 'shop-admin'].includes(req.user.role)) return;
+  const { adminUsername, adminPassword } = req.body || {};
+  if (!adminUsername || !adminPassword) {
+    const e = new Error('Admin authorization required'); e.code = 'ELEVATION'; throw e;
+  }
+  await Pos.verifyManagerCredentials(adminUsername, adminPassword);
+}
+
+// ── BC stock baseline / fresh loads ──────────────────────────────────────────
+
+export async function bcStockWatermark(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    ok(res, { shopCode, watermark: await Stock.getStockWatermark(shopCode) });
+  } catch (e) { err(res, e); }
+}
+
+export async function resetStockFromBc(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    await ensureManager(req);
+    const result = await Stock.resetStockFromBc({
+      shopCode,
+      company:  req.body?.company || undefined,
+      userId:   req.user.userId,
+      userName: req.user.userName,
+    });
+    ok(res, result);
+  } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
+}
+
+export async function bcLedgerDates(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    const wm = await Stock.getStockWatermark(shopCode);
+    if (!wm) return res.status(400).json({ error: 'Run Stock Reset first to set a baseline' });
+    const dates = await Stock.bcLedgerDatesSince(wm.SourceCompany || 'FCL', wm.LocationCode, wm.LastEntryNo);
+    ok(res, { shopCode, watermark: wm, dates });
+  } catch (e) { err(res, e); }
+}
+
+export async function loadStockFromBc(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    await ensureManager(req);
+    const uptoEntryNo = Number(req.body?.uptoEntryNo || 0);
+    if (!uptoEntryNo) return res.status(400).json({ error: 'uptoEntryNo required' });
+    const result = await Stock.loadStockFromBc({
+      shopCode, uptoEntryNo,
+      asOfDate: req.body?.asOfDate || null,
+      userId:   req.user.userId,
+      userName: req.user.userName,
+    });
+    ok(res, result);
+  } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
+}
+
 // ── Stock Requests ───────────────────────────────────────────────────────────
 
 export async function listRequests(req, res) {

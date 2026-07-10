@@ -112,10 +112,29 @@ html, body, #app {
   color: var(--bc-text);
   border-color: var(--bc-border);
 }
+/* Plain dark rows before hover: PrimeVue's light theme gives striped (p-row-odd)
+   rows a bright background that hides the light text. Force every non-hover row
+   to the dark surface — but leave the warning highlight + selected rows alone. */
+.p-datatable .p-datatable-tbody > tr:not(.row-copy):not(.p-datatable-row-selected):not(:hover),
+.p-datatable .p-datatable-tbody > tr:not(.row-copy):not(.p-datatable-row-selected):not(:hover) > td {
+  background: transparent !important;
+  color: var(--bc-text) !important;
+}
+
+/* Selected row: PrimeVue's light theme paints a bright selection band; pin the
+   text to dark-blue so it stays legible (light text was disappearing on it). */
+.p-datatable .p-datatable-tbody > tr.p-datatable-row-selected,
+.p-datatable .p-datatable-tbody > tr.p-datatable-row-selected > td {
+  background: #cfe0f5 !important;
+  color: #102a56 !important;
+}
+
+/* Row hover: light band + dark-blue text so it stays readable even when the
+   hover background renders bright (e.g. under Chrome auto-dark). */
 .p-datatable .p-datatable-tbody > tr:hover,
 .p-datatable .p-datatable-tbody > tr:hover > td {
-  background: var(--bc-surface-raised);
-  color: var(--bc-text);
+  background: #e8eef7;
+  color: #102a56 !important;
 }
 .p-datatable .p-datatable-tfoot > tr > td {
   background: var(--bc-surface-raised);

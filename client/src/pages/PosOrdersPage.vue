@@ -75,6 +75,13 @@
               @click.stop="signOrder(data)"
             />
             <Button
+              v-if="data.Status === 'paid' && data.EtimsInvoiceNo && isAdmin"
+              icon="pi pi-undo" size="small" severity="danger" text rounded
+              v-tooltip.top="'Sign eTIMS credit memo'"
+              :loading="crediting[data.OrderId]"
+              @click.stop="openCreditMemo(data)"
+            />
+            <Button
               icon="pi pi-code" size="small" text rounded
               v-tooltip.top="'Test/preview eTIMS payload'"
               @click.stop="showEtimsPreview(data)"
@@ -244,11 +251,38 @@
         />
       </template>
     </Dialog>
+
+    <Dialog v-model:visible="creditMemo.visible"
+            :header="`eTIMS credit memo — ${creditMemo.order?.OrderNo || ''}`"
+            :modal="true" :style="{ width: '440px' }"
+            content-class="modal-content-light">
+      <div class="checkout-form">
+        <Message severity="warn" :closable="false">
+          Admin approval signs a full eTIMS credit memo for this paid invoice only. It does not reverse stock or payments.
+        </Message>
+        <div class="form-row">
+          <label>Reason</label>
+          <InputText v-model="creditMemo.reason" placeholder="RETURN" fluid />
+        </div>
+        <div class="form-row">
+          <label>Admin PIN</label>
+          <InputText v-model="creditMemo.adminPin" type="password" autocomplete="current-password" fluid />
+        </div>
+        <div v-if="creditMemo.error" class="pay-error">{{ creditMemo.error }}</div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="creditMemo.visible=false" :disabled="creditMemo.processing" />
+        <Button label="Sign Credit Memo" icon="pi pi-shield" severity="danger"
+                :loading="creditMemo.processing"
+                :disabled="!creditMemo.adminPin"
+                @click="submitCreditMemo" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -257,8 +291,11 @@ import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import InputText from 'primevue/inputtext'
 import { posApi } from '@/services/pos.js'
+import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
+const auth = useAuthStore()
+const isAdmin = computed(() => auth.user?.role === 'admin')
 const orders        = ref([])
 const loading       = ref(false)
 const error         = ref('')
@@ -267,6 +304,15 @@ const selectedOrder = ref(null)
 const completing    = reactive({})
 const reprinting    = reactive({})
 const signing       = reactive({})
+const crediting     = reactive({})
+const creditMemo = reactive({
+  visible: false,
+  processing: false,
+  order: null,
+  adminPin: '',
+  reason: 'RETURN',
+  error: '',
+})
 
 async function load() {
   loading.value = true; error.value = ''
@@ -339,6 +385,36 @@ async function signOrder(row) {
     error.value = e.response?.data?.error ?? e.message
   } finally {
     signing[id] = false
+  }
+}
+
+function openCreditMemo(row) {
+  creditMemo.order = row
+  creditMemo.adminPin = ''
+  creditMemo.reason = 'RETURN'
+  creditMemo.error = ''
+  creditMemo.visible = true
+}
+
+async function submitCreditMemo() {
+  const row = creditMemo.order
+  if (!row) return
+  const id = row.OrderId || row.orderId
+  crediting[id] = true
+  creditMemo.processing = true
+  creditMemo.error = ''
+  try {
+    const { data } = await posApi.signCreditMemo(id, {
+      adminPin: creditMemo.adminPin,
+      reason: creditMemo.reason || 'RETURN',
+    })
+    creditMemo.visible = false
+    alert(`Credit memo signed: ${data?.creditMemo?.etimsCreditMemoNo || data?.creditMemo?.etimsNo || 'OK'}`)
+  } catch (e) {
+    creditMemo.error = e.response?.data?.error ?? e.message
+  } finally {
+    creditMemo.processing = false
+    crediting[id] = false
   }
 }
 

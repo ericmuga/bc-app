@@ -187,7 +187,9 @@
       </div>
 
       <div v-if="!loading && isMatrixReport && matrixRows.length" class="matrix-wrap">
-        <DataTable :value="matrixRowsForDisplay" :row-class="rowClass" show-gridlines size="small" scroll-height="flex" scrollable>
+        <DataTable :value="matrixRowsForDisplay" :row-class="rowClass" show-gridlines size="small" scroll-height="flex" scrollable
+          v-model:expanded-rows="expandedPostingGroupRows" data-key="_rowKey">
+          <Column v-if="reportType === 'postingGroup'" expander style="width:48px" />
           <Column :header="dimLabel" field="GroupKey" frozen style="min-width:170px" />
           <template v-for="co in activeCompanies" :key="co">
             <Column :header="`${co} Qty`" class="num-col" style="min-width:100px">
@@ -208,6 +210,20 @@
               <Button v-if="!data._isTotal" icon="pi pi-list" text rounded size="small" v-tooltip.left="'Items'" @click="openPgItemDrawer(data)" />
             </template>
           </Column>
+          <template #expansion="{ data }">
+            <div v-if="!data._isTotal" class="pg-breakdown">
+              <DataTable :value="data._nativeRows || []" show-gridlines size="small" responsive-layout="scroll">
+                <Column header="Company" field="Company" style="width:90px" />
+                <Column header="Posting Group" field="NativePostingGroup" style="min-width:180px" />
+                <Column header="Qty" class="num-col" style="width:120px">
+                  <template #body="{ data: row }">{{ fmt(row.Qty) }}</template>
+                </Column>
+                <Column header="Amount" class="num-col" style="width:140px">
+                  <template #body="{ data: row }">{{ fmtAmt(row.Amount) }}</template>
+                </Column>
+              </DataTable>
+            </div>
+          </template>
         </DataTable>
       </div>
 
@@ -741,7 +757,7 @@ const PRODUCT_TYPE_OPTIONS = [
 ]
 const BY_PRODUCT_OPTIONS = [
   { value: 'all', label: 'Include All' },
-  { value: 'exclude', label: 'Exclude By-Products' },
+  { value: 'exclude', label: 'Exclude By-Product Qty (keep value)' },
   { value: 'only', label: 'Only By-Products' },
 ]
 const GEN_BUS_OPTIONS = [
@@ -883,6 +899,7 @@ const matrixRowsForDisplay = computed(() => {
   const detailRows = matrixRows.value.filter((row) => !row._isTotal)
   return total ? [total, ...detailRows] : detailRows
 })
+const expandedPostingGroupRows = ref({})
 
 // Item drill-down for Posting Group report
 const pgItemCompanies = computed(() => {
@@ -926,19 +943,48 @@ const matrixRows = computed(() => {
   if (!isMatrixReport.value || !visibleRows.value.length) return []
   const map = new Map()
   for (const row of visibleRows.value) {
-    if (!map.has(row.GroupKey)) map.set(row.GroupKey, { GroupKey: row.GroupKey })
+    if (!map.has(row.GroupKey)) {
+      map.set(row.GroupKey, {
+        GroupKey: row.GroupKey,
+        _rowKey: `group:${row.GroupKey}`,
+        _nativeMap: new Map(),
+      })
+    }
     const entry = map.get(row.GroupKey)
     if (!entry[row.Company]) entry[row.Company] = { Qty: 0, Amount: 0 }
     const sign = viewMode.value === 'credits' ? -1 : 1
-    entry[row.Company].Qty += sign * (Number(row.Qty) || 0)
-    entry[row.Company].Amount += sign * (Number(row.Amount) || 0)
+    const qty = sign * (Number(row.Qty) || 0)
+    const amount = sign * (Number(row.Amount) || 0)
+    entry[row.Company].Qty += qty
+    entry[row.Company].Amount += amount
+    if (reportType.value === 'postingGroup') {
+      const nativeKey = row.NativePostingGroup || row.GroupKey || '(Blank)'
+      const detailKey = `${row.Company}\x00${nativeKey}`
+      if (!entry._nativeMap.has(detailKey)) {
+        entry._nativeMap.set(detailKey, {
+          Company: row.Company,
+          NativePostingGroup: nativeKey,
+          Qty: 0,
+          Amount: 0,
+        })
+      }
+      const detail = entry._nativeMap.get(detailKey)
+      detail.Qty += qty
+      detail.Amount += amount
+    }
   }
   const rows = [...map.values()].map((row) => {
     row._totQty = activeCompanies.value.reduce((sum, co) => sum + (row[co]?.Qty || 0), 0)
     row._totAmount = activeCompanies.value.reduce((sum, co) => sum + (row[co]?.Amount || 0), 0)
+    if (row._nativeMap) {
+      row._nativeRows = [...row._nativeMap.values()]
+        .filter((detail) => Math.abs(detail.Qty) + Math.abs(detail.Amount) > 0)
+        .sort((a, b) => a.Company.localeCompare(b.Company) || a.NativePostingGroup.localeCompare(b.NativePostingGroup))
+      delete row._nativeMap
+    }
     return row
   }).sort((a, b) => b._totAmount - a._totAmount)
-  const total = { GroupKey: 'TOTAL', _isTotal: true }
+  const total = { GroupKey: 'TOTAL', _rowKey: 'total', _isTotal: true }
   for (const co of activeCompanies.value) {
     total[co] = { Qty: rows.reduce((sum, row) => sum + (row[co]?.Qty || 0), 0), Amount: rows.reduce((sum, row) => sum + (row[co]?.Amount || 0), 0) }
   }
@@ -2155,12 +2201,12 @@ watch(() => `${filters.value.productType}|${filters.value.byProductMode}`, () =>
 
 <style scoped>
 /* ── Layout ──────────────────────────────────────────────────── */
-.bc-reports-layout { display:flex; height:100%; overflow:hidden; background:#f3f6fb; font-size:13px; }
+.bc-reports-layout { display:flex; height:100%; overflow:hidden; background:var(--bc-surface); font-size:13px; }
 
 /* ── Filter slicer panel ─────────────────────────────────────── */
 .slicer-panel {
   width:270px; min-width:270px;
-  background:#fff; border-right:1px solid #dbe3ee;
+  background:var(--bc-surface-card); border-right:1px solid var(--bc-border);
   padding:12px; overflow-y:auto; overflow-x:hidden;
   transition: width 0.25s ease, min-width 0.25s ease, padding 0.25s ease;
   flex-shrink:0;
@@ -2168,14 +2214,14 @@ watch(() => `${filters.value.productType}|${filters.value.byProductMode}`, () =>
 .slicer-panel.filters-closed {
   width:0; min-width:0; padding:0;
 }
-.slicer-header { display:flex; align-items:center; gap:8px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#000; margin-bottom:10px; }
-.filter-box { border:1px solid #dbe3ee; border-radius:10px; background:#fbfdff; margin-bottom:10px; overflow:hidden; }
-.filter-box summary { list-style:none; cursor:pointer; padding:10px 12px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#000; }
+.slicer-header { display:flex; align-items:center; gap:8px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--bc-text); margin-bottom:10px; }
+.filter-box { border:1px solid var(--bc-border); border-radius:10px; background:var(--bc-surface-raised); margin-bottom:10px; overflow:hidden; }
+.filter-box summary { list-style:none; cursor:pointer; padding:10px 12px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--bc-text); }
 .filter-box summary::-webkit-details-marker { display:none; }
 .filter-body { padding:10px 12px; }
-.slicer-label { display:block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#000; margin:0 0 6px; white-space:nowrap; }
+.slicer-label { display:block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--bc-text-muted); margin:0 0 6px; white-space:nowrap; }
 .slicer-check { display:flex; align-items:center; gap:7px; padding:3px 0; }
-.slicer-check label { color:#000; font-weight:600; white-space:nowrap; }
+.slicer-check label { color:var(--bc-text); font-weight:600; white-space:nowrap; }
 .filter-input, .filter-multi { width:100%; margin-bottom:10px; }
 .run-btn { width:100%; margin-top:8px; }
 
@@ -2185,7 +2231,7 @@ watch(() => `${filters.value.productType}|${filters.value.byProductMode}`, () =>
 /* ── Tab bar ─────────────────────────────────────────────────── */
 .tab-bar {
   display:flex; gap:4px; padding:8px 10px 0;
-  background:#fff; border-bottom:1px solid #dbe3ee;
+  background:var(--bc-surface-card); border-bottom:1px solid var(--bc-border);
   overflow-x:auto; flex-shrink:0;
   scrollbar-width:none;
 }
@@ -2194,46 +2240,47 @@ watch(() => `${filters.value.productType}|${filters.value.byProductMode}`, () =>
   display:flex; align-items:center; gap:6px;
   padding:7px 12px; border:none; border-radius:8px 8px 0 0;
   background:transparent; cursor:pointer; font-size:12px;
-  color:#687487; font-weight:600; white-space:nowrap; flex-shrink:0;
+  color:var(--bc-text-muted); font-weight:600; white-space:nowrap; flex-shrink:0;
 }
-.tab-btn.active { background:#1d4ed8; color:#fff; }
+.tab-btn.active { background:var(--bc-primary); color:#fff; }
 .filter-toggle-btn {
   display:flex; align-items:center; gap:6px;
   padding:7px 12px; border:none; border-radius:8px 8px 0 0;
-  background:#f1f5f9; cursor:pointer; font-size:12px;
-  color:#1d4ed8; font-weight:700; white-space:nowrap; flex-shrink:0;
+  background:var(--bc-surface-raised); cursor:pointer; font-size:12px;
+  color:var(--bc-primary-light); font-weight:700; white-space:nowrap; flex-shrink:0;
   transition: background 0.15s;
 }
-.filter-toggle-btn:hover { background:#e2e8f0; }
+.filter-toggle-btn:hover { background:rgba(127,127,127,0.18); }
 
 /* ── Toolbar ─────────────────────────────────────────────────── */
-.toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#fff; border-bottom:1px solid #dbe3ee; flex-wrap:wrap; }
+.toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--bc-surface-card); border-bottom:1px solid var(--bc-border); flex-wrap:wrap; }
 .toolbar-actions { margin-left:auto; display:flex; align-items:center; gap:4px; }
 .view-toggle { display:flex; gap:2px; flex-shrink:0; }
-.view-btn { padding:4px 10px; border:1px solid #d0d5dd; background:#fff; border-radius:4px; cursor:pointer; font-size:12px; color:#344054; }
-.view-btn.active { background:#1d4ed8; color:#fff; border-color:#1d4ed8; }
-.period-pill { padding:5px 10px; border-radius:999px; background:#eef4ff; color:#24407a; font-size:11px; flex-shrink:0; }
+.view-btn { padding:4px 10px; border:1px solid var(--bc-border); background:var(--bc-surface-raised); border-radius:4px; cursor:pointer; font-size:12px; color:var(--bc-text); }
+.view-btn.active { background:var(--bc-primary); color:#fff; border-color:var(--bc-primary); }
+.period-pill { padding:5px 10px; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; font-size:11px; flex-shrink:0; }
 
 /* ── KPI strip ───────────────────────────────────────────────── */
 .kpi-strip { display:flex; gap:8px; flex-wrap:nowrap; overflow-x:auto; flex:1; min-width:0; scrollbar-width:none; }
 .kpi-strip::-webkit-scrollbar { display:none; }
 .kpi-card, .highlight-card {
   display:flex; flex-direction:column; gap:4px; padding:10px 12px;
-  border-radius:10px; background:linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  border:1px solid #b8c7df; box-shadow:0 8px 18px rgba(15,23,42,.07);
+  border-radius:10px; background:var(--bc-surface-raised);
+  border:1px solid var(--bc-border); box-shadow:0 8px 18px rgba(0,0,0,.25);
   flex-shrink:0;
 }
-.kpi-label { font-size:10px; color:#000; text-transform:uppercase; letter-spacing:.06em; font-weight:800; }
-.kpi-val { font-size:15px; font-weight:900; color:#000; font-variant-numeric:tabular-nums; line-height:1.1; }
-.kpi-val.emphatic { font-size:20px; line-height:1.02; font-weight:950; color:#000; }
-.positive { color:#0d5f2a; }
-.negative { color:#9b1c1c; }
-.neutral { color:#475467; }
+.kpi-label { font-size:10px; color:var(--bc-text-muted); text-transform:uppercase; letter-spacing:.06em; font-weight:800; }
+.kpi-val { font-size:15px; font-weight:900; color:var(--bc-text); font-variant-numeric:tabular-nums; line-height:1.1; }
+.kpi-val.emphatic { font-size:20px; line-height:1.02; font-weight:950; color:var(--bc-text); }
+.positive { color:var(--bc-success); }
+.negative { color:var(--bc-danger); }
+.neutral { color:var(--bc-text-muted); }
 
 /* ── Empty / skeleton ────────────────────────────────────────── */
-.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#98a2b3; gap:10px; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--bc-text-muted); gap:10px; }
 .skeleton-wrap, .matrix-wrap, .product-wrap { padding:10px 12px; }
 .matrix-wrap { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+.pg-breakdown { padding:8px 18px 12px 56px; background:var(--bc-surface-raised); }
 .product-wrap { flex:1; min-height:0; overflow:auto; }
 
 /* ── Product / highlight ─────────────────────────────────────── */
@@ -2297,30 +2344,30 @@ watch(() => `${filters.value.productType}|${filters.value.byProductMode}`, () =>
 
 /* ── Misc ─────────────────────────────────────────────────────── */
 .trend-pill { display:inline-flex; align-items:center; justify-content:center; min-width:72px; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; }
-.trend-pill.positive { background:#dcfce7; }
-.trend-pill.negative { background:#fee4e2; }
-.trend-pill.neutral { background:#eaecf0; }
+.trend-pill.positive { background:rgba(34,197,94,0.18); color:var(--bc-success); }
+.trend-pill.negative { background:rgba(239,68,68,0.18); color:var(--bc-danger); }
+.trend-pill.neutral { background:rgba(127,127,127,0.20); color:var(--bc-text); }
 .mx, .inline-message { margin:8px 12px; flex-shrink:0; }
 .mb { margin-bottom:6px !important; }
 
 /* ── Downloads grid ──────────────────────────────────────────── */
 .download-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; }
-.download-card { background:#fff; border:1px solid #dbe3ee; border-radius:14px; padding:16px; box-shadow:0 8px 16px rgba(15,23,42,.05); display:flex; flex-direction:column; gap:10px; }
-.download-card h3 { margin:0; color:#000; font-size:15px; }
-.download-card p { margin:0; color:#344054; line-height:1.5; }
+.download-card { background:var(--bc-surface-card); border:1px solid var(--bc-border); border-radius:14px; padding:16px; box-shadow:0 8px 16px rgba(0,0,0,.25); display:flex; flex-direction:column; gap:10px; }
+.download-card h3 { margin:0; color:var(--bc-text); font-size:15px; }
+.download-card p { margin:0; color:var(--bc-text-muted); line-height:1.5; }
 
 /* ── Deep PrimeVue overrides ─────────────────────────────────── */
-:deep(.p-datatable-tbody > tr > td) { color:#101828 !important; background:#fff !important; padding:6px 10px !important; border-color:#e4e7ec !important; }
-:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:#f8fafc !important; }
-:deep(.p-datatable-tbody > tr.total-row > td) { background:#1d4ed8 !important; color:#fff !important; font-weight:700 !important; }
+:deep(.p-datatable-tbody > tr > td) { color:var(--bc-text) !important; background:transparent !important; padding:6px 10px !important; border-color:var(--bc-border) !important; }
+:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:rgba(255,255,255,0.03) !important; }
+:deep(.p-datatable-tbody > tr.total-row > td) { background:var(--bc-primary) !important; color:#fff !important; font-weight:700 !important; }
 :deep(.p-datatable-tbody > tr.total-row) { position:sticky; top:33px; z-index:2; }
-:deep(.p-datatable-thead > tr > th) { background:#243247 !important; color:#f8fafc !important; font-size:11px !important; font-weight:700 !important; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px !important; border-color:#324256 !important; }
+:deep(.p-datatable-thead > tr > th) { background:var(--bc-surface-raised) !important; color:var(--bc-text) !important; font-size:11px !important; font-weight:700 !important; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px !important; border-color:var(--bc-border) !important; }
 :deep(.num-col) { text-align:right !important; }
 :deep(.filter-multi .p-multiselect) { width:100%; }
 :deep(.filter-multi .p-multiselect-label),
 :deep(.filter-multi .p-multiselect-label-empty),
 :deep(.filter-multi .p-multiselect-item),
-:deep(.filter-multi .p-placeholder) { color:#000 !important; }
+:deep(.filter-multi .p-placeholder) { color:var(--bc-text) !important; }
 
 /* ── Drawer full-width on mobile ─────────────────────────────── */
 :deep(.p-drawer) { max-width: 100vw !important; }

@@ -3,11 +3,13 @@
  * POS module REST handlers.
  */
 import fs from 'fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as Pos from '../models/PosModel.js';
 import * as Stock from '../models/PosStockModel.js';
-import { signPosOrder, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
+import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
-         fetchPaymentsFromService } from '../services/posReceiptService.js';
+         fetchPaymentsFromService, buildPrintPayload } from '../services/posReceiptService.js';
 import { ordersDb, sql as ordersSql } from '../db/ordersPool.js';
 import { pdfPathFor, generateInvoicePdf, generatePriceListPdf } from '../services/posPdfService.js';
 import logger from '../services/logger.js';
@@ -357,18 +359,50 @@ export async function fetchPayments(req, res) {
     if (!pt) return res.status(404).json({ error: `Unknown payment type ${code}` });
     if (!pt.PaymentFetchUrl) return res.status(400).json({ error: 'PaymentFetchUrl is not configured for this method' });
 
+    const amount = req.query.amount != null && req.query.amount !== '' ? parseFloat(req.query.amount) : null;
+    const searchCode = String(req.query.code || '').trim();   // confirmation-code fallback search
     const r = await fetchPaymentsFromService({
       paymentType: pt,
       params: {
-        since: req.query.since || undefined,
-        limit: req.query.limit || undefined,
-        shop:  shopCode || undefined,
+        since:     req.query.since || undefined,
+        limit:     req.query.limit || undefined,
+        amount:    (!searchCode && amount != null && !isNaN(amount)) ? amount : undefined,
+        code:      searchCode || undefined,
+        reference: searchCode || undefined,
+        shop:      shopCode || undefined,
       },
     });
     if (!r.ok) return res.status(502).json({ error: r.message, count: 0, payments: [] });
 
+    // Defensive filter even if the upstream service ignores our params.
+    // By code: match the confirmation number. By amount: exact-amount match.
+    if (searchCode) {
+      const cu = searchCode.toUpperCase();
+      r.payments = (r.payments || []).filter(p => String(p.reference || '').toUpperCase().includes(cu));
+      r.count = r.payments.length;
+    } else if (amount != null && !isNaN(amount)) {
+      r.payments = (r.payments || []).filter(p => Math.abs(Number(p.amount) - amount) < 0.5);
+      r.count = r.payments.length;
+    }
+
     // Optional auto-reconciliation (default: on). Match by orderNo / accountRef → confirm payment row.
     const reconcile = req.query.reconcile !== '0' && req.query.reconcile !== 'false';
+
+    // Checkout-lookup mode (reconcile off): annotate each transaction with how much
+    // of its amount is still available (full amount − already applied to invoices),
+    // drop fully-used codes, and order latest first.
+    if (!reconcile) {
+      const codes = (r.payments || []).map(p => p.reference);
+      const util  = await Pos.getMpesaUtilization(codes);
+      r.payments = (r.payments || []).map(p => {
+        const used = util[String(p.reference || '').toUpperCase()] || 0;
+        const availableAmount = Math.round((Number(p.amount || 0) - used) * 100) / 100;
+        return { ...p, appliedAmount: used, availableAmount };
+      }).filter(p => p.availableAmount > 0.009)
+        .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+      r.count = r.payments.length;
+    }
+
     let matched = 0, unmatched = 0;
     if (reconcile) {
       for (const p of r.payments) {
@@ -386,6 +420,37 @@ export async function fetchPayments(req, res) {
       }
     }
     ok(res, { ...r, matched, unmatched, reconciled: reconcile });
+  } catch (e) { err(res, e); }
+}
+
+// POST /pos/orders/:orderId/mpesa-match  body: { matches:[{code,mpesaAmount,applied,phone,name,timestamp}] }
+// Records the selected M-Pesa confirmation codes against this invoice (1→many).
+export async function recordMpesaMatch(req, res) {
+  try {
+    const matches = Array.isArray(req.body?.matches) ? req.body.matches : null;
+    if (!matches) return res.status(400).json({ error: 'matches array required' });
+    const out = await Pos.recordMpesaApplications({
+      orderId:   req.params.orderId,
+      matches,
+      createdBy: req.user?.userName || req.user?.userId || null,
+    });
+    ok(res, out);
+  } catch (e) { err(res, e, 400); }
+}
+
+// GET /pos/reports/mpesa-invoices?from=&to=&shopCode=   (invoice → payments)
+export async function mpesaInvoiceReport(req, res) {
+  try {
+    const shopCode = req.user?.role === 'admin' ? (req.query.shopCode || null)
+                                                : await resolveShopCode(req.user.userId, req.user.role, req);
+    ok(res, await Pos.mpesaInvoiceReport({ from: req.query.from, to: req.query.to, shopCode }));
+  } catch (e) { err(res, e); }
+}
+
+// GET /pos/reports/mpesa-payments?from=&to=   (payment code → invoices, incl. partial)
+export async function mpesaPaymentReport(req, res) {
+  try {
+    ok(res, await Pos.mpesaPaymentReport({ from: req.query.from, to: req.query.to }));
   } catch (e) { err(res, e); }
 }
 
@@ -514,31 +579,7 @@ export async function getOrderPdf(req, res) {
         qrUrl:          order.qrUrl,
         signedAt:       order.signedAt,
       } : null;
-      const payload = {
-        invoice_no:    order.orderNo,
-        customer_name: order.contactName || 'Walk-in Customer',
-        customer_pin:  order.contactPin || '',
-        customer_no:   order.contactNo || '',
-        order_no:      order.orderNo,
-        posting_date:  new Date(order.createdAt).toISOString().slice(0, 10),
-        sales_person_name: order.cashierName,
-        ship_to:       order.shopCode || '',
-        company_pin:   process.env.COMPANY_PIN || '',
-        total_ex_vat:  Number(order.totalAmount).toFixed(2),
-        vat:           '0.00',
-        total_inc_vat: Number(order.totalAmount).toFixed(2),
-        no_printed:    1,
-        lines: order.lines.map(l => ({
-          item_no: l.itemNo, item_description: l.description,
-          units: String(l.quantity), qty: String(l.quantity),
-          uom: l.unitOfMeasure || '', vat_id: l.taxType || '',
-          amount: Number(l.lineAmount).toFixed(2), crates: '',
-        })),
-        kra_invoice: etimsResult ? {
-          qr_url: etimsResult.qrUrl, cu_invoice_no: etimsResult.etimsInvoiceNo,
-          cu_serial_no: etimsResult.cuSerialNo, signed_at: etimsResult.signedAt,
-        } : null,
-      };
+      const payload = await buildPrintPayload(order, etimsResult);
       fileName = await generateInvoicePdf(payload);
       filePath = pdfPathFor(fileName);
       await Pos.markPrinted(order.orderId, fileName);
@@ -569,6 +610,25 @@ export async function signOrder(req, res) {
     await Pos.storeSignResult(order.orderId, result);
     ok(res, { etims: result });
   } catch (e) { err(res, e); }
+}
+
+export async function signCreditMemo(req, res) {
+  try {
+    if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin role required' });
+    const adminPin = String(req.body?.adminPin || '');
+    if (!adminPin) return res.status(400).json({ error: 'Admin PIN required' });
+    await Pos.verifyAdminPin(req.user.userId, adminPin);
+
+    const order = await Pos.getOrder(req.params.orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.status !== 'paid') return res.status(400).json({ error: 'Only paid orders can be credit-memo signed' });
+    if (!order.etimsInvoiceNo && !order.etimsNo) {
+      return res.status(400).json({ error: 'Original eTIMS invoice must be signed before credit memo signing' });
+    }
+
+    const result = await signPosCreditMemo(order, { reason: req.body?.reason || 'RETURN' });
+    ok(res, { ok: true, creditMemo: result });
+  } catch (e) { err(res, e, /required|invalid|not found|only paid/i.test(e.message) ? 400 : 500); }
 }
 
 export async function syncFromBc(req, res) {
@@ -613,11 +673,13 @@ export async function syncStepFromBc(req, res) {
       'items':           (c) => Pos.syncItemsFromBc(c, { wipe }),
       'payment-types':   (c) => Pos.syncPaymentTypesFromBc(c),
       'paymenttypes':    (c) => Pos.syncPaymentTypesFromBc(c),
+      'shop-prices':     (c) => Pos.syncShopPricesFromBc(c),
+      'shopprices':      (c) => Pos.syncShopPricesFromBc(c),
     };
     const fn = stepFns[kind];
     if (!fn) {
       return res.status(400).json({
-        error: `Unknown sync step "${kind}". Use one of: shops, walk-ins, contacts, categories, items, payment-types`,
+        error: `Unknown sync step "${kind}". Use one of: shops, walk-ins, contacts, categories, items, payment-types, shop-prices`,
       });
     }
     const result = await fn(company);
@@ -741,7 +803,10 @@ export async function listShopsForTerminal(req, res) {
 // ── Admin setup: special prices ──────────────────────────────────────────────
 
 export async function listSpecialPrices(req, res) {
-  try { ok(res, await Pos.listSpecialPrices()); } catch (e) { err(res, e); }
+  try {
+    const { page, pageSize, q } = req.query;
+    ok(res, await Pos.listSpecialPrices({ page, pageSize, q }));
+  } catch (e) { err(res, e); }
 }
 
 export async function saveSpecialPrice(req, res) {
@@ -932,7 +997,36 @@ export async function deleteCategory(req, res) {
 // ── Admin setup: items ────────────────────────────────────────────────────────
 
 export async function listSetupItems(req, res) {
-  try { ok(res, await Pos.listPosItems()); } catch (e) { err(res, e); }
+  try {
+    const { page, pageSize, q } = req.query;
+    ok(res, await Pos.listPosItems({ page, pageSize, q }));
+  } catch (e) { err(res, e); }
+}
+
+// POST /pos/setup/items/:itemId/photo  body: { photoBase64, photoMime }
+// Writes the image under server/uploads/items and stores /api/uploads/items/<file> on the item.
+const ITEM_IMG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../uploads/items');
+const PHOTO_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+export async function uploadItemPhoto(req, res) {
+  try {
+    const { itemId } = req.params;
+    const { photoBase64, photoMime } = req.body || {};
+    if (!photoBase64) return res.status(400).json({ error: 'photoBase64 required' });
+    const ext = PHOTO_EXT[String(photoMime || '').toLowerCase()];
+    if (!ext) return res.status(400).json({ error: 'photoMime must be png, jpeg, webp, or gif' });
+    const cleaned = String(photoBase64).replace(/^data:[^;]+;base64,/, '');
+    let buf;
+    try { buf = Buffer.from(cleaned, 'base64'); } catch { return res.status(400).json({ error: 'invalid base64' }); }
+    if (!buf.length) return res.status(400).json({ error: 'empty image' });
+    if (buf.length > 5 * 1024 * 1024) return res.status(413).json({ error: 'image exceeds 5MB' });
+
+    fs.mkdirSync(ITEM_IMG_DIR, { recursive: true });
+    const fname = `${String(itemId).replace(/[^a-zA-Z0-9-]/g, '')}-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(ITEM_IMG_DIR, fname), buf);
+    const url = `/api/uploads/items/${fname}`;
+    await Pos.setItemImageUrl(itemId, url);
+    ok(res, { imageUrl: url });
+  } catch (e) { err(res, e); }
 }
 
 export async function listBcItems(req, res) {
@@ -952,6 +1046,23 @@ export async function listBcContacts(req, res) {
   } catch (e) { err(res, e); }
 }
 
+export async function listBcSalespersons(req, res) {
+  try {
+    const company = req.query.company || 'FCL';
+    ok(res, await Pos.listBcSalespersons(company));
+  } catch (e) { err(res, e); }
+}
+
+// GET /pos/setup/bc-salespersons/:code/signature — Dept Signature image (base64).
+export async function getSalespersonSignature(req, res) {
+  try {
+    const company = req.query.company || 'FCL';
+    const sig = await Pos.getSalespersonSignature(company, req.params.code);
+    if (!sig) return res.status(404).json({ error: 'No signature on file' });
+    ok(res, sig);
+  } catch (e) { err(res, e); }
+}
+
 export async function importContacts(req, res) {
   try {
     const { contacts, shopCode } = req.body;
@@ -962,7 +1073,10 @@ export async function importContacts(req, res) {
 }
 
 export async function listSetupContacts(req, res) {
-  try { ok(res, await Pos.listContacts({ activeOnly: false })); } catch (e) { err(res, e); }
+  try {
+    const { page, pageSize, q } = req.query;
+    ok(res, await Pos.listContacts({ activeOnly: false, page, pageSize, q }));
+  } catch (e) { err(res, e); }
 }
 
 export async function deleteSetupContact(req, res) {

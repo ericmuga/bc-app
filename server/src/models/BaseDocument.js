@@ -238,7 +238,10 @@ export class BaseDocument {
           SUM(l.[LineAmount])                      AS TotalLineAmount
         FROM ${schema}.[${this.headerTable}] h
         JOIN ${schema}.[${this.lineTable}]   l ON h.[${this.noField}] = l.[${this.noField}]
+        JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = l.[ItemNo]
         WHERE ${conditions.join(' AND ')}
+          AND NULLIF(LTRIM(RTRIM(pi.[CategoryCode])), '') IS NOT NULL
+          AND NULLIF(LTRIM(RTRIM(l.[PostingGroup])), '') IS NOT NULL
         GROUP BY ${groupExpr}
         ORDER BY TotalLineAmount DESC
       `);

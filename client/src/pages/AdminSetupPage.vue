@@ -492,7 +492,7 @@ GROUP BY [G_L Account No_]</pre>
         <summary>
           <i class="pi pi-shopping-cart acc-icon" />
           <span>POS Setup</span>
-          <span class="acc-count">{{ posItems.length }} item(s)</span>
+          <span class="acc-count">{{ posItemsTotal }} item(s)</span>
         </summary>
         <div class="accordion-body">
 
@@ -728,6 +728,12 @@ GROUP BY [G_L Account No_]</pre>
               <Column field="Name"            header="Name"        style="min-width:160px" />
               <Column field="LocationCode"    header="Location"    style="width:100px" />
               <Column field="SalespersonCode" header="Salesperson" style="width:110px" />
+              <Column field="CurrentRoute"    header="Route"       style="width:120px">
+                <template #body="{ data }">{{ data.CurrentRoute || '—' }}</template>
+              </Column>
+              <Column field="TptLocationCode" header="TPT Location" style="width:120px">
+                <template #body="{ data }">{{ data.TptLocationCode || '—' }}</template>
+              </Column>
               <Column field="SortOrder"       header="Sort"        style="width:55px" />
               <Column header="Active" style="width:70px">
                 <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
@@ -741,6 +747,52 @@ GROUP BY [G_L Account No_]</pre>
                 </template>
               </Column>
             </DataTable>
+
+            <!-- BC Salespersons — read-only reference of every salesperson + all fields -->
+            <details class="walkin-group" style="margin-top:12px" @toggle="(e) => { if (e.target.open && !bcSpLoaded) loadBcSalespersons() }">
+              <summary>
+                <span class="walkin-group-name">BC Salespersons (reference)</span>
+                <span class="acc-count-sm">{{ bcSalespersons.length }}</span>
+              </summary>
+              <div style="padding:10px 4px">
+                <div class="acc-form-header" style="margin-bottom:8px">
+                  <p class="text-muted text-sm" style="margin:0">All salespersons from Business Central, including the custom Customer No, Default Location, Current Route and TPT Location Code. Read-only.</p>
+                  <Button label="Refresh" icon="pi pi-refresh" text size="small" :loading="loadingBcSp" @click="loadBcSalespersons" />
+                </div>
+                <DataTable :value="bcSalespersons" dataKey="code" size="small" :loading="loadingBcSp"
+                           paginator :rows="15" :rowsPerPageOptions="[15,30,50]" responsive-layout="scroll">
+                  <Column field="code"            header="Code"          style="width:90px" />
+                  <Column field="name"            header="Name"          style="min-width:150px" />
+                  <Column field="customerNo"      header="Customer No"   style="width:110px">
+                    <template #body="{ data }">{{ data.customerNo || '—' }}</template>
+                  </Column>
+                  <Column field="defaultLocation" header="Default Loc"   style="width:100px">
+                    <template #body="{ data }">{{ data.defaultLocation || '—' }}</template>
+                  </Column>
+                  <Column field="currentRoute"    header="Current Route" style="width:130px">
+                    <template #body="{ data }">{{ data.currentRoute || '—' }}</template>
+                  </Column>
+                  <Column field="tptLocationCode" header="TPT Location"  style="width:120px">
+                    <template #body="{ data }">{{ data.tptLocationCode || '—' }}</template>
+                  </Column>
+                  <Column field="email"           header="E-Mail"        style="min-width:140px">
+                    <template #body="{ data }">{{ data.email || '—' }}</template>
+                  </Column>
+                  <Column field="phoneNo"         header="Phone"         style="width:110px">
+                    <template #body="{ data }">{{ data.phoneNo || '—' }}</template>
+                  </Column>
+                  <Column field="jobTitle"        header="Job Title"     style="width:120px">
+                    <template #body="{ data }">{{ data.jobTitle || '—' }}</template>
+                  </Column>
+                  <Column field="commissionPct"   header="Comm %"        style="width:70px;text-align:right">
+                    <template #body="{ data }">{{ Number(data.commissionPct||0).toFixed(1) }}</template>
+                  </Column>
+                  <Column header="Blocked" style="width:70px">
+                    <template #body="{ data }"><i v-if="data.blocked" class="pi pi-ban text-danger" /><span v-else class="text-muted">—</span></template>
+                  </Column>
+                </DataTable>
+              </div>
+            </details>
           </div>
           </details>
 
@@ -788,7 +840,7 @@ GROUP BY [G_L Account No_]</pre>
 
           <!-- Items -->
           <details class="pos-sub-accordion">
-            <summary><i class="pi pi-box" /> POS Items <span class="acc-count-sm">{{ posItems.length }}</span></summary>
+            <summary><i class="pi pi-box" /> POS Items <span class="acc-count-sm">{{ posItemsTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
               <h4>POS Items</h4>
@@ -813,17 +865,59 @@ GROUP BY [G_L Account No_]</pre>
                   <label for="pos-item-active">Active</label>
                 </div>
               </div>
+              <div class="item-photo-row" style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                <img v-if="posItemForm.imageUrl" :src="posItemForm.imageUrl" class="item-thumb" alt="" />
+                <div v-else class="item-thumb item-thumb-empty"><i class="pi pi-image" /></div>
+                <template v-if="posItemForm.itemId">
+                  <input ref="itemPhotoInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                         style="display:none" @change="onItemPhoto" />
+                  <Button :label="posItemForm.imageUrl ? 'Change photo' : 'Upload photo'" icon="pi pi-camera"
+                          size="small" text :loading="uploadingPhoto" @click="itemPhotoInput?.click()" />
+                </template>
+                <span v-else class="text-muted text-sm">Save the item first, then add a photo.</span>
+              </div>
               <div class="schedule-actions" style="margin-top:6px">
                 <Button label="Save" icon="pi pi-save" size="small" @click="savePosItem" :loading="savingPosItem" />
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosItem=false" />
               </div>
             </div>
-            <DataTable :value="posItems" dataKey="ItemId" size="small" responsive-layout="scroll">
+            <div class="list-search">
+              <InputText v-model="posItemsQ" placeholder="Search no / description / barcode…" @keyup.enter="searchItems" />
+              <Button icon="pi pi-search" size="small" text @click="searchItems" />
+              <span class="text-muted text-sm">{{ posItemsTotal }} item(s)</span>
+            </div>
+            <DataTable :value="posItems" dataKey="ItemId" size="small" responsive-layout="scroll"
+              :lazy="true" paginator :rows="POS_PAGE_SIZE" :totalRecords="posItemsTotal"
+              :first="(posItemsPage-1)*POS_PAGE_SIZE" :loading="posItemsLoading" @page="onItemsPage">
+              <Column header="" style="width:50px">
+                <template #body="{ data }">
+                  <img v-if="data.ImageUrl" :src="data.ImageUrl" class="item-thumb-sm" alt="" />
+                  <i v-else class="pi pi-image text-muted" />
+                </template>
+              </Column>
               <Column field="ItemNo"      header="No"          style="width:90px" />
               <Column field="Description" header="Description" style="min-width:180px" />
               <Column field="CategoryCode" header="Category"   style="width:110px" />
               <Column field="UnitPrice"   header="Price"       style="width:100px;text-align:right">
                 <template #body="{ data }">{{ Number(data.UnitPrice||0).toFixed(2) }}</template>
+              </Column>
+              <Column field="EtimsItemCode"      header="eTIMS Code"  style="width:110px">
+                <template #body="{ data }">{{ data.EtimsItemCode || '—' }}</template>
+              </Column>
+              <Column field="EtimsItemClassCode" header="eTIMS Class" style="width:120px">
+                <template #body="{ data }">{{ data.EtimsItemClassCode || '—' }}</template>
+              </Column>
+              <Column field="TaxType"            header="Tax Type"    style="width:80px">
+                <template #body="{ data }">{{ data.TaxType || '—' }}</template>
+              </Column>
+              <Column field="UnitOfMeasure"      header="UoM"         style="width:75px">
+                <template #body="{ data }">{{ data.UnitOfMeasure || '—' }}</template>
+              </Column>
+              <Column field="VatPostingGroup"    header="VAT Group"   style="width:100px">
+                <template #body="{ data }">{{ data.VatPostingGroup || '—' }}</template>
+              </Column>
+              <Column field="VatPercent"         header="VAT %"       style="width:70px;text-align:right">
+                <template #body="{ data }">{{ Number(data.VatPercent||0).toFixed(0) }}%</template>
               </Column>
               <Column field="SortOrder"   header="Sort"        style="width:55px" />
               <Column header="Active" style="width:70px">
@@ -843,7 +937,7 @@ GROUP BY [G_L Account No_]</pre>
 
           <!-- Special Prices (date-bound offers) -->
           <details class="pos-sub-accordion">
-            <summary><i class="pi pi-percentage" /> Special Prices (Offers) <span class="acc-count-sm">{{ specialPrices.length }}</span></summary>
+            <summary><i class="pi pi-percentage" /> Special Prices (Offers) <span class="acc-count-sm">{{ spTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
               <h4>Special Prices (Offers)</h4>
@@ -880,7 +974,14 @@ GROUP BY [G_L Account No_]</pre>
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingSpecial=false" />
               </div>
             </div>
-            <DataTable :value="specialPrices" dataKey="SpecialPriceId" size="small">
+            <div class="list-search">
+              <InputText v-model="spQ" placeholder="Search item / shop / promo…" @keyup.enter="searchSp" />
+              <Button icon="pi pi-search" size="small" text @click="searchSp" />
+              <span class="text-muted text-sm">{{ spTotal }} offer(s)</span>
+            </div>
+            <DataTable :value="specialPrices" dataKey="SpecialPriceId" size="small"
+              :lazy="true" paginator :rows="POS_PAGE_SIZE" :totalRecords="spTotal"
+              :first="(spPage-1)*POS_PAGE_SIZE" :loading="spLoading" @page="onSpPage">
               <Column field="ItemNo"          header="Item No"     style="width:100px" />
               <Column field="ItemDescription" header="Description" style="min-width:160px" />
               <Column field="ShopCode"        header="Shop"        style="width:90px">
@@ -1032,7 +1133,7 @@ GROUP BY [G_L Account No_]</pre>
 
           <!-- Contacts -->
           <details class="pos-sub-accordion">
-            <summary><i class="pi pi-users" /> Walk-in Contacts <span class="acc-count-sm">{{ posContacts.length }}</span></summary>
+            <summary><i class="pi pi-users" /> Walk-in Contacts <span class="acc-count-sm">{{ contactsTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
               <h4>Walk-in Contacts</h4>
@@ -1040,31 +1141,29 @@ GROUP BY [G_L Account No_]</pre>
             </div>
             <p class="text-muted text-sm">Contacts imported from BC filtered by each shop's salesperson code. Used for promotions tracking at the POS terminal. Grouped by salesperson (SP) code — click a group to expand its members.</p>
 
-            <div v-if="!posContacts.length" class="text-muted text-sm" style="padding:8px 0">
-              No walk-in contacts imported yet — click "Import from BC" above.
+            <div class="list-search">
+              <InputText v-model="contactsQ" placeholder="Search name / mobile / shop / SP…" @keyup.enter="searchContacts" />
+              <Button icon="pi pi-search" size="small" text @click="searchContacts" />
+              <span class="text-muted text-sm">{{ contactsTotal }} contact(s)</span>
             </div>
-            <details v-for="grp in walkInGroups" :key="grp.spCode || '__no_sp__'" class="walkin-group">
-              <summary>
-                <i class="pi pi-id-card" />
-                <span class="walkin-group-name">SP {{ grp.spCode || '(unassigned)' }}</span>
-                <span class="acc-count-sm">{{ grp.contacts.length }} contact{{ grp.contacts.length === 1 ? '' : 's' }}</span>
-              </summary>
-              <DataTable :value="grp.contacts" dataKey="ContactId" size="small" responsive-layout="scroll">
-                <Column field="BcContactNo"     header="Contact No" style="width:110px" />
-                <Column field="Name"            header="Name"       style="min-width:180px" />
-                <Column field="MobileNo"        header="Mobile"     style="width:120px" />
-                <Column field="KraPin"          header="KRA PIN"    style="width:110px" />
-                <Column field="ShopCode"        header="Shop"       style="width:90px" />
-                <Column field="SalespersonCode" header="SP Code"    style="width:90px" />
-                <Column header="" style="width:60px">
-                  <template #body="{ data }">
-                    <Button icon="pi pi-trash" text severity="danger" size="small"
-                            v-tooltip.left="'Delete this walk-in contact'"
-                            @click="deleteWalkIn(data)" />
-                  </template>
-                </Column>
-              </DataTable>
-            </details>
+            <DataTable :value="posContacts" dataKey="ContactId" size="small" responsive-layout="scroll"
+              :lazy="true" paginator :rows="POS_PAGE_SIZE" :totalRecords="contactsTotal"
+              :first="(contactsPage-1)*POS_PAGE_SIZE" :loading="contactsLoading" @page="onContactsPage">
+              <Column field="BcContactNo"     header="Contact No" style="width:110px" />
+              <Column field="Name"            header="Name"       style="min-width:180px" />
+              <Column field="MobileNo"        header="Mobile"     style="width:120px" />
+              <Column field="KraPin"          header="KRA PIN"    style="width:110px" />
+              <Column field="ShopCode"        header="Shop"       style="width:90px" />
+              <Column field="SalespersonCode" header="SP Code"    style="width:90px" />
+              <Column header="" style="width:60px">
+                <template #body="{ data }">
+                  <Button icon="pi pi-trash" text severity="danger" size="small"
+                          v-tooltip.left="'Delete this walk-in contact'"
+                          @click="deleteWalkIn(data)" />
+                </template>
+              </Column>
+              <template #empty><div class="text-muted text-sm" style="padding:8px 0">No walk-in contacts — click "Import from BC" above.</div></template>
+            </DataTable>
           </div>
           </details>
 
@@ -1202,6 +1301,7 @@ const roleOptions = [
   { label: 'Security', value: 'security' },
   { label: 'Shop',     value: 'shop' },
   { label: 'Shop Admin', value: 'shop-admin' },
+  { label: 'Costing',  value: 'costing' },
 ]
 const reportTypeOptions = [
   { label: 'Posting Group',       value: 'postingGroup' },
@@ -1669,10 +1769,21 @@ const posShopOptions     = computed(() => [
 // shops
 const editingPosShop = ref(false)
 const savingPosShop  = ref(false)
-const posShopForm    = ref({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', isActive: true, sortOrder: 0 })
+const posShopForm    = ref({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', isActive: true, sortOrder: 0 })
 
-function newPosShop()  { posShopForm.value = { shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', isActive: true, sortOrder: 0 }; editingPosShop.value = true }
-function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
+// BC Salespersons — read-only reference table for the terminals section
+const bcSalespersons = ref([])
+const loadingBcSp    = ref(false)
+const bcSpLoaded     = ref(false)
+async function loadBcSalespersons() {
+  loadingBcSp.value = true
+  try { const r = await posSetupApi.listBcSalespersons(); bcSalespersons.value = r.data; bcSpLoaded.value = true }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { loadingBcSp.value = false }
+}
+
+function newPosShop()  { posShopForm.value = { shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', isActive: true, sortOrder: 0 }; editingPosShop.value = true }
+function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
 
 async function savePosShop() {
   savingPosShop.value = true
@@ -1688,6 +1799,20 @@ async function deletePosShop(d) {
 const posCategories      = ref([])
 const posItems           = ref([])
 const posPaymentTypes    = ref([])
+
+// ── Server-side pagination for the heavy POS-setup lists (items / prices / contacts) ──
+const POS_PAGE_SIZE = 50
+const posItemsTotal = ref(0), posItemsPage = ref(1), posItemsQ = ref(''), posItemsLoading = ref(false)
+async function loadItems(page = posItemsPage.value) {
+  posItemsLoading.value = true
+  try {
+    const { data } = await posSetupApi.listItems({ page, pageSize: POS_PAGE_SIZE, q: posItemsQ.value || undefined })
+    posItems.value = data.rows; posItemsTotal.value = data.total; posItemsPage.value = data.page
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { posItemsLoading.value = false }
+}
+function onItemsPage(e) { loadItems(Math.floor(e.first / POS_PAGE_SIZE) + 1) }
+function searchItems() { loadItems(1) }
 
 // categories
 const editingPosCategory = ref(false)
@@ -1711,19 +1836,40 @@ async function deletePosCategory(d) {
 // items
 const editingPosItem  = ref(false)
 const savingPosItem   = ref(false)
-const posItemForm     = ref({ itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0 })
+const posItemForm     = ref({ itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0,
+                              etimsItemCode: '', etimsItemClassCode: '', taxType: '', unitOfMeasure: '', imageUrl: '' })
 
-function newPosItem()  { posItemForm.value = { itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0 }; editingPosItem.value = true }
-function editPosItem(d){ posItemForm.value = { itemId: d.ItemId, itemNo: d.ItemNo, description: d.Description, categoryCode: d.CategoryCode || '', unitPrice: Number(d.UnitPrice||0), barcode: d.Barcode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosItem.value = true }
+function newPosItem()  { posItemForm.value = { itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0,
+                                               etimsItemCode: '', etimsItemClassCode: '', taxType: '', unitOfMeasure: '', imageUrl: '' }; editingPosItem.value = true }
+function editPosItem(d){ posItemForm.value = { itemId: d.ItemId, itemNo: d.ItemNo, description: d.Description, categoryCode: d.CategoryCode || '', unitPrice: Number(d.UnitPrice||0), barcode: d.Barcode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder,
+                                               etimsItemCode: d.EtimsItemCode || '', etimsItemClassCode: d.EtimsItemClassCode || '', taxType: d.TaxType || '', unitOfMeasure: d.UnitOfMeasure || '', imageUrl: d.ImageUrl || '' }; editingPosItem.value = true }
 
 async function savePosItem() {
   savingPosItem.value = true
-  try { await posSetupApi.saveItem(posItemForm.value); editingPosItem.value = false; await loadPosSetup() }
+  try { await posSetupApi.saveItem(posItemForm.value); editingPosItem.value = false; await loadItems() }
   catch (e) { error.value = e.response?.data?.error || e.message }
   finally { savingPosItem.value = false }
 }
+
+// Item photo upload (base64 → /api/uploads/items/<file> → PosItem.ImageUrl)
+const itemPhotoInput = ref(null)
+const uploadingPhoto = ref(false)
+async function onItemPhoto(e) {
+  const file = e.target.files?.[0]; if (!file) return
+  if (file.size > 5 * 1024 * 1024) { error.value = 'Image exceeds 5MB'; e.target.value = ''; return }
+  uploadingPhoto.value = true
+  try {
+    const dataUrl = await new Promise((res, rej) => {
+      const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file)
+    })
+    const { data } = await posSetupApi.uploadItemPhoto(posItemForm.value.itemId, dataUrl, file.type)
+    posItemForm.value.imageUrl = data.imageUrl
+    await loadItems()
+  } catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { uploadingPhoto.value = false; if (e.target) e.target.value = '' }
+}
 async function deletePosItem(d) {
-  try { await posSetupApi.deleteItem(d.ItemId); await loadPosSetup() }
+  try { await posSetupApi.deleteItem(d.ItemId); await loadItems() }
   catch (e) { error.value = e.response?.data?.error || e.message }
 }
 
@@ -1754,7 +1900,7 @@ async function importBcItems() {
         barcode: item.barcode, isActive: true, sortOrder: 0,
       })
     }
-    showBcPicker.value = false; await loadPosSetup()
+    showBcPicker.value = false; await loadItems()
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { importingBcItems.value = false }
 }
@@ -1781,7 +1927,7 @@ function emptyPayTypeForm() {
     paymentFetchUrl: '',
   }
 }
-const paymentClasses     = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer']
+const paymentClasses     = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer', 'BankDeposit']
 
 function newPosPayType()  { posPayTypeForm.value = emptyPayTypeForm(); editingPosPayType.value = true }
 function editPosPayType(d){
@@ -1801,6 +1947,17 @@ function editPosPayType(d){
 
 // Special prices CRUD
 const specialPrices  = ref([])
+const spTotal = ref(0), spPage = ref(1), spQ = ref(''), spLoading = ref(false)
+async function loadSpecialPricesPaged(page = spPage.value) {
+  spLoading.value = true
+  try {
+    const { data } = await posSetupApi.listSpecialPrices({ page, pageSize: POS_PAGE_SIZE, q: spQ.value || undefined })
+    specialPrices.value = data.rows; spTotal.value = data.total; spPage.value = data.page
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { spLoading.value = false }
+}
+function onSpPage(e) { loadSpecialPricesPaged(Math.floor(e.first / POS_PAGE_SIZE) + 1) }
+function searchSp() { loadSpecialPricesPaged(1) }
 const editingSpecial = ref(false)
 const savingSpecial  = ref(false)
 const specialForm    = ref({ specialPriceId: null, itemNo: '', shopCode: null, unitPrice: 0,
@@ -1824,12 +1981,12 @@ async function saveSpecialPrice() {
       endingDate:   isoDate(specialForm.value.endingDate),
     })
     editingSpecial.value = false
-    await loadPosSetup()
+    await loadSpecialPricesPaged()
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { savingSpecial.value = false }
 }
 async function deleteSpecialPrice(d) {
-  try { await posSetupApi.deleteSpecialPrice(d.SpecialPriceId); await loadPosSetup() }
+  try { await posSetupApi.deleteSpecialPrice(d.SpecialPriceId); await loadSpecialPricesPaged() }
   catch (e) { error.value = e.response?.data?.error || e.message }
 }
 
@@ -1928,7 +2085,7 @@ async function postSpImport() {
   try {
     const { data } = await posSetupApi.importSpecialPrices(spImport.rows)
     spImport.result = data
-    if (data?.posted) await loadPosSetup()
+    if (data?.posted) await loadSpecialPricesPaged(1)
   } catch (e) {
     spImport.parseError = e.response?.data?.error || e.message
   } finally {
@@ -1949,6 +2106,17 @@ async function deletePosPayType(d) {
 
 // contacts
 const posContacts          = ref([])
+const contactsTotal = ref(0), contactsPage = ref(1), contactsQ = ref(''), contactsLoading = ref(false)
+async function loadContactsPaged(page = contactsPage.value) {
+  contactsLoading.value = true
+  try {
+    const { data } = await posSetupApi.listSetupContacts({ page, pageSize: POS_PAGE_SIZE, q: contactsQ.value || undefined })
+    posContacts.value = data.rows; contactsTotal.value = data.total; contactsPage.value = data.page
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { contactsLoading.value = false }
+}
+function onContactsPage(e) { loadContactsPaged(Math.floor(e.first / POS_PAGE_SIZE) + 1) }
+function searchContacts() { loadContactsPaged(1) }
 const showContactPicker    = ref(false)
 const bcContacts           = ref([])
 const bcContactsSelected   = ref([])
@@ -1971,7 +2139,7 @@ async function deleteWalkIn(c) {
   if (!confirm(`Delete walk-in contact "${c.Name}" (${c.BcContactNo})?`)) return
   try {
     await posSetupApi.deleteSetupContact(c.ContactId)
-    await loadPosSetup()
+    await loadContactsPaged()
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }
@@ -1998,7 +2166,7 @@ async function importBcContacts() {
   try {
     const { data } = await posSetupApi.importContacts(bcContactsSelected.value, contactShopFilter.value)
     showContactPicker.value = false
-    await loadPosSetup()
+    await loadContactsPaged(1)
     error.value = ''
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { importingBcContacts.value = false }
@@ -2135,6 +2303,7 @@ const syncSteps = [
   { kind: 'categories',    label: 'Categories',     icon: 'pi pi-th-large' },
   { kind: 'items',         label: 'Items',          icon: 'pi pi-box' },
   { kind: 'payment-types', label: 'Payment Methods',icon: 'pi pi-credit-card' },
+  { kind: 'shop-prices',   label: 'Shop Prices',    icon: 'pi pi-tag' },
 ]
 async function syncStep(kind) {
   // Steps that support wipe-then-reimport: ask the user.
@@ -2188,20 +2357,17 @@ async function loadPosShopsOnly() {
 // All POS-Setup heavy loads — fired the first time the POS Setup accordion opens.
 async function loadPosSetup() {
   try {
-    const [shops, cats, items, pts, contacts, sp] = await Promise.all([
+    // Small reference lists load fully; the heavy ones (items / prices / contacts)
+    // load one page at a time via their paged loaders.
+    const [shops, cats, pts] = await Promise.all([
       posSetupApi.listShops(),
       posSetupApi.listCategories(),
-      posSetupApi.listItems(),
       posSetupApi.listPaymentTypes(),
-      posSetupApi.listSetupContacts(),
-      posSetupApi.listSpecialPrices(),
     ])
     posShops.value        = shops.data
     posCategories.value   = cats.data
-    posItems.value        = items.data
     posPaymentTypes.value = pts.data
-    posContacts.value     = contacts.data
-    specialPrices.value   = sp.data
+    await Promise.all([loadItems(1), loadSpecialPricesPaged(1), loadContactsPaged(1)])
     // Print config + installed printers + eTIMS config + third parties (parallel)
     Promise.all([loadPrintCfg(), loadPrinters(), loadEtimsCfg(), loadThirdParties(), loadInvCfg()]).catch(() => {})
   } catch (e) { error.value = e.response?.data?.error || e.message }
@@ -2228,6 +2394,11 @@ onMounted(() => { loadPosShopsOnly() })
 
 /* ── Accordion sections ──────────────────────────────────────────── */
 .admin-sections { display:flex; flex-direction:column; gap:10px; }
+.list-search { display:flex; align-items:center; gap:8px; margin:6px 0 8px; }
+.list-search :deep(.p-inputtext) { min-width:260px; }
+.item-thumb { width:56px; height:56px; object-fit:cover; border-radius:8px; border:1px solid var(--bc-border); background:var(--bc-surface-raised); }
+.item-thumb-empty { display:flex; align-items:center; justify-content:center; color:var(--bc-text-muted); font-size:20px; }
+.item-thumb-sm { width:36px; height:36px; object-fit:cover; border-radius:6px; border:1px solid var(--bc-border); }
 .admin-accordion { border:1px solid var(--bc-border,#e4e7ec); border-radius:10px; overflow:hidden; background:var(--bc-surface-card,#fff); }
 .admin-accordion > summary {
   display:flex; align-items:center; gap:10px; padding:14px 18px;
@@ -2294,23 +2465,24 @@ onMounted(() => { loadPosShopsOnly() })
 
 /* Walk-in contacts grouped by ship code (route) */
 .walkin-group {
-  border: 1px solid #e5e7eb;
+  border: 1px solid #334155;
   border-radius: 6px;
   margin: 6px 0;
-  background: #fafafa;
-  color: #111827;
-  color-scheme: light;
+  background: #1e293b;
+  color: #e2e8f0;
+  color-scheme: dark;
 }
 .walkin-group > summary {
   display:flex; align-items:center; gap:8px;
   padding: 8px 12px;
   cursor: pointer;
-  background:#f3f4f6;
-  font-weight:600; color:#1f2937;
+  background:#334155;
+  font-weight:600; color:#f8fafc;
   border-radius:6px;
   user-select:none;
 }
-.walkin-group[open] > summary { border-radius:6px 6px 0 0; border-bottom:1px solid #e5e7eb; }
+.walkin-group > summary:hover { background:#475569; }
+.walkin-group[open] > summary { border-radius:6px 6px 0 0; border-bottom:1px solid #334155; background:#1e293b; }
 .walkin-group > summary::-webkit-details-marker { display:none; }
 .walkin-group > summary::before {
   content:'▸'; transition: transform 0.15s; display:inline-block; font-size:11px; opacity:0.7;
@@ -2322,56 +2494,95 @@ onMounted(() => { loadPosShopsOnly() })
 
 /* Nested POS Setup sub-accordions — explicit colours so Chrome dark mode doesn't invert text */
 .pos-sub-accordion {
-  border: 1px solid #d0d5dd;
+  border: 1px solid #334155;
   border-radius: 8px;
   margin-bottom: 10px;
-  background: #ffffff !important;
-  color: #111827;
+  background: #1e293b !important;
+  color: #e2e8f0;
   overflow: hidden;
-  color-scheme: light;
+  color-scheme: dark;
 }
+/* Whole body is a dark surface → all text light, no bright-white islands */
 .pos-sub-accordion,
 .pos-sub-accordion * {
-  color: #111827;
+  color: #e2e8f0;
 }
-.pos-sub-accordion .text-muted    { color: #6b7280 !important; }
-.pos-sub-accordion .text-success  { color: #15803d !important; }
-.pos-sub-accordion p              { color: #4b5563 !important; }
+.pos-sub-accordion h4,
+.pos-sub-accordion h5             { color: #f1f5f9; }
+.pos-sub-accordion strong         { color: #f1f5f9; }
+.pos-sub-accordion .text-muted,
+.pos-sub-accordion p,
+.pos-sub-accordion .hint,
+.pos-sub-accordion .formula-label,
+.pos-sub-accordion .cf-field label,
+.pos-sub-accordion .builder-sub-title { color: #94a3b8 !important; }
+.pos-sub-accordion .text-success  { color: #4ade80 !important; }
+
+/* Inset edit panels — slightly darker than the body */
+.pos-sub-accordion .builder-form,
+.pos-sub-accordion .formula-form {
+  background: #0f172a !important;
+  border: 1px solid #334155;
+}
+
+/* Form controls — dark fields with light text */
 .pos-sub-accordion :deep(.p-inputtext),
+.pos-sub-accordion :deep(.p-select),
 .pos-sub-accordion :deep(.p-select-label),
 .pos-sub-accordion :deep(.p-inputnumber-input),
+.pos-sub-accordion :deep(.p-datepicker-input),
 .pos-sub-accordion :deep(.p-textarea) {
-  background: #ffffff !important;
-  color: #111827 !important;
+  background: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: #475569 !important;
 }
+.pos-sub-accordion :deep(.p-placeholder),
+.pos-sub-accordion :deep(.p-inputtext::placeholder) { color: #94a3b8 !important; }
+
+/* Data tables — dark rows, light text */
+.pos-sub-accordion :deep(.p-datatable) { color: #e2e8f0; }
 .pos-sub-accordion :deep(.p-datatable-thead > tr > th) {
-  background: #f3f4f6 !important; color: #111827 !important;
+  background: #334155 !important; color: #f1f5f9 !important; border-color: #475569 !important;
 }
 .pos-sub-accordion :deep(.p-datatable-tbody > tr) {
-  background: #ffffff !important; color: #111827 !important;
+  background: #1e293b !important; color: #e2e8f0 !important;
 }
-.pos-sub-accordion :deep(.p-datatable-tbody > tr > td) { color: #111827 !important; }
+.pos-sub-accordion :deep(.p-datatable-tbody > tr:nth-child(even)) {
+  background: #243044 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-tbody > tr:hover) {
+  background: #2d3b52 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-tbody > tr > td) {
+  color: #e2e8f0 !important; border-color: #334155 !important;
+}
+.pos-sub-accordion :deep(.p-datatable-table-container),
+.pos-sub-accordion :deep(.p-datatable-header),
+.pos-sub-accordion :deep(.p-datatable-footer),
+.pos-sub-accordion :deep(.p-paginator) {
+  background: #1e293b !important; color: #e2e8f0 !important; border-color: #334155 !important;
+}
 
 .pos-sub-accordion > summary {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px;
   font-size: 13px; font-weight: 600;
-  color: #1f2937 !important;
-  background: #f9fafb !important;
+  color: #f8fafc !important;
+  background: #334155 !important;
   cursor: pointer; user-select: none;
   list-style: none;
   transition: background 0.12s;
 }
 .pos-sub-accordion > summary::-webkit-details-marker { display: none; }
 .pos-sub-accordion > summary::before {
-  content: '▶'; font-size: 9px; color: #6b7280;
+  content: '▶'; font-size: 9px; color: #cbd5e1;
   transition: transform 0.15s; display: inline-block;
 }
 .pos-sub-accordion[open] > summary::before { transform: rotate(90deg); }
-.pos-sub-accordion[open] > summary { background: #f1f5f9 !important; }
-.pos-sub-accordion > summary:hover { background: #eff6ff !important; }
-.pos-sub-accordion > summary > .pi { color: #2563eb !important; font-size: 14px; }
-.pos-sub-accordion > .pos-setup-section { padding: 12px 14px; margin-bottom: 0; background: #ffffff; }
+.pos-sub-accordion[open] > summary { background: #1e293b !important; }
+.pos-sub-accordion > summary:hover { background: #475569 !important; }
+.pos-sub-accordion > summary > .pi { color: #93c5fd !important; font-size: 14px; }
+.pos-sub-accordion > .pos-setup-section { padding: 12px 14px; margin-bottom: 0; background: #1e293b; }
 .acc-count-sm {
   margin-left: auto;
   font-size: 11px; font-weight: 600;

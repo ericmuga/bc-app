@@ -11,6 +11,8 @@
  * On-hand = SUM(quantity) for that shop + item.
  */
 import { db as appDb, sql } from '../db/pool.js';
+import { bcDb } from '../db/bcPool.js';
+import { bcTable, resolveCompanies } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 
 function str(v, max = 200) { return String(v ?? '').trim().slice(0, max); }
@@ -396,6 +398,7 @@ export async function getStockRequest(requestId) {
       quantityReceived:  l.QuantityReceived == null ? null : Number(l.QuantityReceived),
       unitOfMeasure:     l.UnitOfMeasure || '',
       comments:          l.Comments || '',
+      rfNo:              l.RfNo || '',
       sortOrder:         l.SortOrder,
     })),
   };
@@ -521,6 +524,11 @@ export async function completeStockRequest(requestId, receivedLines, completedBy
   for (const r of (receivedLines || [])) {
     if (r.comments != null) commentByLine.set(r.lineId, String(r.comments).slice(0, 500));
   }
+  // Per-line Return Form (RF) number for returned/short items.
+  const rfByLine = new Map();
+  for (const r of (receivedLines || [])) {
+    if (r.rfNo != null) rfByLine.set(r.lineId, String(r.rfNo).trim().slice(0, 40) || null);
+  }
 
   for (const line of order.lines) {
     const qty = qtyByLine.has(line.lineId) ? qtyByLine.get(line.lineId) : line.quantityRequested;
@@ -530,13 +538,16 @@ export async function completeStockRequest(requestId, receivedLines, completedBy
       : (Number(qty) !== requested
           ? `Auto-flagged: requested ${requested}, received ${qty} (variance ${(Number(qty) - requested).toFixed(4)})`
           : null);
+    const rfNo = rfByLine.has(line.lineId) ? rfByLine.get(line.lineId) : null;
     await pool.request()
       .input('lineId',   sql.UniqueIdentifier, line.lineId)
       .input('qty',      sql.Decimal(18, 4),   qty)
       .input('comments', sql.NVarChar(500),    cmt || null)
+      .input('rfNo',     sql.NVarChar(40),     rfNo)
       .query(`UPDATE [dbo].[PosStockRequestLine]
               SET [QuantityReceived]=@qty,
                   [Comments]=@comments,
+                  [RfNo]=@rfNo,
                   [UpdatedAt]=GETUTCDATE()
               WHERE [LineId]=@lineId`);
     if (qty > 0) {
@@ -1127,4 +1138,199 @@ export async function listItemTransactions({ shopCode, itemNo, dateFrom, dateTo 
     notes:         row.Notes || '',
     createdBy:     row.CreatedBy,
   }));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BC item-ledger stock baseline / fresh loads (per terminal location)
+//
+// A terminal's POS on-hand is seeded from BC ("Stock Reset") and then topped up
+// incrementally from the BC Item Ledger Entry table. A per-terminal watermark on
+// the global, sequential [Entry No_] records how far we've accounted for, so each
+// fresh load only pulls the NET of entries past that point.
+// ════════════════════════════════════════════════════════════════════════════
+
+function ledgerTable(company) {
+  const c = resolveCompanies([company])[0] || 'FCL';
+  return { c, table: bcTable(c, 'Item Ledger Entry') };
+}
+
+/** Current on-hand per item at a BC location, plus the latest ledger Entry No. */
+export async function bcStockOnHandAtLocation(company, locationCode) {
+  const { table } = ledgerTable(company);
+  const bcPool = await bcDb.getPool();
+  const r = await bcPool.request()
+    .input('loc', sql.NVarChar(20), str(locationCode, 20))
+    .query(`
+      SELECT UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo, SUM([Quantity]) AS Qty
+      FROM   ${table}
+      WHERE  [Location Code] = @loc
+      GROUP BY UPPER(LTRIM(RTRIM([Item No_])))
+      HAVING SUM([Quantity]) <> 0`);
+  const maxR = await bcPool.request()
+    .input('loc', sql.NVarChar(20), str(locationCode, 20))
+    .query(`SELECT ISNULL(MAX([Entry No_]), 0) AS MaxEntry FROM ${table} WHERE [Location Code] = @loc`);
+  return {
+    items: r.recordset.map(x => ({ itemNo: x.ItemNo, qty: Number(x.Qty || 0) })),
+    maxEntryNo: Number(maxR.recordset[0]?.MaxEntry || 0),
+  };
+}
+
+/** Distinct posting dates past a watermark, each with its last Entry No. + net qty. */
+export async function bcLedgerDatesSince(company, locationCode, sinceEntryNo = 0) {
+  const { table } = ledgerTable(company);
+  const bcPool = await bcDb.getPool();
+  const r = await bcPool.request()
+    .input('loc',   sql.NVarChar(20), str(locationCode, 20))
+    .input('since', sql.Int,          Number(sinceEntryNo || 0))
+    .query(`
+      SELECT CAST([Posting Date] AS DATE) AS PostingDate,
+             MAX([Entry No_])             AS LastEntryNo,
+             COUNT(*)                     AS Entries,
+             SUM([Quantity])              AS NetQty
+      FROM   ${table}
+      WHERE  [Location Code] = @loc AND [Entry No_] > @since
+      GROUP BY CAST([Posting Date] AS DATE)
+      ORDER BY PostingDate`);
+  return r.recordset.map(x => ({
+    postingDate: x.PostingDate,
+    lastEntryNo: Number(x.LastEntryNo || 0),
+    entries:     Number(x.Entries || 0),
+    netQty:      Number(x.NetQty || 0),
+  }));
+}
+
+/** Net quantity per item for ledger entries in (sinceEntryNo, uptoEntryNo]. */
+export async function bcStockNetInRange(company, locationCode, sinceEntryNo, uptoEntryNo) {
+  const { table } = ledgerTable(company);
+  const bcPool = await bcDb.getPool();
+  const r = await bcPool.request()
+    .input('loc',   sql.NVarChar(20), str(locationCode, 20))
+    .input('since', sql.Int,          Number(sinceEntryNo || 0))
+    .input('upto',  sql.Int,          Number(uptoEntryNo || 0))
+    .query(`
+      SELECT UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo, SUM([Quantity]) AS Qty
+      FROM   ${table}
+      WHERE  [Location Code] = @loc AND [Entry No_] > @since AND [Entry No_] <= @upto
+      GROUP BY UPPER(LTRIM(RTRIM([Item No_])))
+      HAVING SUM([Quantity]) <> 0`);
+  return r.recordset.map(x => ({ itemNo: x.ItemNo, qty: Number(x.Qty || 0) }));
+}
+
+/** Read the per-terminal watermark (null if never reset). */
+export async function getStockWatermark(shopCode) {
+  if (!shopCode) return null;
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('code', sql.NVarChar(50), str(shopCode, 50).toUpperCase())
+    .query(`SELECT [ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt]
+            FROM [dbo].[PosStockWatermark] WHERE [ShopCode]=@code`);
+  return r.recordset[0] || null;
+}
+
+async function posItemDescriptions(pool) {
+  const r = await pool.request().query(`SELECT [ItemNo],[Description] FROM [dbo].[PosItem]`);
+  return new Map(r.recordset.map(x => [(x.ItemNo || '').toUpperCase(), x.Description]));
+}
+
+/**
+ * Stock Reset: clear the terminal's movements, post BC's current on-hand at the
+ * terminal location as a fresh opening balance, and stamp the watermark at BC's
+ * latest Entry No. Only items in the POS catalogue are seeded.
+ */
+export async function resetStockFromBc({ shopCode, company = 'FCL', userId = null, userName = null }) {
+  const pool = await appPool();
+  const code = str(shopCode, 50).toUpperCase();
+  const loc  = await locationForShop(pool, code);
+  if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
+
+  const { items, maxEntryNo } = await bcStockOnHandAtLocation(company, loc);
+  const descByItem = await posItemDescriptions(pool);
+  const seed = items.filter(it => descByItem.has(it.itemNo));
+
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    await new sql.Request(tx).input('code', sql.NVarChar(50), code)
+      .query(`DELETE FROM [dbo].[PosStockMovement] WHERE [ShopCode]=@code`);
+    for (const it of seed) {
+      await new sql.Request(tx)
+        .input('shopCode',    sql.NVarChar(50),  code)
+        .input('itemNo',      sql.NVarChar(30),  it.itemNo)
+        .input('description', sql.NVarChar(200), descByItem.get(it.itemNo) || null)
+        .input('quantity',    sql.Decimal(18, 4), it.qty)
+        .input('notes',       sql.NVarChar(500), `Opening balance from BC @ ${loc} (entry <= ${maxEntryNo})`)
+        .input('createdBy',   sql.NVarChar(100), str(userName || userId, 100) || null)
+        .query(`INSERT INTO [dbo].[PosStockMovement]
+          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@itemNo,@description,'reset',@quantity,'bc-reset',NULL,GETDATE(),@notes,@createdBy)`);
+    }
+    await new sql.Request(tx)
+      .input('code',    sql.NVarChar(50),  code)
+      .input('loc',     sql.NVarChar(20),  loc.toUpperCase())
+      .input('company', sql.NVarChar(20),  String(company).toUpperCase())
+      .input('entry',   sql.Int,           maxEntryNo)
+      .input('by',      sql.NVarChar(100), str(userName || userId, 100) || null)
+      .query(`
+        MERGE [dbo].[PosStockWatermark] AS t
+        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
+        WHEN MATCHED THEN UPDATE SET
+          [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,
+          [ResetAt]=GETUTCDATE(),[ResetBy]=@by,[UpdatedAt]=GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy])
+          VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by);`);
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+
+  logger.info('pos/resetStockFromBc', { shopCode: code, loc, company, items: seed.length, lastEntryNo: maxEntryNo });
+  return { shopCode: code, locationCode: loc, company, items: seed.length, lastEntryNo: maxEntryNo };
+}
+
+/**
+ * Fresh load: post the NET of BC ledger entries in (watermark, uptoEntryNo] as
+ * 'bc-load' movements, then advance the watermark to uptoEntryNo.
+ */
+export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, userId = null, userName = null }) {
+  const pool = await appPool();
+  const code = str(shopCode, 50).toUpperCase();
+  const wm = await getStockWatermark(code);
+  if (!wm) throw new Error('No stock baseline yet — run Stock Reset first');
+  const loc     = wm.LocationCode || await locationForShop(pool, code);
+  const company = wm.SourceCompany || 'FCL';
+  const since   = Number(wm.LastEntryNo || 0);
+  const upto    = Number(uptoEntryNo || 0);
+  if (upto <= since) throw new Error(`Selected entry (${upto}) is not newer than the last loaded entry (${since})`);
+
+  const net = await bcStockNetInRange(company, loc, since, upto);
+  const descByItem = await posItemDescriptions(pool);
+
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    let count = 0;
+    for (const it of net) {
+      if (!descByItem.has(it.itemNo)) continue;
+      await new sql.Request(tx)
+        .input('shopCode',    sql.NVarChar(50),  code)
+        .input('itemNo',      sql.NVarChar(30),  it.itemNo)
+        .input('description', sql.NVarChar(200), descByItem.get(it.itemNo) || null)
+        .input('quantity',    sql.Decimal(18, 4), it.qty)
+        .input('refno',       sql.NVarChar(30),  String(upto))
+        .input('notes',       sql.NVarChar(500), `BC load: net of entries ${since + 1}-${upto}${asOfDate ? ` (to ${asOfDate})` : ''}`)
+        .input('createdBy',   sql.NVarChar(100), str(userName || userId, 100) || null)
+        .query(`INSERT INTO [dbo].[PosStockMovement]
+          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@itemNo,@description,'bc-load',@quantity,'bc-load',@refno,GETDATE(),@notes,@createdBy)`);
+      count++;
+    }
+    await new sql.Request(tx)
+      .input('code',  sql.NVarChar(50), code)
+      .input('entry', sql.Int,          upto)
+      .query(`UPDATE [dbo].[PosStockWatermark]
+              SET [LastEntryNo]=@entry,[LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+              WHERE [ShopCode]=@code`);
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+
+  logger.info('pos/loadStockFromBc', { shopCode: code, loc, fromEntryNo: since, toEntryNo: upto, items: net.length });
+  return { shopCode: code, fromEntryNo: since, toEntryNo: upto, items: net.length };
 }

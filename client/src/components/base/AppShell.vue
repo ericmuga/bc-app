@@ -92,6 +92,22 @@
           </RouterLink>
         </details>
 
+        <details v-if="canViewCosting" class="nav-section" :open="navOpen.costing" @toggle="onNavToggle('costing', $event)">
+          <summary class="section-label">Costing</summary>
+          <RouterLink to="/costing" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-calculator" />
+            <span>Recipe Data (FCL)</span>
+          </RouterLink>
+          <RouterLink to="/costing/cm" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-calculator" />
+            <span>Recipe Data (CM)</span>
+          </RouterLink>
+          <RouterLink to="/costing/templates" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-clone" />
+            <span>Templates</span>
+          </RouterLink>
+        </details>
+
         <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
           <summary class="section-label">Point of Sale</summary>
           <RouterLink to="/pos" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
@@ -130,6 +146,10 @@
             <i class="pi pi-ticket" />
             <span>Coupons</span>
           </RouterLink>
+          <RouterLink v-if="isAdmin" to="/pos/mpesa-matching" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-money-bill" />
+            <span>M-Pesa Reconciliation</span>
+          </RouterLink>
           <RouterLink to="/pos/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-chart-bar" />
             <span>POS Reports</span>
@@ -155,6 +175,11 @@
             <span>Audit Log</span>
           </RouterLink>
         </details>
+
+        <RouterLink to="/releases" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+          <i class="pi pi-tag" />
+          <span>Releases</span>
+        </RouterLink>
       </nav>
 
       <div class="sidebar-footer">
@@ -192,6 +217,7 @@ import { companiesApi } from '@/services/api.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/lib/access.js'
 import { canAccessFinance } from '@/lib/financeAccess.js'
 import { canAccessPos, isGlobalAdmin } from '@/lib/posAccess.js'
+import { canAccessCosting } from '@/lib/costingAccess.js'
 
 const auth    = useAuthStore()
 const company = useCompanyStore()
@@ -204,7 +230,7 @@ window.addEventListener('resize', () => {
 
 // Sidebar section open/closed state (persisted per browser)
 const NAV_KEY = 'bcapp.navOpen'
-const navOpenDefault = { orders: true, invoices: true, analytics: true, pos: true, admin: true }
+const navOpenDefault = { orders: true, invoices: true, analytics: true, costing: true, pos: true, admin: true }
 let saved = navOpenDefault
 try {
   const raw = localStorage.getItem(NAV_KEY)
@@ -228,6 +254,7 @@ const canViewInvoices = computed(() => canAccessInvoices(role.value))
 const canViewReports = computed(() => canAccessReports(role.value))
 const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
+const canViewCosting = computed(() => canAccessCosting(role.value))
 
 // Role switcher (admin only)
 const roleOptions = [
@@ -239,6 +266,7 @@ const roleOptions = [
   { label: 'sales',           value: 'sales' },
   { label: 'analyst',         value: 'analyst' },
   { label: 'finance',         value: 'finance' },
+  { label: 'costing',         value: 'costing' },
 ]
 function defaultRouteForRole(r) {
   if (canAccessOrders(r))   return '/orders/scan'
@@ -246,6 +274,7 @@ function defaultRouteForRole(r) {
   if (canAccessReports(r))  return '/reports'
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
+  if (canAccessCosting(r))  return '/costing'
   return '/'
 }
 
