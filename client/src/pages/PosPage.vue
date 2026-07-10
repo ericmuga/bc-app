@@ -255,7 +255,7 @@
       <!-- Total -->
       <div class="checkout-total-display">
         <span class="co-label">Order Total</span>
-        <span class="co-amount">{{ fmt(total) }}</span>
+        <span class="co-amount">{{ fmt(payable) }}</span>
       </div>
 
       <!-- Customer summary (if selected) -->
@@ -281,7 +281,7 @@
             :title="pt.Description || ''"
           >
             <i :class="payTypeIcon(pt.PaymentClass)" />
-            <span class="pt-name">{{ pt.Name }}</span>
+            <span class="pt-name">{{ pt.Code }}</span>
             <span v-if="pt.Description" class="pt-tile-desc">{{ pt.Description.length > 36 ? pt.Description.slice(0,33) + '…' : pt.Description }}</span>
           </button>
         </div>
@@ -309,6 +309,67 @@
           <i :class="stkResult.ok ? 'pi pi-check-circle' : 'pi pi-exclamation-triangle'" />
           {{ stkResult.message }}
         </div>
+
+        <!-- Look up a paid M-Pesa transaction (last 20 of this amount) and tag its code to the invoice -->
+        <div class="mpesa-lookup">
+          <label>Find M-Pesa payment by amount</label>
+          <div class="stk-row">
+            <InputNumber v-model="mpesaAmount" :min="0" :minFractionDigits="2" :maxFractionDigits="2"
+                         mode="decimal" fluid />
+            <Button label="Search" icon="pi pi-search" size="small" :loading="mpesaSearch.loading" @click="searchMpesa" />
+          </div>
+          <span class="mpesa-hint">Lists the last 20 M-Pesa payments of this amount — pick by name &amp; code. For a split, search the fraction paid by M-Pesa.</span>
+
+          <div v-if="mpesaSearch.error" class="mpesa-msg">{{ mpesaSearch.error }}</div>
+
+          <!-- Match table: tick one or more transactions (1→many). Latest first. -->
+          <DataTable v-if="mpesaSearch.results.length" :value="mpesaSearch.results"
+                     v-model:selection="mpesaSelected" dataKey="reference" size="small"
+                     class="mpesa-table" :scrollable="true" scrollHeight="200px">
+            <Column selectionMode="multiple" headerStyle="width:2.2rem" />
+            <Column field="reference" header="Code" style="min-width:110px" />
+            <Column field="name" header="Name" style="min-width:130px">
+              <template #body="{ data }">{{ data.name || '—' }}</template>
+            </Column>
+            <Column field="phone" header="Phone" style="width:110px" />
+            <Column field="amount" header="Amount" style="width:90px" bodyStyle="text-align:right">
+              <template #body="{ data }">{{ fmt(data.amount) }}</template>
+            </Column>
+            <Column field="availableAmount" header="Available" style="width:95px" bodyStyle="text-align:right">
+              <template #body="{ data }">{{ fmt(data.availableAmount ?? data.amount) }}</template>
+            </Column>
+            <Column field="timestamp" header="Time" style="width:140px">
+              <template #body="{ data }">{{ data.timestamp || '—' }}</template>
+            </Column>
+          </DataTable>
+
+          <!-- Allocation summary across the ticked transactions -->
+          <div v-if="mpesaMatched.length" class="mpesa-matched">
+            <div v-for="m in mpesaMatched" :key="m.code" class="mm-row">
+              <span>{{ m.code }}</span>
+              <strong>{{ fmt(m.applied) }}</strong>
+            </div>
+            <div class="mm-total" :class="{ short: mpesaMatchedTotal + 0.009 < mpesaAmount }">
+              <span>Matched</span>
+              <strong>{{ fmt(mpesaMatchedTotal) }} / {{ fmt(mpesaAmount) }}</strong>
+            </div>
+          </div>
+
+          <!-- Fallback: only when the amount search doesn't surface the right transaction -->
+          <label style="margin-top:8px">Not listed? Find by confirmation code</label>
+          <div class="stk-row">
+            <InputText v-model="mpesaCodeQuery" placeholder="e.g. SLJ7AB12CD"
+                       @keyup.enter="searchMpesaByCode" fluid />
+            <Button label="Find" icon="pi pi-search" size="small" severity="secondary"
+                    :loading="mpesaSearch.loading" @click="searchMpesaByCode" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Reference for Card / Bank Deposit / Bank Transfer / Credit -->
+      <div v-if="needsRef" class="form-row">
+        <label>Reference {{ selectedPayType?.PaymentClass === 'BankDeposit' ? '(deposit slip no.)' : '' }}</label>
+        <InputText v-model="paymentRef" placeholder="transaction / slip / approval ref" fluid />
       </div>
 
       <!-- Cash tendered -->
@@ -332,12 +393,30 @@
           </span>
         </div>
         <div v-for="(t, i) in splitTenders" :key="i" class="split-row">
-          <span>{{ t.paymentTypeName || t.paymentTypeCode }}</span>
+          <span>{{ t.paymentTypeCode || t.paymentTypeName }}</span>
           <span v-if="t.couponCode" class="text-muted text-sm">· {{ t.couponCode }}</span>
           <span v-if="t.mobileNo"   class="text-muted text-sm">· {{ t.mobileNo }}</span>
           <strong style="margin-left:auto">{{ fmt(t.amount) }}</strong>
           <Button icon="pi pi-times" text severity="danger" size="small"
                   @click="splitTenders.splice(i, 1)" />
+        </div>
+      </div>
+
+      <div v-if="checkoutPaymentLines.length" class="payment-summary">
+        <div class="payment-summary-head">
+          <strong>Payment methods</strong>
+          <span>{{ fmt(checkoutAmountPaid) }}</span>
+        </div>
+        <div v-for="(p, i) in checkoutPaymentLines" :key="i" class="payment-summary-row">
+          <span>
+            {{ p.name }}
+            <small v-if="p.detail">· {{ p.detail }}</small>
+          </span>
+          <strong>{{ fmt(p.amount) }}</strong>
+        </div>
+        <div v-if="checkoutChangeDue > 0" class="payment-summary-row change">
+          <span>Change</span>
+          <strong>{{ fmt(checkoutChangeDue) }}</strong>
         </div>
       </div>
 
@@ -437,6 +516,8 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import IconField from 'primevue/iconfield'
@@ -580,15 +661,110 @@ const completedOrderNo = ref('')
 const successEtims     = ref(null)
 const successPrinted   = ref(false)
 
+// M-Pesa: look up a paid transaction by amount against the configured fetch URL,
+// then tag its confirmation code as the payment reference on the invoice.
+const mpesaAmount    = ref(0)          // amount to search/allocate (may be a fraction for split tenders)
+const mpesaCodeQuery = ref('')         // confirmation-code fallback search
+const mpesaSearch    = ref({ loading: false, error: '', results: [] })
+const mpesaSelected  = ref([])         // checked transactions (1→many matching)
+const isMpesa = computed(() => selectedPayType.value?.PaymentClass === 'Mobile')
+// Non-cash, non-M-Pesa methods (Card / Bank Deposit / Bank Transfer / Credit) capture a free-text reference.
+const paymentRef = ref('')
+const REF_CLASSES = ['Card', 'BankDeposit', 'BankTransfer', 'Credit']
+const needsRef = computed(() => REF_CLASSES.includes(selectedPayType.value?.PaymentClass))
+
+// Allocate the target M-Pesa amount across the selected transactions, respecting
+// each one's available balance (a partially-used code contributes only its balance).
+const mpesaMatched = computed(() => {
+  let remaining = Math.round(Number(mpesaAmount.value || 0) * 100) / 100
+  const out = []
+  for (const p of mpesaSelected.value) {
+    if (remaining <= 0) break
+    const avail = Number(p.availableAmount ?? p.amount ?? 0)
+    const applied = Math.round(Math.min(avail, remaining) * 100) / 100
+    if (applied <= 0) continue
+    out.push({ code: p.reference, mpesaAmount: Number(p.amount || 0), applied,
+               phone: p.phone || null, name: p.name || null, timestamp: p.timestamp || null })
+    remaining = Math.round((remaining - applied) * 100) / 100
+  }
+  return out
+})
+const mpesaMatchedTotal = computed(() => Math.round(mpesaMatched.value.reduce((s, m) => s + m.applied, 0) * 100) / 100)
+const mpesaCodes = computed(() => mpesaMatched.value.map(m => m.code).join(', '))
+
+// Primary lookup: last 20 M-Pesa transactions of the given amount (latest first),
+// already excluding fully-used codes; partially-used ones show their balance.
+async function searchMpesa() {
+  if (!selectedPayType.value) return
+  const amt = Number(mpesaAmount.value || 0)
+  if (!(amt > 0)) { mpesaSearch.value = { loading: false, error: 'Enter the M-Pesa amount to search.', results: [] }; return }
+  mpesaSearch.value = { loading: true, error: '', results: [] }
+  mpesaSelected.value = []
+  try {
+    const { data } = await posApi.fetchPayments({ paymentTypeCode: selectedPayType.value.Code, amount: amt, reconcile: 0, limit: 20 })
+    const results = data.payments || []
+    mpesaSearch.value = {
+      loading: false,
+      error: results.length ? '' : `No unused M-Pesa payments of ${fmt(amt)} found — search by confirmation code below.`,
+      results,
+    }
+  } catch (e) {
+    mpesaSearch.value = { loading: false, error: e.response?.data?.error ?? e.message, results: [] }
+  }
+}
+
+// Fallback lookup: only when the amount search doesn't surface the right one.
+async function searchMpesaByCode() {
+  if (!selectedPayType.value) return
+  const code = String(mpesaCodeQuery.value || '').trim().toUpperCase()
+  if (!code) { mpesaSearch.value = { loading: false, error: 'Enter a confirmation code.', results: [] }; return }
+  mpesaSearch.value = { loading: true, error: '', results: [] }
+  try {
+    const { data } = await posApi.fetchPayments({ paymentTypeCode: selectedPayType.value.Code, code, reconcile: 0, limit: 20 })
+    const results = data.payments || []
+    mpesaSearch.value = { loading: false, error: results.length ? '' : `No unused M-Pesa payment found for code ${code}.`, results }
+    if (results.length === 1) mpesaSelected.value = [results[0]]
+  } catch (e) {
+    mpesaSearch.value = { loading: false, error: e.response?.data?.error ?? e.message, results: [] }
+  }
+}
+
+// Currency rounding: POS charges to the nearest whole KES at checkout/confirmation.
+const roundKes = (v) => Math.round(Number(v) || 0)
+const payable = computed(() => roundKes(total.value))
+
 const change = computed(() => {
   if (selectedPayType.value?.PaymentClass !== 'Cash') return 0
-  return (tendered.value || 0) - total.value
+  return roundKes(tendered.value) - payable.value
 })
+
+const checkoutPaymentLines = computed(() => {
+  if (splitTenders.value.length) {
+    return splitTenders.value.map(t => ({
+      name: t.paymentTypeCode || t.paymentTypeName,
+      detail: t.couponCode || t.reference || t.mobileNo || '',
+      amount: Number(t.amount || 0),
+    }))
+  }
+  if (!selectedPayType.value) return []
+  const code = String(selectedPayType.value.Code || '').toUpperCase()
+  const amount = selectedPayType.value.PaymentClass === 'Cash'
+    ? roundKes(tendered.value)
+    : payable.value
+  return [{
+    name: selectedPayType.value.Code || selectedPayType.value.Name,
+    detail: code === 'COUPON' ? 'Coupon code required at confirm' : (mpesaCodes.value || paymentRef.value || mobileNo.value || ''),
+    amount,
+  }]
+})
+const checkoutAmountPaid = computed(() => checkoutPaymentLines.value.reduce((s, p) => s + Number(p.amount || 0), 0))
+const checkoutChangeDue = computed(() => Math.max(0, Math.round((checkoutAmountPaid.value - total.value) * 100) / 100))
 
 const canConfirm = computed(() => {
   if (!selectedPayType.value) return false
-  if (selectedPayType.value.PaymentClass === 'Mobile' && !mobileNo.value.trim()) return false
-  if (selectedPayType.value.PaymentClass === 'Cash' && (tendered.value || 0) < total.value) return false
+  // Mobile (M-Pesa): allow confirm with either a phone (STK) or matched transaction(s).
+  if (selectedPayType.value.PaymentClass === 'Mobile' && !mobileNo.value.trim() && mpesaMatchedTotal.value <= 0) return false
+  if (selectedPayType.value.PaymentClass === 'Cash' && roundKes(tendered.value) < payable.value) return false
   return true
 })
 
@@ -952,8 +1128,14 @@ async function persistContactDraft() {
 // ── Checkout ──────────────────────────────────────────────────────
 function onPayTypeSelect(pt) {
   selectedPayType.value = pt
+  paymentRef.value = ''
+  mpesaCodeQuery.value = ''
+  mpesaSelected.value = []
+  mpesaSearch.value = { loading: false, error: '', results: [] }
   if (pt.PaymentClass === 'Mobile') {
     mobileNo.value = contactDraft.value.phone || selectedContact.value?.MobileNo || ''
+    // Default the lookup amount to what's still owed (the M-Pesa leg may be a fraction).
+    mpesaAmount.value = roundKes(splitRemaining.value || total.value)
   }
 }
 
@@ -974,6 +1156,11 @@ async function openCheckout() {
   }
   payError.value = ''
   stkResult.value = null
+  paymentRef.value = ''
+  mpesaCodeQuery.value = ''
+  mpesaSelected.value = []
+  mpesaAmount.value = roundKes(total.value)
+  mpesaSearch.value = { loading: false, error: '', results: [] }
   selectedPayType.value = paymentTypes.value[0] ?? null
   tendered.value = total.value
   mobileNo.value = contactDraft.value.phone || selectedContact.value?.MobileNo || ''
@@ -993,11 +1180,13 @@ const canAddTender = computed(() => {
 })
 function defaultTenderAmount() {
   // Cash uses tendered; mobile/coupon defaults to remaining; coupon will be capped server-side.
-  if (selectedPayType.value?.PaymentClass === 'Cash') return Math.min(Number(tendered.value || 0), splitRemaining.value)
+  if (selectedPayType.value?.PaymentClass === 'Cash') return Number(tendered.value || 0)
   return splitRemaining.value
 }
 async function addTender() {
-  const amt = defaultTenderAmount()
+  const isMobile = selectedPayType.value.PaymentClass === 'Mobile'
+  // For M-Pesa, the tender amount is what the matched transaction(s) cover.
+  const amt = isMobile && mpesaMatchedTotal.value > 0 ? mpesaMatchedTotal.value : defaultTenderAmount()
   if (!(amt > 0)) { payError.value = 'Tender amount must be positive'; return }
   let couponCode = null
   const code = String(selectedPayType.value.Code || '').toUpperCase()
@@ -1009,25 +1198,39 @@ async function addTender() {
     paymentTypeCode: selectedPayType.value.Code,
     paymentTypeName: selectedPayType.value.Name,
     amount: Math.round(amt * 100) / 100,
-    mobileNo: selectedPayType.value.PaymentClass === 'Mobile' ? (mobileNo.value || null) : null,
+    mobileNo: isMobile ? (mobileNo.value || null) : null,
+    reference: isMobile ? (mpesaCodes.value || null) : (needsRef.value ? (paymentRef.value.trim() || null) : null),
+    matches: isMobile ? mpesaMatched.value.slice() : null,
     couponCode,
   })
   payError.value = ''
-  // Reset cash field for the next tender
+  // Reset cash + M-Pesa selection + reference for the next tender
   tendered.value = splitRemaining.value
+  paymentRef.value = ''
+  mpesaCodeQuery.value = ''
+  mpesaSelected.value = []
+  mpesaAmount.value = roundKes(splitRemaining.value)
+  mpesaSearch.value = { loading: false, error: '', results: [] }
 }
 async function payWithTenders() {
   paying.value = true; payError.value = ''
+  const oid = orderId.value
+  const matches = splitTenders.value.flatMap(t => t.matches || [])
   try {
-    const { data } = await posApi.checkoutMulti(orderId.value, { tenders: splitTenders.value })
+    checkoutVisible.value = false
+    const { data } = await posApi.checkoutMulti(oid, { tenders: splitTenders.value })
+    if (matches.length) {
+      try { await posApi.recordMpesaMatch(oid, matches) }
+      catch (e) { toast.add({ severity: 'warn', summary: 'M-Pesa match not saved', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
+    }
     completedOrderNo.value = orderNo.value
     successEtims.value     = data?.etims  ?? null
     successPrinted.value   = data?.printed === true
     splitTenders.value = []
-    checkoutVisible.value  = false
     successVisible.value   = true
   } catch (e) {
     payError.value = e.response?.data?.error ?? e.message
+    checkoutVisible.value = true
   } finally {
     paying.value = false
   }
@@ -1045,21 +1248,34 @@ async function doCheckout() {
       if (!couponCode) { payError.value = 'Coupon code required'; paying.value = false; return }
     }
 
-    const { data: co } = await posApi.checkout(orderId.value, {
+    checkoutVisible.value = false
+    const paymentAmount = selectedPayType.value.PaymentClass === 'Cash'
+      ? roundKes(tendered.value)
+      : payable.value
+    const oid = orderId.value
+    const mpesaRef = isMpesa.value ? (mpesaCodes.value || null) : (needsRef.value ? (paymentRef.value.trim() || null) : null)
+    const matches  = isMpesa.value ? mpesaMatched.value.slice() : []
+    const { data: co } = await posApi.checkout(oid, {
       paymentTypeCode: selectedPayType.value.Code,
       paymentTypeName: selectedPayType.value.Name,
-      amount: total.value,
+      amount: paymentAmount,
       mobileNo: mobileNo.value.trim() || null,
+      reference: mpesaRef,
       couponCode,
     })
-    const { data: confirmRes } = await posApi.confirmPayment(co.paymentId)
+    const { data: confirmRes } = await posApi.confirmPayment(co.paymentId, mpesaRef)
+    // Record M-Pesa code→invoice matches (non-fatal if it fails).
+    if (matches.length) {
+      try { await posApi.recordMpesaMatch(oid, matches) }
+      catch (e) { toast.add({ severity: 'warn', summary: 'M-Pesa match not saved', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
+    }
     completedOrderNo.value = orderNo.value
     successEtims.value     = confirmRes?.etims  ?? null
     successPrinted.value   = confirmRes?.printed === true
-    checkoutVisible.value  = false
     successVisible.value   = true
   } catch (e) {
     payError.value = e.response?.data?.error ?? e.message
+    checkoutVisible.value = true
   } finally {
     paying.value = false
   }
@@ -1284,6 +1500,19 @@ function remainingClass(qty) {
 .stk-result.ok   { color: #15803d; background: #f0fdf4; border: 1px solid #86efac; }
 .stk-result.fail { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; }
 .stk-result .pi  { font-size: 14px; }
+
+/* M-Pesa amount lookup */
+.mpesa-lookup { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.mpesa-lookup > label { font-size: 12px; font-weight: 600; color: #475467; }
+.mpesa-hint { font-size: 11px; color: #98a2b3; }
+.mpesa-msg { font-size: 12px; color: #b45309; }
+.mpesa-table { margin: 4px 0; font-size: 12px; }
+.mpesa-table :deep(.p-datatable-tbody > tr > td) { padding: 5px 8px; }
+.mpesa-matched { margin: 6px 0; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px; }
+.mpesa-matched .mm-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+.mpesa-matched .mm-total { display: flex; justify-content: space-between; border-top: 1px dashed #e4e7ec;
+  margin-top: 4px; padding-top: 4px; font-size: 13px; color: #15803d; }
+.mpesa-matched .mm-total.short { color: #b45309; }
 
 .empty-state {
   flex: 1;
@@ -1685,6 +1914,29 @@ function remainingClass(qty) {
 .split-row:first-of-type { border-top:none; }
 .num.pos { color:#15803d; }
 .num.neg { color:#b91c1c; }
+
+.payment-summary {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f9fafb;
+}
+.payment-summary-head,
+.payment-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.payment-summary-row small { color: #6b7280; }
+.payment-summary-row.change {
+  border-top: 1px dashed #cbd5e1;
+  margin-top: 6px;
+  padding-top: 6px;
+  color: #15803d;
+}
 
 /* ── Success dialog ──────────────────────────────────────── */
 .success-body {

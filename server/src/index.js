@@ -5,6 +5,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
 import { db } from './db/pool.js';
@@ -20,6 +22,12 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
 app.use(express.json({ limit: '5mb' }));
+
+// Static uploads (item photos, etc.) — mounted under /api so it rides the dev
+// proxy + same prod origin, and BEFORE the rate limiter so image-heavy pages
+// aren't throttled.
+const uploadsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../uploads');
+app.use('/api/uploads', express.static(uploadsDir));
 
 // Rate limit public-facing routes
 app.use('/api', rateLimit({ windowMs: 60_000, max: 200 }));
@@ -171,6 +179,8 @@ async function ensurePosItemColumns() {
       ['PosStockTake', 'SubmittedBy', 'NVARCHAR(200) NULL'],
       // Stock request receive-time per-line comments (mismatches)
       ['PosStockRequestLine', 'Comments', 'NVARCHAR(500) NULL'],
+      // Stock request receive-time Return Form (RF) number for returned items
+      ['PosStockRequestLine', 'RfNo', 'NVARCHAR(40) NULL'],
     ];
     for (const [tbl, col, def] of adds) {
       await pool.request().query(`

@@ -70,13 +70,46 @@ async function getNextEtimsNumber(cfg) {
   return String(data.next);
 }
 
+function responseData(body) {
+  return body?.data || body || {};
+}
+
+function etimsResponseData(data) {
+  return data?.etimsResponse?.data || data?.etimsResponse || {};
+}
+
+function paymentSummary(order) {
+  const total = Number(order?.totalAmount || 0);
+  const lines = (order?.payments || [])
+    .filter(p => p && p.status !== 'void')
+    .map(p => {
+      const code = String(p.paymentTypeCode || '').toUpperCase();
+      const reference = String(p.reference || '').trim();
+      const isCoupon = code === 'COUPON';
+      return {
+        mode: isCoupon ? 'Coupon' : (p.paymentTypeName || p.paymentTypeCode || 'Payment'),
+        amount: Number(p.amount || 0),
+        reference,
+        mobileNo: p.mobileNo || '',
+        couponCode: isCoupon ? reference : '',
+        isCoupon,
+      };
+    });
+  const amountPaid = lines.reduce((s, p) => s + Number(p.amount || 0), 0);
+  return {
+    lines,
+    amountPaid,
+    changeGiven: Math.max(0, Math.round((amountPaid - total) * 100) / 100),
+  };
+}
+
 /**
  * Build the exact eTIMS payload for an order without sending it.
  * Useful for the dry-run / payload-tester UI.
  */
 export async function buildEtimsPayload(order, etimsNo = null) {
   const cfg = await loadEtims(order?.shopCode);
-  const payment = order.payments?.[0] ?? null;
+  const payments = paymentSummary(order);
   return {
     businessPin:       cfg.companyPin,
     branchId:          cfg.branchId,
@@ -99,14 +132,41 @@ export async function buildEtimsPayload(order, etimsNo = null) {
       quantityUnit:  l.unitOfMeasure  || 'EA',
     })),
     paymentInfo: {
-      amountPaid:   Number(order.totalAmount),
-      changeGiven:  0,
-      paymentModes: [{
-        mode:   payment?.paymentTypeName || 'Cash',
-        amount: Number(payment?.amount ?? order.totalAmount),
-      }],
+      amountPaid:   payments.amountPaid || Number(order.totalAmount),
+      changeGiven:  payments.changeGiven,
+      paymentModes: payments.lines.length
+        ? payments.lines.map(p => ({ mode: p.mode, amount: p.amount }))
+        : [{ mode: 'Cash', amount: Number(order.totalAmount) }],
     },
     remark: `POS Sale - ${order.orderNo}`,
+  };
+}
+
+export async function buildEtimsCreditMemoPayload(order, { creditNoteNumber, reason = 'RETURN' } = {}) {
+  const cfg = await loadEtims(order?.shopCode);
+  return {
+    originalInvoiceNumber: order.etimsNo || order.etimsInvoiceNo || '',
+    businessPin:           cfg.companyPin,
+    branchId:              cfg.branchId,
+    creditNoteNumber:      creditNoteNumber || '<assigned at send-time>',
+    traderInvoiceNo:       `CN${order.orderNo}`,
+    customer: {
+      name:    order.contactName || 'Walk-in',
+      pin:     order.contactPin  || '',
+      mobile:  order.contactPhone || '',
+      address: '',
+    },
+    items: (order.lines || []).map(l => ({
+      itemCode:      l.etimsItemCode      || '',
+      itemClassCode: l.etimsItemClassCode || '',
+      itemName:      String(l.description || '').slice(0, 42),
+      quantity:      Number(l.quantity),
+      price:         Number(l.unitPrice),
+      taxType:       l.taxType        || 'A',
+      packageUnit:   l.unitOfMeasure  || 'EA',
+      quantityUnit:  l.unitOfMeasure  || 'EA',
+    })),
+    reason: String(reason || 'RETURN').slice(0, 50),
   };
 }
 
@@ -164,19 +224,52 @@ export async function signPosOrder(order) {
     const body = await res.json();
     if (!body?.success) throw new Error(`eTIMS rejected: ${JSON.stringify(body).slice(0, 300)}`);
 
-    const data    = body.data || {};
-    const etimsRs = data.etimsResponse?.data || {};
+    const data    = responseData(body);
+    const etimsRs = etimsResponseData(data);
 
     return {
-      etimsInvoiceNo: data.CuInvoiceNumber || '',
+      etimsNo:        etimsNo,
+      etimsInvoiceNo: data.CuInvoiceNumber || data.cuInvoiceNumber || '',
       cuSerialNo:     etimsRs.mrcNo || '',
-      qrUrl:          data.qrData || '',
+      qrUrl:          data.qrData || data.qrUrl || '',
       signedAt:       new Date().toISOString(),
     };
   } catch (e) {
     logger.error('eTIMS sign failed', { orderNo: order.orderNo, error: e.message });
     return null;
   }
+}
+
+export async function signPosCreditMemo(order, { reason = 'RETURN' } = {}) {
+  const cfg = await loadEtims(order?.shopCode);
+  if (!cfg.creditNoteUrl || !cfg.apiKey) throw new Error('eTIMS Credit Note URL/API key not configured');
+  if (!cfg.companyPin) throw new Error('Company PIN not configured');
+  if (!order?.etimsInvoiceNo && !order?.etimsNo) throw new Error('Original eTIMS invoice number is required before credit memo signing');
+
+  const creditNoteNumber = await getNextEtimsNumber(cfg);
+  const payload = await buildEtimsCreditMemoPayload(order, { creditNoteNumber, reason });
+
+  const res = await fetch(cfg.creditNoteUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': cfg.apiKey },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let body = {};
+  try { body = JSON.parse(text); } catch {}
+  if (!res.ok) throw new Error(`eTIMS credit memo HTTP ${res.status}: ${text.slice(0, 300)}`);
+  if (body?.success === false) throw new Error(`eTIMS credit memo rejected: ${JSON.stringify(body).slice(0, 300)}`);
+
+  const data = responseData(body);
+  const etimsRs = etimsResponseData(data);
+  return {
+    etimsNo: creditNoteNumber,
+    etimsCreditMemoNo: data.CuInvoiceNumber || data.cuInvoiceNumber || data.creditNoteNumber || '',
+    cuSerialNo: etimsRs.mrcNo || '',
+    qrUrl: data.qrData || data.qrUrl || '',
+    signedAt: new Date().toISOString(),
+    payload,
+  };
 }
 
 /**
@@ -209,8 +302,25 @@ export async function listInstalledPrinters() {
   }
 }
 
-function buildPrintPayload(order, etimsResult) {
-  const payment  = order.payments?.[0] ?? null;
+export async function generateQrCodeFromSigningService(qrUrl, shopCode = null) {
+  if (!qrUrl) return '';
+  const cfg = await loadEtims(shopCode);
+  if (!cfg.qrServiceUrl) return '';
+  try {
+    const res = await fetch(`${cfg.qrServiceUrl}${encodeURIComponent(qrUrl)}`);
+    if (!res.ok) throw new Error(`QR service ${res.status}`);
+    const contentType = res.headers.get('content-type') || 'image/png';
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return `data:${contentType};base64,${bytes.toString('base64')}`;
+  } catch (e) {
+    logger.warn('QR service generation failed', { error: e.message });
+    return '';
+  }
+}
+
+export async function buildPrintPayload(order, etimsResult) {
+  const cfg = await loadEtims(order?.shopCode);
+  const payments = paymentSummary(order);
   // Compute VAT split per line. POS prices are stored VAT-inclusive (PriceIncludesVat=1).
   //   inclusive: vat = amount - amount/(1+rate/100)
   //   exclusive: vat = amount * rate/100
@@ -226,30 +336,34 @@ function buildPrintPayload(order, etimsResult) {
   const totalIncNum = lineCalcs.reduce((s, c) => s + (c.incl ? Number(c.line.lineAmount || 0) : Number(c.line.lineAmount || 0) + c.vat), 0);
   const totalVatNum = lineCalcs.reduce((s, c) => s + c.vat, 0);
   const totalExNum  = totalIncNum - totalVatNum;
-  // Pull company pin synchronously from the cached value (loadEtims runs early in flow)
-  const cachedPin = _etimsCache?.companyPin || process.env.COMPANY_PIN || '';
+  const qrImage = etimsResult?.qrUrl
+    ? await generateQrCodeFromSigningService(etimsResult.qrUrl, order?.shopCode)
+    : '';
   return {
     invoice_no:        order.orderNo,
     customer_name:     order.contactName || 'Walk-in Customer',
     customer_pin:      order.contactPin  || '',
     customer_no:       order.contactNo   || '',
     lpo_no:            '',
-    mpesa_code:        payment?.reference || '',
+    mpesa_code:        payments.lines.map(p => p.reference).filter(Boolean).join(', '),
     email:             '',
     home_page:         '',
     vat_reg_no:        '',
     order_no:          order.orderNo,
     posting_date:      new Date().toISOString().slice(0, 10),
     sales_person_code: order.cashierName || '',
-    payment_terms:     payment?.paymentTypeName || '',
+    payment_terms:     payments.lines.map(p => p.mode).join(', '),
     sales_person_name: order.cashierName || '',
     shipment_method:   '',
-    company_pin:       cachedPin,
+    company_pin:       cfg.companyPin,
     external_doc_no:   '',
     ship_to:           order.shopCode || '',
     total_ex_vat:      totalExNum.toFixed(2),
     vat:               totalVatNum.toFixed(2),
     total_inc_vat:     totalIncNum.toFixed(2),
+    payment_lines:     payments.lines,
+    amount_paid:       payments.amountPaid.toFixed(2),
+    change_given:      payments.changeGiven.toFixed(2),
     no_printed:        1,
     lines: lineCalcs.map(({ line: l, vat }) => ({
       item_no:          l.itemNo,
@@ -265,6 +379,7 @@ function buildPrintPayload(order, etimsResult) {
     })),
     kra_invoice: etimsResult ? {
       qr_url:        etimsResult.qrUrl,
+      qr_image_data_url: qrImage,
       cu_invoice_no: etimsResult.etimsInvoiceNo,
       cu_serial_no:  etimsResult.cuSerialNo,
       signed_at:     etimsResult.signedAt,
@@ -295,7 +410,7 @@ async function generateByConfig(payload, shopCode = null) {
  * Pass { previewOnly: true } to skip the hardware print (used by the preview modal).
  */
 export async function printConfirmationReceipt(order, { previewOnly = false } = {}) {
-  const payload = buildPrintPayload(order, null);
+  const payload = await buildPrintPayload(order, null);
   payload.no_printed = 0;
   const { fileName, cfg } = await generateByConfig(payload, order?.shopCode);
   if (fileName && !previewOnly) {
@@ -516,8 +631,11 @@ export async function fetchPaymentsFromService({ paymentType, params = {} }) {
     const list = Array.isArray(body) ? body : (body.payments || body.data || []);
     // Accept both snake/camel (our local impl) and PascalCase (mpesa_transactions columns)
     const pick = (o, ...keys) => { for (const k of keys) if (o?.[k] != null && o[k] !== '') return o[k]; return ''; };
+    const fullName = (p) => [pick(p, 'FirstName','firstName'), pick(p, 'MiddleName','middleName'), pick(p, 'LastName','lastName')]
+      .filter(Boolean).join(' ').trim();
     const payments = list.map(p => ({
       reference:   pick(p, 'mpesaCode','transactionId','transId','TransID','reference','id'),
+      name:        pick(p, 'name','customerName','payerName','fullName') || fullName(p),
       phone:       normalizePhone(pick(p, 'phone','msisdn','mobileNo','MSISDN')),
       amount:      Number(pick(p, 'amount','transAmount','TransAmount') || 0),
       accountRef:  pick(p, 'accountRef','accountReference','billRefNumber','BillRefNumber','invoiceNo','InvoiceNumber','orderNo'),
@@ -539,7 +657,7 @@ export async function fetchPaymentsFromService({ paymentType, params = {} }) {
  * Returns { ok, fileName }.
  */
 export async function printPosOrder(order, etimsResult = null) {
-  const payload = buildPrintPayload(order, etimsResult);
+  const payload = await buildPrintPayload(order, etimsResult);
   const { fileName, cfg } = await generateByConfig(payload, order?.shopCode);
   if (fileName) {
     const paperSize = cfg.format === 'thermal' ? `${cfg.thermalWidthMm}mm` : 'A4';

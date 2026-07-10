@@ -1430,7 +1430,7 @@ onMounted(async () => {
 .yield-page :deep(.p-datatable-tbody > tr > td) {
   background: #ffffff !important; color: #111827 !important; border-color: #f3f4f6 !important;
 }
-.yield-page :deep(.p-datatable-tbody > tr:hover > td) { background: #f9fafb !important; }
+.yield-page :deep(.p-datatable-tbody > tr:hover > td) { background: #e8eef7 !important; color: #102a56 !important; }
 .yield-page :deep(.p-inputtext),
 .yield-page :deep(.p-inputnumber-input),
 .yield-page :deep(.p-select-label),

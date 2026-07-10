@@ -257,7 +257,8 @@ onMounted(load)
   border-color: #e5e7eb !important;
 }
 .audit-page :deep(.p-datatable-tbody > tr:hover > td) {
-  background: #f9fafb !important;
+  background: #e8eef7 !important;
+  color: #102a56 !important;
 }
 .audit-page :deep(.p-paginator) {
   background: #ffffff !important;

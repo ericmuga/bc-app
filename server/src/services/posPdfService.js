@@ -157,12 +157,39 @@ export async function generateInvoicePdf(data) {
     doc.text('Total Amt. Inc. VAT', 110, afterY); doc.text('KSH', 160, afterY); doc.text(String(data.total_inc_vat || ''), 175, afterY);
   }
 
+  const paymentLines = Array.isArray(data.payment_lines) ? data.payment_lines : [];
+  if (paymentLines.length || Number(data.change_given || 0) > 0) {
+    afterY += ls * 2;
+    doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+    doc.text('Payment Details', 110, afterY);
+    afterY += ls;
+    doc.setFont('helvetica', 'normal');
+    for (const p of paymentLines) {
+      const bits = [p.mode, p.couponCode ? `Coupon ${p.couponCode}` : '', p.reference && !p.couponCode ? p.reference : '', p.mobileNo || '']
+        .filter(Boolean)
+        .join(' / ');
+      doc.text(bits.slice(0, 42), 110, afterY);
+      doc.text('KSH', 160, afterY);
+      doc.text(Number(p.amount || 0).toFixed(2), 175, afterY);
+      afterY += ls;
+    }
+    if (data.amount_paid) {
+      doc.text('Amount Paid', 110, afterY); doc.text('KSH', 160, afterY); doc.text(String(data.amount_paid), 175, afterY);
+      afterY += ls;
+    }
+    if (Number(data.change_given || 0) > 0) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('Change', 110, afterY); doc.text('KSH', 160, afterY); doc.text(String(data.change_given), 175, afterY);
+      doc.setFont('helvetica', 'normal');
+    }
+  }
+
   if (data.kra_invoice) {
     const kra = data.kra_invoice;
     const pageHeight = doc.internal.pageSize.height;
-    if (kra.qr_url) {
+    if (kra.qr_image_data_url || kra.qr_url) {
       try {
-        const qrCodeDataURL = await QRCode.toDataURL(kra.qr_url);
+        const qrCodeDataURL = kra.qr_image_data_url || await QRCode.toDataURL(kra.qr_url);
         doc.addImage(qrCodeDataURL, 'PNG', 15, pageHeight - 35, 20, 20);
       } catch (e) { /* skip QR if generation fails */ }
     }
@@ -203,17 +230,22 @@ export async function generatePriceListPdf({ shopName = '', groups = [] }) {
     doc.text(grp.name || 'Items', 15, cursorY);
     cursorY += 4;
 
-    const body = grp.items.map(it => [
-      it.itemNo,
-      it.description,
-      it.unitOfMeasure || '',
-      Number(it.basePrice ?? it.unitPrice ?? 0).toFixed(2),
-      it.offerPrice != null ? Number(it.offerPrice).toFixed(2) : '',
-      it.offerDescription || '',
-    ]);
+    const body = grp.items.map(it => {
+      const base      = Number(it.basePrice ?? it.unitPrice ?? 0);
+      const hasOffer  = it.offerPrice != null;
+      const effective = hasOffer ? Number(it.offerPrice) : base;
+      return [
+        it.itemNo,
+        it.description,
+        it.unitOfMeasure || '',
+        effective.toFixed(2),                    // prevailing price (special when active)
+        hasOffer ? base.toFixed(2) : '',         // original price when a special applies
+        it.offerDescription || '',
+      ];
+    });
 
     doc.autoTable({
-      head: [['Item No', 'Description', 'UoM', 'Price', 'Offer', 'Offer Notes']],
+      head: [['Item No', 'Description', 'UoM', 'Price', 'Was', 'Offer Notes']],
       body,
       startY: cursorY,
       margin: { left: 15, right: 15 },
@@ -221,8 +253,8 @@ export async function generatePriceListPdf({ shopName = '', groups = [] }) {
         0: { cellWidth: 22 },
         1: { cellWidth: 70 },
         2: { cellWidth: 15, halign: 'center' },
-        3: { cellWidth: 22, halign: 'right' },
-        4: { cellWidth: 22, halign: 'right', textColor: [21, 128, 61] },
+        3: { cellWidth: 22, halign: 'right', textColor: [21, 128, 61] },
+        4: { cellWidth: 22, halign: 'right', textColor: [156, 163, 175] },
         5: { cellWidth: 30, fontSize: 8 },
       },
       headStyles: { fillColor: [243, 244, 246], textColor: [17, 24, 39], fontSize: 9, fontStyle: 'bold' },

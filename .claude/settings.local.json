@@ -54,7 +54,21 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(mysql -uroot -p'ItsNotEasy123$' -e \"CREATE DATABASE IF NOT EXISTS prime_pos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; SHOW DATABASES LIKE 'prime_pos';\")"
+      "Bash(mysql -uroot -p'ItsNotEasy123$' -e \"CREATE DATABASE IF NOT EXISTS prime_pos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; SHOW DATABASES LIKE 'prime_pos';\")",
+      "Bash(sed -E 's/\\(PASS[A-Z_]*=\\).*/\\\\1***REDACTED***/I')",
+      "Bash(rm -rf C:/Users/EMuga/wms-study)",
+      "Bash(git clone *)",
+      "PowerShell(foreach \\($h in @\\('FCL-BC-DEV-DB01','172.16.10.8'\\)\\) { $r = Test-NetConnection -ComputerName $h -Port 1433 -WarningAction SilentlyContinue; \"{0,-20} resolved={1} reachable={2} ip={3}\" -f $h, [bool]$r.RemoteAddress, $r.TcpTestSucceeded, $r.RemoteAddress })",
+      "PowerShell(foreach \\($h in @\\('FC-BC-DEV-DB01','FCL-BC-DEV-DB01'\\)\\) { try { $ip = [System.Net.Dns]::GetHostAddresses\\($h\\) | Select-Object -First 1 -Expand IPAddressToString; \"$h -> $ip\" } catch { \"$h -> UNRESOLVED\" } })",
+      "Bash(awk '/<script setup>/,/^const toast|^const confirm|useConfirm|useToast/' client/src/pages/CostingPage.vue)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep -rhoE \"p-datatable-row-striped[^,{]*|tr\\\\.p-row-odd[^,{]*|tr\\\\.p-row-even[^,{]*|striped[A-Za-z]*\" node_modules/primevue/datatable/style/index.mjs)",
+      "Bash(rm -f server/scripts/introspect-salesperson.mjs)",
+      "Bash(rmdir server/scripts)",
+      "Bash(rm -f scripts/add-pos-columns.mjs)",
+      "Bash(rmdir scripts *)",
+      "Bash(python -)",
+      "Bash(grep -iE \"\\\\.\\(js|ts|sql\\)$\")"
     ]
   }
 }

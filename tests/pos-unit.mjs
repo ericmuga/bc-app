@@ -72,7 +72,7 @@ test('BA/UAT test plan covers every POS release feature area', () => {
   for (const heading of POS_FEATURE_SECTIONS) {
     assert.ok(testPlan.includes(heading), `missing test-plan section: ${heading}`);
   }
-  assert.match(testPlan, /\*\*Total\*\*\s*\|\s*\*\*105\*\*/, 'sign-off total should stay visible');
+  assert.match(testPlan, /\*\*Total\*\*\s*\|\s*\*\*106\*\*/, 'sign-off total should stay visible');
 });
 
 test('BA release documentation links rollout scope to acceptance evidence', () => {
@@ -87,4 +87,17 @@ test('BA release documentation links rollout scope to acceptance evidence', () =
   ]) {
     assert.ok(baDoc.includes(phrase), `missing BA release phrase: ${phrase}`);
   }
+});
+
+test('POS eTIMS credit memo is admin-gated and checkout receipts expose tender details', () => {
+  const routes = readFileSync(new URL('../server/src/routes/index.js', import.meta.url), 'utf8');
+  const receipt = readFileSync(new URL('../server/src/services/posReceiptService.js', import.meta.url), 'utf8');
+  const terminal = readFileSync(new URL('../client/src/pages/PosPage.vue', import.meta.url), 'utf8');
+
+  assert.match(routes, /credit-memo\/sign',\s*\.\.\.adminOnly/, 'credit memo signing route must be admin only');
+  assert.ok(receipt.includes('payment_lines'), 'print payload must include split payment lines');
+  assert.ok(receipt.includes('change_given'), 'print payload must include change due');
+  assert.ok(receipt.includes('Coupon'), 'coupon tenders must be labelled in receipt payment details');
+  assert.match(terminal, /checkoutVisible\.value\s*=\s*false[\s\S]+checkoutMulti/, 'split checkout modal should close before long payment side-effects');
+  assert.match(terminal, /checkoutVisible\.value\s*=\s*false[\s\S]+posApi\.checkout/, 'single checkout modal should close before final payment confirmation');
 });

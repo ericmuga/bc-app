@@ -186,9 +186,15 @@ export async function generateThermalInvoicePdf(data, { widthMm = 72 } = {}) {
   hr();
 
   // ── Payment lines ─────────────────────────────────────────────────────────
-  if (data.mpesa_code || data.payment_terms) {
-    if (data.payment_terms) kv('Payment',   data.payment_terms, 7);
-    if (data.mpesa_code)    kv('Reference', data.mpesa_code,    7);
+  const paymentLines = Array.isArray(data.payment_lines) ? data.payment_lines : [];
+  if (paymentLines.length || Number(data.change_given || 0) > 0) {
+    left('Payment Details', 7, true);
+    for (const p of paymentLines) {
+      const ref = p.couponCode ? `Coupon ${p.couponCode}` : (p.reference || p.mobileNo || '');
+      kv(ref ? `${p.mode} (${ref})` : p.mode, fmtMoney(p.amount), 6.6);
+    }
+    if (data.amount_paid) kv('Amount Paid', fmtMoney(data.amount_paid), 6.8);
+    if (Number(data.change_given || 0) > 0) kv('Change', fmtMoney(data.change_given), 7, true);
     hr('dashed');
   }
 
@@ -196,9 +202,9 @@ export async function generateThermalInvoicePdf(data, { widthMm = 72 } = {}) {
   if (data.kra_invoice) {
     const kra    = data.kra_invoice;
     const qrSize = 28;        // larger than before so phone scanners pick it up reliably
-    if (kra.qr_url) {
+    if (kra.qr_image_data_url || kra.qr_url) {
       try {
-        const qrDataUrl = await QRCode.toDataURL(kra.qr_url, { margin: 1, width: 200 });
+        const qrDataUrl = kra.qr_image_data_url || await QRCode.toDataURL(kra.qr_url, { margin: 1, width: 200 });
         doc.addImage(qrDataUrl, 'PNG', (widthMm - qrSize) / 2, y, qrSize, qrSize);
         y += qrSize + 2;
       } catch { /* skip QR */ }

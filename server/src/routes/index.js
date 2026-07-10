@@ -20,8 +20,11 @@ import * as posYieldCtrl  from '../controllers/posYieldController.js';
 import * as posTargetCtrl from '../controllers/posTargetController.js';
 import * as posCouponCtrl from '../controllers/posCouponController.js';
 import * as auditCtrl     from '../controllers/auditController.js';
+import * as costingCtrl   from '../controllers/costingController.js';
+import * as templatesCtrl from '../controllers/templatesController.js';
+import * as systemCtrl    from '../controllers/systemController.js';
 import { auditMiddleware } from '../services/audit.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES } from '../services/access.js';
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -29,6 +32,9 @@ const company = companyMiddleware();
 // Mount audit middleware: records every successful POS mutation after the response is sent.
 // Sits before the controllers so it can read req.body; uses res.on('finish') so it never blocks.
 router.use(auditMiddleware);
+
+// ── System / build info ───────────────────────────────────────────────────────
+router.get( '/system/release', authMiddleware, systemCtrl.getRelease);
 
 // ── Companies ─────────────────────────────────────────────────────────────────
 router.get( '/companies', authMiddleware, companyCtrl.listCompanies);
@@ -147,12 +153,16 @@ router.post('/pos/orders/:orderId/save',           ...canPos, posCtrl.saveCart);
 router.post('/pos/orders/:orderId/resume',         ...canPos, posCtrl.resumeCart);
 router.post('/pos/orders/:orderId/reprint',        ...canPos, posCtrl.reprintOrder);
 router.post('/pos/orders/:orderId/sign',           ...canPos, posCtrl.signOrder);
+router.post('/pos/orders/:orderId/credit-memo/sign', ...adminOnly, posCtrl.signCreditMemo);
 router.get( '/pos/orders/:orderId/etims-preview',  ...canPos, posCtrl.previewEtimsPayload);
 router.get( '/pos/orders/:orderId/pdf',            ...canPos, posCtrl.getOrderPdf);
 router.post('/pos/orders/:orderId/print-confirmation', ...canPos, posCtrl.printConfirmation);
 router.post('/pos/orders/:orderId/stk-push',       ...canPos, posCtrl.stkPush);
 router.get( '/pos/payments/fetch',                 ...canPos, posCtrl.fetchPayments);
 router.get( '/pos/payments/fetch-mpesa',           ...canPos, posCtrl.fetchMpesaLocal);
+router.post('/pos/orders/:orderId/mpesa-match',    ...canPos, posCtrl.recordMpesaMatch);
+router.get( '/pos/reports/mpesa-invoices',         ...canManage, posCtrl.mpesaInvoiceReport);
+router.get( '/pos/reports/mpesa-payments',         ...canManage, posCtrl.mpesaPaymentReport);
 // Daraja STK callback — public, no auth (Safaricom posts here). Tolerates duplicates / unmatched.
 router.post('/pos/payments/mpesa-callback',        posCtrl.mpesaCallback);
 
@@ -173,6 +183,12 @@ router.post( '/pos/stock-requests/:requestId/submit',          ...canPos, posSto
 router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, posStockCtrl.approveRequest);
 router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
 router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
+
+// BC stock baseline (reset from BC on-hand) + incremental ledger loads
+router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
+router.post( '/pos/stock/reset-from-bc',                       ...canPos, posStockCtrl.resetStockFromBc);
+router.get(  '/pos/stock/bc-ledger-dates',                     ...canPos, posStockCtrl.bcLedgerDates);
+router.post( '/pos/stock/load-from-bc',                        ...canPos, posStockCtrl.loadStockFromBc);
 
 router.get(  '/pos/stock/daily-movements',                     ...canPos, posStockCtrl.dailyReport);
 
@@ -273,12 +289,15 @@ router.delete('/pos/setup/categories/:categoryId', ...canManage, posCtrl.deleteC
 router.get(   '/pos/setup/items',                  ...canManage, posCtrl.listSetupItems);
 router.get(   '/pos/setup/bc-items',               ...canManage, posCtrl.listBcItems);
 router.get(   '/pos/setup/bc-contacts',            ...canManage, posCtrl.listBcContacts);
+router.get(   '/pos/setup/bc-salespersons',        ...canManage, posCtrl.listBcSalespersons);
+router.get(   '/pos/setup/bc-salespersons/:code/signature', ...canManage, posCtrl.getSalespersonSignature);
 router.post(  '/pos/setup/contacts/import',        ...canManage, posCtrl.importContacts);
 router.get(   '/pos/setup/contacts',               ...canManage, posCtrl.listSetupContacts);
 router.delete('/pos/setup/contacts/:contactId',    ...canManage, posCtrl.deleteSetupContact);
 router.post(  '/pos/setup/items',                  ...canManage, posCtrl.saveItem);
 router.patch( '/pos/setup/items/:itemId',          ...canManage, posCtrl.saveItem);
 router.delete('/pos/setup/items/:itemId',          ...canManage, posCtrl.deleteItem);
+router.post(  '/pos/setup/items/:itemId/photo',    ...canManage, posCtrl.uploadItemPhoto);
 
 router.post(  '/pos/setup/sync-from-bc',           ...canManage, posCtrl.syncFromBc);
 router.post(  '/pos/setup/sync-from-bc/:kind',     ...canManage, posCtrl.syncStepFromBc);
@@ -314,6 +333,33 @@ router.get(   '/pos/setup/payment-types',          ...canManage, posCtrl.listSet
 router.post(  '/pos/setup/payment-types',          ...canManage, posCtrl.savePaymentType);
 router.patch( '/pos/setup/payment-types/:typeId',  ...canManage, posCtrl.savePaymentType);
 router.delete('/pos/setup/payment-types/:typeId',  ...canManage, posCtrl.deletePaymentType);
+
+// ── Costing (WMS calibra via linked server — see config/wms.js) ──────────────
+const canCost = [authMiddleware, requireRole(...COSTING_ROLES)];
+router.get(   '/costing/rows',                  ...canCost, costingCtrl.list);
+router.get(   '/costing/recipes',               ...canCost, costingCtrl.listRecipes);
+router.get(   '/costing/processes',             ...canCost, costingCtrl.listProcesses);
+router.get(   '/costing/columns',               ...canCost, costingCtrl.listColumns);
+router.get(   '/costing/rows/:id',              ...canCost, costingCtrl.getOne);
+router.post(  '/costing/rows',                  ...canCost, costingCtrl.create);
+router.patch( '/costing/rows/:id',              ...canCost, costingCtrl.update);
+router.delete('/costing/rows/:id',              ...canCost, costingCtrl.remove);
+router.delete('/costing/recipes/:recipe',       ...canCost, costingCtrl.removeRecipe);
+router.post(  '/costing/bulk-upsert',           ...canCost, costingCtrl.bulkUpsert);
+router.post(  '/costing/bulk-replace',          ...canCost, costingCtrl.bulkReplace);
+
+// Recipe templates (template_header + template_lines). Static paths first.
+router.get(   '/costing/templates',             ...canCost, templatesCtrl.listHeaders);
+router.get(   '/costing/templates/columns',     ...canCost, templatesCtrl.listColumns);
+router.post(  '/costing/templates',             ...canCost, templatesCtrl.createHeader);
+router.post(  '/costing/templates/lines',       ...canCost, templatesCtrl.createLine);
+router.post(  '/costing/templates/:no/lines/replace', ...canCost, templatesCtrl.replaceLines);
+router.patch( '/costing/templates/lines/:id',   ...canCost, templatesCtrl.updateLine);
+router.delete('/costing/templates/lines/:id',   ...canCost, templatesCtrl.deleteLine);
+router.get(   '/costing/templates/:no/lines',   ...canCost, templatesCtrl.listLines);
+router.get(   '/costing/templates/:no',         ...canCost, templatesCtrl.getTemplate);
+router.patch( '/costing/templates/:id',         ...canCost, templatesCtrl.updateHeader);
+router.delete('/costing/templates/:id',         ...canCost, templatesCtrl.deleteTemplate);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login);

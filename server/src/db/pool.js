@@ -47,9 +47,30 @@ class Database {
         logger.error('SQL Pool error', { error: err.message });
         this.isConnected = false;
       });
-      logger.info('SQL Server connection pool established');
+      logger.info('SQL Server connection pool established', { server: config.server });
       return this.pool;
     } catch (err) {
+      // Hostname (DB_HOST) may fail to resolve on some boxes; fall back to the
+      // raw IP block (DB_HOST_IP) if one is configured and differs.
+      const fallback = process.env.DB_HOST_IP;
+      if (fallback && fallback !== config.server) {
+        logger.warn('Primary DB host failed; retrying via DB_HOST_IP', {
+          host: config.server, fallback, error: err.message,
+        });
+        try {
+          this.pool = await new sql.ConnectionPool({ ...config, server: fallback }).connect();
+          this.isConnected = true;
+          this.pool.on('error', (e) => {
+            logger.error('SQL Pool error', { error: e.message });
+            this.isConnected = false;
+          });
+          logger.info('SQL Server connection pool established (fallback IP)', { server: fallback });
+          return this.pool;
+        } catch (err2) {
+          logger.error('Fallback DB host also failed', { fallback, error: err2.message });
+          throw err2;
+        }
+      }
       logger.error('Failed to connect to SQL Server', { error: err.message });
       throw err;
     }

@@ -12,6 +12,7 @@ const REPORT_DIMENSIONS = ['postingGroup', 'sector', 'salesperson', 'route'];
 const WEEK_DIMENSIONS = ['postingGroup', 'sector'];
 const FOREIGN_GEN_BUS = `'FOREIGN','B FOREIGN'`;
 const MONDAY_ANCHOR = '19000101';
+const BYPRODUCT_POSTING_GROUPS = ['MISCPRK'];
 
 const sectorCol = extCol('Sector');
 const thirdPartyCol = extCol('Third Party');
@@ -61,14 +62,22 @@ function getWeekStart(date) {
   return addDays(d, mondayOffset);
 }
 
-function normalizedPostingGroupExpr(alias = 'l') {
-  return `ISNULL(
+function postingGroupValueExpr(alias = 'l') {
+  return `NULLIF(LTRIM(RTRIM(
     CASE WHEN CHARINDEX('-', ${alias}.[Posting Group]) > 0
          THEN SUBSTRING(${alias}.[Posting Group],
                 CHARINDEX('-', ${alias}.[Posting Group]) + 1,
                 LEN(${alias}.[Posting Group]))
          ELSE NULLIF(${alias}.[Posting Group], '')
-    END, '(Blank)')`;
+    END)), '')`;
+}
+
+function normalizedPostingGroupExpr(alias = 'l') {
+  return `ISNULL(${postingGroupValueExpr(alias)}, '(Blank)')`;
+}
+
+function nativePostingGroupExpr(alias = 'l') {
+  return `NULLIF(LTRIM(RTRIM(${alias}.[Posting Group])), '')`;
 }
 
 function normalizedWeekdayExpr(alias = 'h') {
@@ -151,17 +160,48 @@ function buildItemJoin(tables, thirdParty, byProduct) {
   return `LEFT JOIN ${tables.itemExt} ix ON ix.[No_] = l.[No_]`;
 }
 
+function byProductPostingGroupExpr(alias = 'l') {
+  const groups = BYPRODUCT_POSTING_GROUPS.map((value) => `'${value.replace(/'/g, "''")}'`).join(', ');
+  return `UPPER(LTRIM(RTRIM(${normalizedPostingGroupExpr(alias)}))) IN (${groups})`;
+}
+
+function byProductMatchExpr() {
+  return `(ISNULL(ix.${byProductCol}, 0) = 1 OR ${byProductPostingGroupExpr('l')})`;
+}
+
+// When byproducts are excluded (byProduct === 0) we still want their *amount*
+// to contribute to the report, but not their *quantity*. So instead of
+// filtering the byproduct rows out (which would drop both), we keep the rows
+// and zero their quantity here. Requires the item-ext join (ix) — see
+// buildItemJoin, which is emitted whenever byProduct != null.
+function byProductQtyExpr(qtyExpr, byProduct) {
+  if (byProduct === 0) {
+    return `CASE WHEN ${byProductMatchExpr()} THEN 0 ELSE ${qtyExpr} END`;
+  }
+  return qtyExpr;
+}
+
 function buildItemWhere(thirdParty, byProduct) {
   const clauses = [];
   if (thirdParty != null) {
     const val = thirdParty ? 1 : 0;
     clauses.push(`AND ISNULL(ix.${thirdPartyCol}, 0) = ${val}`);
   }
-  if (byProduct != null) {
-    const val = byProduct ? 1 : 0;
-    clauses.push(`AND ISNULL(ix.${byProductCol}, 0) = ${val}`);
+  // byProduct === 1 restricts rows to byproducts only. byProduct === 0
+  // (exclude) deliberately does NOT filter rows out — byproduct amounts stay
+  // in the totals and their quantity is zeroed via byProductQtyExpr instead.
+  if (byProduct === 1) {
+    clauses.push(`AND ${byProductMatchExpr()}`);
   }
   return clauses.join('\n      ');
+}
+
+function requireInventoryPostingGroup(alias = 'i') {
+  return `AND NULLIF(LTRIM(RTRIM(${alias}.[Inventory Posting Group])), '') IS NOT NULL`;
+}
+
+function requirePostingGroup(alias = 'l') {
+  return `AND ${postingGroupValueExpr(alias)} IS NOT NULL`;
 }
 
 function buildGenBusFilter(genBusMode, sourceType, tables) {
@@ -242,12 +282,16 @@ function buildQtyJoinAndExpr(tables, lTable) {
   };
 }
 
-// For posted invoices/credit memos, multiply Amount by Currency Factor when non-zero.
-// Other document types (unposted, PDA) use Amount directly.
+// Revenue normalisation for foreign-currency documents:
+//   Posted invoices/credit memos (sinvh/scmh) and unposted sales headers (sh)
+//   store Amount in document currency. Divide by Currency Factor to express
+//   it in LCY. A 0/NULL factor means LCY-native, so use Amount as-is
+//   (equivalent to dividing by 1).
+// PDA documents are LCY-native — leave them alone.
 function buildAmountExpr(hTable) {
-  if (hTable === 'sinvh' || hTable === 'scmh') {
+  if (hTable === 'sinvh' || hTable === 'scmh' || hTable === 'sh') {
     return `CASE WHEN ISNULL(h.[Currency Factor], 0) <> 0
-               THEN l.[Amount] * h.[Currency Factor]
+               THEN l.[Amount] / h.[Currency Factor]
                ELSE l.[Amount] END`;
   }
   return 'l.[Amount]';
@@ -275,9 +319,10 @@ function makeAggregateBlock(docLabel, sign, hTable, lTable) {
     return `
       SELECT '${companyId}' AS Company,
              ${dim.selectExpr} AS GroupKey,
+             ${nativePostingGroupExpr('l')} AS NativePostingGroup,
              '${docLabel}' AS DocType,
              COUNT(DISTINCT h.[No_]) AS DocCount,
-             ${sign}SUM(${qtySpec.qtyExpr}) AS Qty,
+             ${sign}SUM(${byProductQtyExpr(qtySpec.qtyExpr, filters.byProduct)}) AS Qty,
              ${sign}SUM(${amountExpr}) AS Amount
       FROM ${tables[hTable]} h
       JOIN ${tables[lTable]} l
@@ -298,9 +343,11 @@ function makeAggregateBlock(docLabel, sign, hTable, lTable) {
         ${routeFilter.where}
         ${sectorFilter.where}
         ${genBusFilter.where}
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
         ${itemWhere}
         ${extraFilters}
-      GROUP BY ${dim.groupByExpr}
+      GROUP BY ${dim.groupByExpr}, ${nativePostingGroupExpr('l')}
     `;
   };
 }
@@ -345,7 +392,7 @@ function makeFactBlock(docLabel, sign, hTable, lTable) {
         ISNULL(NULLIF(st.[Name], ''), '(Blank)') AS ShipToName,
         ${buildProductKeyExpr()} AS ProductKey,
         ${buildProductDescriptionExpr()} AS ProductDescription,
-        ${sign}${qtySpec.qtyExpr} AS Qty,
+        ${sign}${byProductQtyExpr(qtySpec.qtyExpr, filters.byProduct)} AS Qty,
         ${sign}CAST(${amountExpr} AS decimal(38, 20)) AS Amount
       FROM ${tables[hTable]} h
       JOIN ${tables[lTable]} l
@@ -368,6 +415,8 @@ function makeFactBlock(docLabel, sign, hTable, lTable) {
         ${routeFilter.where}
         ${sectorFilter.where}
         ${genBusFilter.where}
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
         ${itemWhere}
         ${extraFilters}
     `;
@@ -405,7 +454,7 @@ function makeItemDrillBlock(sign, hTable, lTable) {
              ${pgExpr} AS GroupKey,
              ${itemNoExpr} AS ItemNo,
              ${itemDescExpr} AS ItemDescription,
-             ${sign}SUM(${qtySpec.qtyExpr}) AS Qty,
+             ${sign}SUM(${byProductQtyExpr(qtySpec.qtyExpr, filters.byProduct)}) AS Qty,
              ${sign}SUM(${amountExpr}) AS Amount
       FROM ${tables[hTable]} h
       JOIN ${tables[lTable]} l ON l.[Document No_] = h.[No_]
@@ -424,6 +473,8 @@ function makeItemDrillBlock(sign, hTable, lTable) {
         ${routeFilter.where}
         ${sectorFilter.where}
         ${genBusFilter.where}
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
         ${itemWhere}
         ${extraFilters}
       GROUP BY ${pgExpr}, ${itemNoExpr}, ${itemDescExpr}
@@ -534,12 +585,14 @@ async function runBaseMatrixReport(reportType, filters) {
 
   const querySql = `
     SELECT Company, GroupKey, DocType,
+           NativePostingGroup,
            SUM(DocCount) AS DocCount,
            SUM(Qty) AS Qty,
            SUM(Amount) AS Amount
     FROM (${unionSql}) src
-    GROUP BY Company, GroupKey, DocType
-    ORDER BY Company, GroupKey, DocType
+    GROUP BY Company, GroupKey, DocType, NativePostingGroup
+    HAVING ABS(SUM(Qty)) + ABS(SUM(Amount)) > 0
+    ORDER BY Company, GroupKey, NativePostingGroup, DocType
   `;
 
   const pool = await bcDb.getPool();
@@ -1256,7 +1309,7 @@ async function runPdaVsShopReport(filters) {
   const segments = [];
   for (const companyId of companies) {
     const tables = makeTables(companyId);
-    const invAmtExpr = `CASE WHEN ISNULL(h.[Currency Factor], 0) <> 0 THEN l.[Amount] * h.[Currency Factor] ELSE l.[Amount] END`;
+    const invAmtExpr = `CASE WHEN ISNULL(h.[Currency Factor], 0) <> 0 THEN l.[Amount] / h.[Currency Factor] ELSE l.[Amount] END`;
     segments.push(`
       SELECT
         COALESCE(pda.CustomerNo, sales.CustomerNo) AS CustomerNo,
@@ -1274,9 +1327,12 @@ async function runPdaVsShopReport(filters) {
         FROM ${tables.pdah} h
         JOIN ${tables.pdal} l ON l.[Document No_] = h.[No_]
         LEFT JOIN ${tables.customer} c ON c.[No_] = h.[Sell-to Customer No_]
+        LEFT JOIN ${tables.item} i ON i.[No_] = l.[No_]
         WHERE h.[Posting Date] BETWEEN @DateFrom AND @DateTo
           ${shopFilter}
           ${customerFilter}
+          ${requireInventoryPostingGroup('i')}
+          ${requirePostingGroup('l')}
         GROUP BY h.[Sell-to Customer No_],
                  ISNULL(NULLIF(c.[Name], ''), ISNULL(NULLIF(h.[Sell-to Customer No_], ''), '(Blank)'))
       ) pda
@@ -1291,9 +1347,12 @@ async function runPdaVsShopReport(filters) {
           FROM ${tables.sinvh} h
           JOIN ${tables.sinvl} l ON l.[Document No_] = h.[No_] AND l.[Type] = 2
           LEFT JOIN ${tables.customer} c ON c.[No_] = h.[Sell-to Customer No_]
+          LEFT JOIN ${tables.item} i ON i.[No_] = l.[No_]
           WHERE h.[Posting Date] BETWEEN @DateFrom AND @DateTo
             ${shopFilter}
             ${customerFilter}
+            ${requireInventoryPostingGroup('i')}
+            ${requirePostingGroup('l')}
           GROUP BY h.[Sell-to Customer No_],
                    ISNULL(NULLIF(c.[Name], ''), ISNULL(NULLIF(h.[Sell-to Customer No_], ''), '(Blank)'))
           UNION ALL
@@ -1301,13 +1360,16 @@ async function runPdaVsShopReport(filters) {
             h.[Sell-to Customer No_] AS CustomerNo,
             ISNULL(NULLIF(c.[Name], ''), ISNULL(NULLIF(h.[Sell-to Customer No_], ''), '(Blank)')) AS CustomerName,
             -SUM(CAST(l.[Quantity (Base)] AS decimal(38, 20))) AS SalesQty,
-            -SUM(CAST(CASE WHEN ISNULL(h.[Currency Factor], 0) <> 0 THEN l.[Amount] * h.[Currency Factor] ELSE l.[Amount] END AS decimal(38, 20))) AS SalesAmount
+            -SUM(CAST(CASE WHEN ISNULL(h.[Currency Factor], 0) <> 0 THEN l.[Amount] / h.[Currency Factor] ELSE l.[Amount] END AS decimal(38, 20))) AS SalesAmount
           FROM ${tables.scmh} h
           JOIN ${tables.scml} l ON l.[Document No_] = h.[No_] AND l.[Type] = 2
           LEFT JOIN ${tables.customer} c ON c.[No_] = h.[Sell-to Customer No_]
+          LEFT JOIN ${tables.item} i ON i.[No_] = l.[No_]
           WHERE h.[Posting Date] BETWEEN @DateFrom AND @DateTo
             ${shopFilter}
             ${customerFilter}
+            ${requireInventoryPostingGroup('i')}
+            ${requirePostingGroup('l')}
           GROUP BY h.[Sell-to Customer No_],
                    ISNULL(NULLIF(c.[Name], ''), ISNULL(NULLIF(h.[Sell-to Customer No_], ''), '(Blank)'))
         ) all_sales
@@ -1369,7 +1431,7 @@ function makeBlankRouteLineBlock(docLabel, hTable, lTable) {
         ISNULL(NULLIF(c.[Name], ''), ISNULL(NULLIF(h.[Sell-to Customer No_], ''), '(Blank)')) AS CustomerName,
         ${buildProductKeyExpr()} AS ItemNo,
         ${buildProductDescriptionExpr()} AS ItemDescription,
-        CAST(${qtySpec.qtyExpr} AS decimal(18,2)) AS Qty,
+        CAST(${byProductQtyExpr(qtySpec.qtyExpr, filters.byProduct)} AS decimal(18,2)) AS Qty,
         CAST(${amountExpr} AS decimal(18,2)) AS Amount
       FROM ${tables[hTable]} h
       JOIN ${tables[lTable]} l
@@ -1388,6 +1450,8 @@ function makeBlankRouteLineBlock(docLabel, hTable, lTable) {
         ${statusFilter}
         ${genBusFilter.where}
         AND ISNULL(NULLIF(ste.${routeCodeCol}, ''), '') = ''
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
         ${itemWhere}
         ${extraFilters}
     `;
@@ -1644,21 +1708,67 @@ export async function listPostingGroups(companies) {
   const resolved = resolveCompanies(companies);
   const blocks = [];
   for (const c of resolved) {
-    const tables = [
-      bcTable(c, 'Sales Invoice Line'),
-      bcTable(c, 'Sales Cr_Memo Line'),
-      bcTable(c, 'Sales Line'),
-    ];
-    tables.forEach((t) => blocks.push(
-      `SELECT DISTINCT NULLIF([Posting Group], '') AS pg FROM ${t} WHERE [Type] = 2`
-    ));
-    blocks.push(
-      `SELECT DISTINCT NULLIF([Posting Group], '') AS pg FROM ${bcTable(c, 'PDA Order Line Archive', { ext: true })}`
-    );
+    const tables = makeTables(c);
+    blocks.push(`
+      SELECT ${normalizedPostingGroupExpr('l')} AS pg,
+             SUM(CAST(l.[Quantity (Base)] AS decimal(38, 20))) AS Qty,
+             SUM(CAST(${buildAmountExpr('sinvh')} AS decimal(38, 20))) AS Amount
+      FROM ${tables.sinvh} h
+      JOIN ${tables.sinvl} l ON l.[Document No_] = h.[No_] AND l.[Type] = 2
+      JOIN ${tables.item} i ON i.[No_] = l.[No_]
+      WHERE 1 = 1
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
+      GROUP BY ${normalizedPostingGroupExpr('l')}
+    `);
+    blocks.push(`
+      SELECT ${normalizedPostingGroupExpr('l')} AS pg,
+             -SUM(CAST(l.[Quantity (Base)] AS decimal(38, 20))) AS Qty,
+             -SUM(CAST(${buildAmountExpr('scmh')} AS decimal(38, 20))) AS Amount
+      FROM ${tables.scmh} h
+      JOIN ${tables.scml} l ON l.[Document No_] = h.[No_] AND l.[Type] = 2
+      JOIN ${tables.item} i ON i.[No_] = l.[No_]
+      WHERE 1 = 1
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
+      GROUP BY ${normalizedPostingGroupExpr('l')}
+    `);
+    blocks.push(`
+      SELECT ${normalizedPostingGroupExpr('l')} AS pg,
+             SUM(CAST(l.[Quantity (Base)] AS decimal(38, 20))) AS Qty,
+             SUM(CAST(${buildAmountExpr('sh')} AS decimal(38, 20))) AS Amount
+      FROM ${tables.sh} h
+      JOIN ${tables.sl} l ON l.[Document No_] = h.[No_] AND l.[Type] = 2 AND l.[Document Type] = h.[Document Type]
+      JOIN ${tables.item} i ON i.[No_] = l.[No_]
+      WHERE h.[Document Type] IN (1, 2)
+        AND h.[Status] IN (4, 5)
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
+      GROUP BY ${normalizedPostingGroupExpr('l')}
+    `);
+    blocks.push(`
+      SELECT ${normalizedPostingGroupExpr('l')} AS pg,
+             SUM(CAST(l.[Quantity] AS decimal(38, 20))) AS Qty,
+             SUM(CAST(l.[Amount] AS decimal(38, 20))) AS Amount
+      FROM ${tables.pdah} h
+      JOIN ${tables.pdal} l ON l.[Document No_] = h.[No_]
+      JOIN ${tables.item} i ON i.[No_] = l.[No_]
+      WHERE 1 = 1
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
+      GROUP BY ${normalizedPostingGroupExpr('l')}
+    `);
   }
   const pool = await bcDb.getPool();
   const req = pool.request();
-  const querySql = `SELECT DISTINCT pg FROM (${blocks.join(' UNION ALL ')}) x WHERE pg IS NOT NULL ORDER BY pg`;
+  const querySql = `
+    SELECT pg
+    FROM (${blocks.join('\nUNION ALL\n')}) x
+    WHERE pg IS NOT NULL
+    GROUP BY pg
+    HAVING ABS(SUM(Qty)) + ABS(SUM(Amount)) > 0
+    ORDER BY pg
+  `;
   const result = await executeLoggedQuery(req, querySql, { slicer: 'postingGroups', companies: resolved });
   return result.recordset.map((r) => r.pg);
 }
@@ -1832,9 +1942,15 @@ export async function listItems(companies, filters = {}) {
       LEFT JOIN ${item} i ON i.[No_] = l.[No_]
       LEFT JOIN ${itemExt} ix ON ix.[No_] = l.[No_]
       WHERE NULLIF(l.[No_], '') IS NOT NULL
+        ${requireInventoryPostingGroup('i')}
+        ${requirePostingGroup('l')}
         ${needsType ? 'AND l.[Type] = 2' : ''}
         ${filters.thirdParty != null ? `AND ISNULL(ix.${thirdPartyCol}, 0) = ${filters.thirdParty ? 1 : 0}` : ''}
-        ${filters.byProduct != null ? `AND ISNULL(ix.${byProductCol}, 0) = ${filters.byProduct ? 1 : 0}` : ''}
+        ${filters.byProduct != null
+          ? filters.byProduct
+            ? `AND (ISNULL(ix.${byProductCol}, 0) = 1 OR ${byProductPostingGroupExpr('l')})`
+            : `AND NOT (ISNULL(ix.${byProductCol}, 0) = 1 OR ${byProductPostingGroupExpr('l')})`
+          : ''}
     `).join('\nUNION ALL\n');
   });
   const pool = await bcDb.getPool();

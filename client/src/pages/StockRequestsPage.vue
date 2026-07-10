@@ -6,6 +6,8 @@
         <p class="text-muted text-sm">Request stock from HQ. Completed requests automatically increase shop inventory.</p>
       </div>
       <div style="display:flex;gap:8px">
+        <Button label="Stock Reset" icon="pi pi-history" severity="warn" outlined @click="openReset" />
+        <Button label="Load from BC" icon="pi pi-download" severity="help" outlined @click="openLoad" />
         <Button label="New Request" icon="pi pi-plus" @click="newRequest" />
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="load" :loading="loading" />
       </div>
@@ -149,6 +151,13 @@
               <span v-else class="text-muted text-sm">{{ data.comments || '' }}</span>
             </template>
           </Column>
+          <Column header="RF No (returns)" style="width:130px">
+            <template #body="{ data }">
+              <input v-if="receivable" v-model="data.rfNo" class="line-text"
+                     :placeholder="lineIsReturn(data) ? 'Return Form no.' : '—'" />
+              <span v-else class="text-muted text-sm">{{ data.rfNo || '' }}</span>
+            </template>
+          </Column>
           <Column header="" style="width:50px">
             <template #body="{ data, index }">
               <Button v-if="editable" icon="pi pi-times" text severity="danger" size="small"
@@ -181,6 +190,70 @@
                 :loading="acting" @click="cancelReq" />
       </template>
     </Dialog>
+
+    <!-- ── Stock Reset dialog ────────────────────────────────────── -->
+    <Dialog v-model:visible="resetVisible" header="Stock Reset — load BC on-hand" :modal="true" :style="{ width: '480px' }">
+      <Message severity="warn" :closable="false" class="mb-3">
+        This clears the terminal's existing stock movements and re-seeds on-hand from
+        Business Central's current stock at the terminal's location. The latest BC ledger
+        entry is saved as the baseline; future loads continue from there.
+      </Message>
+      <div class="text-sm" style="display:flex;flex-direction:column;gap:4px">
+        <div><strong>Terminal:</strong> {{ watermark?.shopCode || wmShop || '—' }}</div>
+        <div v-if="watermark?.watermark"><strong>Current baseline entry:</strong> {{ watermark.watermark.LastEntryNo }}
+          <span class="text-muted">(reset {{ fmtTime(watermark.watermark.ResetAt) }})</span></div>
+        <div v-else class="text-muted">No baseline yet — this will create one.</div>
+      </div>
+      <div v-if="!isManager" class="elev-box">
+        <p class="text-muted text-sm">Admin authorization required.</p>
+        <input v-model="adminUsername" class="elev-input" placeholder="Admin username" autocomplete="off" />
+        <input v-model="adminPassword" type="password" class="elev-input" placeholder="Admin password" autocomplete="off" />
+      </div>
+      <Message v-if="resetError" severity="error" :closable="false" class="mt-2">{{ resetError }}</Message>
+      <template #footer>
+        <Button label="Cancel" text @click="resetVisible=false" :disabled="resetting" />
+        <Button label="Reset to BC on-hand" icon="pi pi-history" severity="warn"
+                :loading="resetting" @click="doReset" />
+      </template>
+    </Dialog>
+
+    <!-- ── Load from BC dialog ───────────────────────────────────── -->
+    <Dialog v-model:visible="loadVisible" header="Load fresh stock from BC" :modal="true" :style="{ width: '620px' }">
+      <div v-if="watermark?.watermark" class="text-sm mb-2">
+        <strong>Baseline entry:</strong> {{ watermark.watermark.LastEntryNo }} ·
+        <strong>Location:</strong> {{ watermark.watermark.LocationCode }} ·
+        <strong>Company:</strong> {{ watermark.watermark.SourceCompany }}
+      </div>
+      <Message v-else severity="warn" :closable="false" class="mb-2">
+        No baseline set — run Stock Reset first.
+      </Message>
+      <p class="text-muted text-sm">Pick a date. Everything up to and including the last BC ledger
+        entry on that date (net of all movements) is loaded into the terminal.</p>
+      <DataTable :value="ledgerDates" dataKey="lastEntryNo" size="small" :loading="loadingDates"
+                 selection-mode="single" v-model:selection="selectedDate" responsive-layout="scroll"
+                 :scrollable="true" scroll-height="280px" class="mt-2">
+        <Column selectionMode="single" style="width:42px" />
+        <Column field="postingDate" header="Date" style="min-width:110px">
+          <template #body="{ data }">{{ fmtDate(data.postingDate) }}</template>
+        </Column>
+        <Column field="lastEntryNo" header="Last Entry #" style="width:110px;text-align:right" />
+        <Column field="entries" header="Entries" style="width:80px;text-align:right" />
+        <Column field="netQty" header="Net Qty" style="width:90px;text-align:right">
+          <template #body="{ data }">{{ Number(data.netQty||0).toFixed(2) }}</template>
+        </Column>
+      </DataTable>
+      <div v-if="!isManager" class="elev-box">
+        <p class="text-muted text-sm">Admin authorization required.</p>
+        <input v-model="adminUsername" class="elev-input" placeholder="Admin username" autocomplete="off" />
+        <input v-model="adminPassword" type="password" class="elev-input" placeholder="Admin password" autocomplete="off" />
+      </div>
+      <Message v-if="loadError" severity="error" :closable="false" class="mt-2">{{ loadError }}</Message>
+      <template #footer>
+        <Button label="Cancel" text @click="loadVisible=false" :disabled="loadingStock" />
+        <Button label="Load up to selected date" icon="pi pi-download" severity="help"
+                :disabled="!selectedDate" :loading="loadingStock" @click="doLoad" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -210,6 +283,76 @@ const itemQuery     = ref('')
 const itemSuggestions = ref([])
 const showDrop      = ref(false)
 const searchRef     = ref(null)
+
+// ── BC stock baseline (reset) + fresh loads ──────────────────────────────────
+const isManager     = computed(() => ['admin', 'shop-admin'].includes(auth.user?.role))
+const watermark     = ref(null)
+const wmShop        = ref('')
+const adminUsername = ref('')
+const adminPassword = ref('')
+// reset dialog
+const resetVisible  = ref(false)
+const resetting     = ref(false)
+const resetError    = ref('')
+// load dialog
+const loadVisible   = ref(false)
+const loadingStock  = ref(false)
+const loadError     = ref('')
+const ledgerDates   = ref([])
+const loadingDates  = ref(false)
+const selectedDate  = ref(null)
+
+function clearElevation() { adminUsername.value = ''; adminPassword.value = '' }
+function elevationBody() { return isManager.value ? {} : { adminUsername: adminUsername.value, adminPassword: adminPassword.value } }
+
+async function loadWatermark() {
+  try { const { data } = await stockApi.bcWatermark(); watermark.value = data; wmShop.value = data?.shopCode || '' }
+  catch { watermark.value = null }
+}
+
+async function openReset() {
+  resetError.value = ''; clearElevation(); await loadWatermark(); resetVisible.value = true
+}
+async function doReset() {
+  resetError.value = ''; resetting.value = true
+  try {
+    const { data } = await stockApi.resetFromBc(elevationBody())
+    resetVisible.value = false
+    error.value = ''
+    requests.value = (await stockApi.listRequests()).data
+    await loadWatermark()
+    alert(`Stock reset: ${data.items} item(s) seeded from BC @ ${data.locationCode} (baseline entry ${data.lastEntryNo}).`)
+  } catch (e) { resetError.value = e.response?.data?.error ?? e.message }
+  finally { resetting.value = false }
+}
+
+async function openLoad() {
+  loadError.value = ''; clearElevation(); selectedDate.value = null; ledgerDates.value = []
+  await loadWatermark()
+  loadVisible.value = true
+  if (!watermark.value?.watermark) return
+  loadingDates.value = true
+  try { ledgerDates.value = (await stockApi.bcLedgerDates()).data.dates || [] }
+  catch (e) { loadError.value = e.response?.data?.error ?? e.message }
+  finally { loadingDates.value = false }
+}
+async function doLoad() {
+  if (!selectedDate.value) return
+  loadError.value = ''; loadingStock.value = true
+  try {
+    const { data } = await stockApi.loadFromBc({
+      uptoEntryNo: selectedDate.value.lastEntryNo,
+      asOfDate:    String(selectedDate.value.postingDate).slice(0, 10),
+      ...elevationBody(),
+    })
+    loadVisible.value = false
+    await loadWatermark()
+    alert(`Loaded ${data.items} item(s) — entries ${data.fromEntryNo + 1}–${data.toEntryNo}.`)
+  } catch (e) { loadError.value = e.response?.data?.error ?? e.message }
+  finally { loadingStock.value = false }
+}
+
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-KE') : '' }
 
 // Per-line lookup suggestions (one global list — only one AutoComplete is open at a time).
 const lineLookup = ref([])
@@ -295,7 +438,7 @@ function addItem(it) {
       lineId: null,
       requestNo: current.value.requestNo,   // line shares the header's doc number
       itemNo: it.itemNo, description: it.description,
-      quantityRequested: 1, quantityReceived: null,
+      quantityRequested: 1, quantityReceived: null, rfNo: '',
       unitOfMeasure: it.unitOfMeasure || '', sortOrder: current.value.lines.length,
     })
   }
@@ -311,7 +454,7 @@ function addBlankLine() {
     lineId: null,
     requestNo: current.value.requestNo,
     itemNo: '', description: '',
-    quantityRequested: 1, quantityReceived: null,
+    quantityRequested: 1, quantityReceived: null, rfNo: '',
     unitOfMeasure: 'KG', sortOrder: current.value.lines.length,
   })
   persistLines()
@@ -379,6 +522,11 @@ function lineHasVariance(l) {
   if (l.quantityReceived == null) return false
   return Number(l.quantityReceived) !== Number(l.quantityRequested || 0)
 }
+// A "return" line = received less than requested (the shortfall goes back on an RF).
+function lineIsReturn(l) {
+  if (l.quantityReceived == null) return false
+  return Number(l.quantityReceived) < Number(l.quantityRequested || 0)
+}
 function lineVarianceClass(l) {
   const v = Number(l.quantityReceived || 0) - Number(l.quantityRequested || 0)
   if (v > 0) return 'num pos'
@@ -402,6 +550,7 @@ async function completeReq() {
       lineId:           l.lineId,
       quantityReceived: l.quantityReceived ?? l.quantityRequested,
       comments:         l.comments || null,
+      rfNo:             l.rfNo || null,
     }))
     await stockApi.completeRequest(current.value.requestId, lines)
     current.value = (await stockApi.getRequest(current.value.requestId)).data
@@ -450,6 +599,12 @@ onMounted(load)
 .text-muted { color:#888; }
 .text-sm    { font-size:13px; }
 .mb-3       { margin-bottom: 12px; }
+.mb-2       { margin-bottom: 8px; }
+.mt-2       { margin-top: 8px; }
+
+.elev-box { margin-top: 12px; display:flex; flex-direction:column; gap:6px;
+  padding:10px; border:1px solid var(--bc-border,#e4e7ec); border-radius:8px; background:var(--bc-surface-raised,#f9fafb); }
+.elev-input { padding:8px 10px; border:1px solid var(--bc-border,#d0d5dd); border-radius:6px; font-size:13px; }
 
 .editor { display:flex; flex-direction:column; gap:12px; }
 .editor-meta { display:flex; justify-content:space-between; align-items:center; }
