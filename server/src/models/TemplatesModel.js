@@ -11,7 +11,7 @@
  */
 import { db, sql } from '../db/pool.js';
 import { wmsTable } from '../config/wms.js';
-import { syncTemplateLineToRecipeData } from '../services/costingSync.js';
+import { syncTemplateLineToRecipeData, replaceRecipeDataForTemplate } from '../services/costingSync.js';
 
 const HDR = wmsTable('template_header');
 const LIN = wmsTable('template_lines');
@@ -256,6 +256,7 @@ export async function replaceLines(templateNo, rows) {
 
   let inserted = 0;
   const errors = [];
+  const insertedRows = [];
   const list = Array.isArray(rows) ? rows : [];
   for (let i = 0; i < list.length; i++) {
     try {
@@ -268,13 +269,15 @@ export async function replaceLines(templateNo, rows) {
         INSERT INTO ${LIN} (${cols.map(c => `[${c}]`).join(', ')}, [created_at], [updated_at])
         VALUES (${cols.map(c => `@${c}`).join(', ')}, GETDATE(), GETDATE())
       `);
-      // Propagate each replaced line to RecipeData (non-fatal).
-      await syncTemplateLineToRecipeData(row);
+      insertedRows.push(row);
       inserted++;
     } catch (e) {
       errors.push({ rowIndex: i, error: e.message });
     }
   }
+  // Mirror to RecipeData: delete every RecipeData row for this recipe and
+  // re-insert one per template line, keeping the input-line sets equal.
+  await replaceRecipeDataForTemplate(templateNo, insertedRows);
   return { deleted, inserted, errors };
 }
 

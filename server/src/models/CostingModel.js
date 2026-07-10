@@ -13,7 +13,7 @@
  */
 import { db, sql } from '../db/pool.js';
 import { wmsTable, resolveWmsDb } from '../config/wms.js';
-import { syncRecipeDataToTemplateLine } from '../services/costingSync.js';
+import { syncRecipeDataToTemplateLine, replaceTemplateLinesForRecipe } from '../services/costingSync.js';
 
 // Table name is resolved per-call so the same CRUD serves multiple WMS
 // company databases (FCL → calibra, CM → cml-calibra).
@@ -371,6 +371,7 @@ export async function replaceRecipes(rows, company) {
       deleted += delRes.rowsAffected[0] || 0;
 
       // 2) Insert each uploaded row for this recipe.
+      const insertedRows = [];
       for (const { raw, i } of items) {
         const row = pick(raw);
         for (const k of ['Process', 'output_item', 'output_item_uom', 'batch_size',
@@ -387,10 +388,12 @@ export async function replaceRecipes(rows, company) {
           INSERT INTO ${tbl(company)} (${cols.map(c => `[${c}]`).join(', ')}, [created_at], [updated_at])
           VALUES (${cols.map(c => `@${c}`).join(', ')}, GETDATE(), GETDATE())
         `);
-        // Propagate each inserted line to template_lines (FCL/calibra, non-fatal).
-        await syncRecipeDataToTemplateLine(row, company);
+        insertedRows.push(row);
         inserted++;
       }
+      // 3) Mirror to template_lines: delete every line for this template and
+      //    re-insert one per RecipeData row, keeping the line sets equal.
+      await replaceTemplateLinesForRecipe(recipe, insertedRows, company);
       recipesReplaced++;
     } catch (e) {
       errors.push({ rowIndex: items[0]?.i ?? -1, error: `recipe "${recipe}": ${e.message}`, row: { recipe } });
