@@ -28,7 +28,8 @@
  *      main_product='Yes', units_per_100=100, percentage=100, from output_* cols
  *  - ONE input line per RecipeData input_item (input_item !== output_item):
  *      main_product='No', units_per_100=percentage=input_item_qt_per, input_* cols
- *  - shortcode = recipe + item_code (no separator); unit_measure defaults 'PC';
+ *  - shortcode = recipe + item_code (no separator); unit_measure carries the
+ *    item's real UOM (blank inputs inherit the recipe's UOM);
  *    type defaults ''. All NOT NULL columns are always populated.
  *
  * Line-set equality (uploads / replaces): replaceTemplateLinesForRecipe and
@@ -45,7 +46,6 @@ const RECIPE = wmsTable('RecipeData');
 const LINES  = wmsTable('template_lines');
 const HEADER = wmsTable('template_header');
 
-const DEFAULT_UOM = 'PC';
 // template_lines.type is NOT NULL. Input lines are 'Intake'; the output
 // main-product line is 'Output'. DEFAULT_LINE_TYPE is only a last-resort fallback.
 const TYPE_INPUT  = 'Intake';
@@ -63,8 +63,17 @@ const isEnabled = () =>
 // Templates are FCL/calibra only — skip sync for any other WMS company DB.
 const isCalibra = (company) => resolveWmsDb(company) === WMS_DB;
 
-// shortcode = recipe + item_code (no separator/prefix).
-const shortcodeOf = (templateNo, itemCode) => `${templateNo}${itemCode}`;
+// shortcode = shortened-recipe + item_code (no separator).
+// The recipe's leading 4-digit prefix collapses to a single digit; the rest of
+// the recipe code is kept as-is (e.g. 1230N76 → 3N76). Unmapped prefixes pass
+// through unchanged.
+const RECIPE_PREFIX_MAP = { '1210': '1', '1220': '2', '1230': '3', '1240': '4' };
+function shortenRecipe(recipe) {
+  const s = String(recipe ?? '');
+  const mapped = RECIPE_PREFIX_MAP[s.slice(0, 4)];
+  return mapped != null ? mapped + s.slice(4) : s;
+}
+const shortcodeOf = (templateNo, itemCode) => `${shortenRecipe(templateNo)}${itemCode}`;
 
 // ── line descriptors from a RecipeData row ───────────────────────────────────
 /** The input line for a RecipeData row (units_per_100 = percentage = qt_per). */
@@ -72,7 +81,8 @@ const inputLine = (templateNo, rr) => ({
   templateNo,
   itemCode:     rr.input_item,
   description:  asStr(rr.input_item_desc),
-  unitMeasure:  asStr(rr.input_item_uom),
+  // Carry the item's real UOM; if blank, inherit the recipe's own UOM.
+  unitMeasure:  asStr(rr.input_item_uom) ?? asStr(rr.output_item_uom) ?? '',
   location:     asStr(rr.input_item_location),
   unitsPer100:  asNum(rr.input_item_qt_per),
   percentage:   asNum(rr.input_item_qt_per),
@@ -85,7 +95,7 @@ const mainLine = (templateNo, rr) => ({
   templateNo,
   itemCode:     rr.output_item,
   description:  asStr(rr.output_item_dec),
-  unitMeasure:  asStr(rr.output_item_uom),
+  unitMeasure:  asStr(rr.output_item_uom) ?? '',
   location:     asStr(rr.output_item_location),
   unitsPer100:  100,
   percentage:   100,
@@ -110,7 +120,7 @@ async function insertLine(pool, line) {
   r.input('template_no',   STR(50),  String(line.templateNo));
   r.input('item_code',     STR(50),  String(line.itemCode));
   r.input('description',   STR(255), line.description ?? '');
-  r.input('unit_measure',  STR(50),  line.unitMeasure || DEFAULT_UOM);
+  r.input('unit_measure',  STR(50),  line.unitMeasure ?? '');
   r.input('location',      STR(50),  line.location ?? '');
   r.input('units_per_100', NUM,      line.unitsPer100 ?? 0);
   r.input('percentage',    NUM,      line.percentage ?? 0);
@@ -134,7 +144,7 @@ async function upsertLine(pool, line) {
   const r = pool.request();
   r.input('id',            sql.BigInt, id);
   r.input('description',   STR(255), line.description ?? '');
-  r.input('unit_measure',  STR(50),  line.unitMeasure || DEFAULT_UOM);
+  r.input('unit_measure',  STR(50),  line.unitMeasure ?? '');
   r.input('location',      STR(50),  line.location ?? '');
   r.input('units_per_100', NUM,      line.unitsPer100 ?? 0);
   r.input('percentage',    NUM,      line.percentage ?? 0);
@@ -233,14 +243,14 @@ async function insertRecipeData(pool, recipe, lineRow, donor) {
   r.input('Process',              STR(255), asStr(donor.Process));
   r.input('output_item',          STR(255), asStr(donor.output_item));
   r.input('output_item_dec',      STR(255), asStr(donor.output_item_dec));
-  r.input('output_item_uom',      STR(50),  asStr(donor.output_item_uom) ?? DEFAULT_UOM);
+  r.input('output_item_uom',      STR(50),  asStr(donor.output_item_uom) ?? '');
   r.input('batch_size',           sql.Float, asNum(donor.batch_size) ?? 0);
   r.input('output_item_location', STR(255), asStr(donor.output_item_location));
   r.input('process_code',         STR(20),  asStr(donor.process_code));
   r.input('no_series',            STR(20),  asStr(donor.no_series));
   r.input('routing',              STR(20),  asStr(donor.routing));
   r.input('input_item_desc',      STR(255), asStr(lineRow.description) ?? '');
-  r.input('input_item_uom',       STR(50),  asStr(lineRow.unit_measure) ?? DEFAULT_UOM);
+  r.input('input_item_uom',       STR(50),  asStr(lineRow.unit_measure) ?? asStr(donor.output_item_uom) ?? '');
   r.input('input_item_qt_per',    sql.Float, asNum(lineRow.units_per_100) ?? 0);
   r.input('input_item_location',  STR(255), asStr(lineRow.location) ?? asStr(donor.output_item_location) ?? '');
   await r.query(`
@@ -284,7 +294,7 @@ export async function syncTemplateLineToRecipeData(lineRow) {
     if (found.recordset.length) {
       const mapped = [
         { col: 'input_item_desc',     val: lineRow.description,   type: STR(255), num: false },
-        { col: 'input_item_uom',      val: lineRow.unit_measure,  type: STR(50),  num: false, dflt: DEFAULT_UOM },
+        { col: 'input_item_uom',      val: lineRow.unit_measure,  type: STR(50),  num: false, dflt: '' },
         { col: 'input_item_location', val: lineRow.location,      type: STR(255), num: false },
         { col: 'input_item_qt_per',   val: lineRow.units_per_100, type: sql.Float, num: true, dflt: 0 },
       ].filter((m) => m.val !== undefined);
