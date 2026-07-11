@@ -13,6 +13,7 @@ export const bcReportsApi = {
   sectors:            (companies) => api.get('/bc-reports/sectors',          { params: { companies: csv(companies) } }),
   genBusPGs:          (companies) => api.get('/bc-reports/gen-bus-pgs',      { params: { companies: csv(companies) } }),
   salespersons:       (companies, refresh = false, filters = {}) => api.get('/bc-reports/salespersons', { params: { companies: csv(companies), ...classifierParams(refresh, filters) } }),
+  customerPostingGroups: (companies) => api.get('/bc-reports/customer-posting-groups', { params: { companies: csv(companies) } }),
   routes:             (companies, refresh = false, filters = {}) => api.get('/bc-reports/routes',       { params: { companies: csv(companies), ...classifierParams(refresh, filters) } }),
   customers:          (companies, refresh = false, filters = {}) => api.get('/bc-reports/customers',    { params: { companies: csv(companies), ...classifierParams(refresh, filters) } }),
   items:              (companies, refresh = false, filters = {}) => api.get('/bc-reports/items',        { params: { companies: csv(companies), ...classifierParams(refresh, filters) } }),
@@ -24,6 +25,18 @@ export const bcReportsApi = {
       asOfDate:  f.asOfDate,
       companies: f.companies?.join(',') || undefined,
       refresh:   refresh ? 1 : 0,
+    },
+  }),
+
+  salesmanStatement: (f, refresh = false) => api.get('/bc-reports/salesman-statement', {
+    params: {
+      salespersonCode:  f.salespersonCode,
+      salespersonCodes: f.salespersonCodes?.join(',') || undefined,
+      salespersonName:  f.salespersonName || undefined,
+      postingGroups:    f.postingGroups?.join(',') || undefined,
+      asOfDate:         f.asOfDate,
+      companies:        f.companies?.join(',') || undefined,
+      refresh:          refresh ? 1 : 0,
     },
   }),
 

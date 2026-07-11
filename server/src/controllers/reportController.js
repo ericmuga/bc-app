@@ -126,6 +126,7 @@ export function clearCache(_req, res) {
   clearNamespace('bc-report-download');
   clearNamespace('bc-report-blank-route');
   clearNamespace('bc-report-aging');
+  clearNamespace('bc-report-statement');
   return res.json({ message: 'BC report cache cleared' });
 }
 
@@ -149,6 +150,46 @@ export async function customerAging(req, res) {
     return res.json(value);
   } catch (err) {
     logger.error('bc-reports/customer-aging error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/bc-reports/salesman-statement */
+export async function salesmanStatement(req, res) {
+  try {
+    const { asOfDate, salespersonCode, salespersonName } = req.query;
+    const splitCSV = (v) => v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
+    // A salesperson name can span multiple codes across companies — accept a set.
+    const salespersonCodes = splitCSV(req.query.salespersonCodes);
+    if (!salespersonCodes.length && !salespersonCode) {
+      return res.status(400).json({ error: 'salespersonCode(s) is required' });
+    }
+    if (!asOfDate) return res.status(400).json({ error: 'asOfDate is required' });
+
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const postingGroups = splitCSV(req.query.postingGroups);
+
+    const cacheKey = {
+      asOfDate,
+      salespersonCodes: (salespersonCodes.length ? salespersonCodes : [salespersonCode]).slice().sort().join(','),
+      postingGroups: postingGroups.slice().sort().join(','),
+      companies: req.query.companies || '',
+      userId: req.user?.userId,
+    };
+    const { value, cached } = await getOrSet('bc-report-statement', cacheKey, () =>
+      BcReport.runSalesmanStatement({
+        salespersonCode,
+        salespersonCodes,
+        salespersonName,
+        postingGroups,
+        asOfDate,
+        companies: splitCSV(req.query.companies),
+      }), { ttlMs: 10 * 60_000, refresh });
+
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
+  } catch (err) {
+    logger.error('bc-reports/salesman-statement error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 }
@@ -265,6 +306,7 @@ export const listPostingGroups      = slicerHandler(BcReport.listPostingGroups);
 export const listSectors            = slicerHandler(BcReport.listSectors);
 export const listGenBusPostingGroups = slicerHandler(BcReport.listGenBusPostingGroups);
 export const listSalespersons       = slicerHandler(BcReport.listSalespersons);
+export const listCustomerPostingGroups = slicerHandler(BcReport.listCustomerPostingGroups);
 export const listRoutes             = slicerHandler(BcReport.listRoutes);
 export const listCustomers          = slicerHandler(BcReport.listCustomers);
 export const listItems              = slicerHandler(BcReport.listItems);

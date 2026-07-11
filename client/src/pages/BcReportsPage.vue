@@ -178,10 +178,16 @@
 
       <Message v-if="error" severity="error" :closable="false" class="mx">{{ error }}</Message>
       <Message v-if="noAccess" severity="warn" :closable="false" class="mx">Your account does not have access to Sales Reports.</Message>
-      <div v-if="!loading && !error && !noAccess && !isDownloads && !rawRows.length" class="empty-state">
+      <div v-if="!loading && !error && !noAccess && !isDownloads && !isStatement && !rawRows.length" class="empty-state">
         <i class="pi pi-chart-bar" style="font-size:3rem;opacity:.25" />
         <p>Select filters and click <strong>Run Report</strong></p>
       </div>
+
+      <!-- Salesman Statement (self-contained; uses its own salesperson + as-of date) -->
+      <SalesmanStatement v-if="isStatement && !noAccess"
+                         :companies="filters.companies"
+                         :salesperson-options="salespersonOptions" />
+
       <div v-if="loading" class="skeleton-wrap">
         <Skeleton height="2rem" class="mb" v-for="n in 8" :key="n" />
       </div>
@@ -743,6 +749,7 @@ import Message from 'primevue/message'
 import Drawer from 'primevue/drawer'
 import * as XLSX from 'xlsx'
 import { canAccessReports } from '@/lib/access.js'
+import SalesmanStatement from '@/components/reports/SalesmanStatement.vue'
 
 const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
 const DOC_TYPE_OPTIONS = [
@@ -782,6 +789,7 @@ const TABS = [
   { value: 'customerItem', label: 'Customer Item', icon: 'pi pi-th-large' },
   { value: 'shopPaymentSummary', label: 'Shop Payment Summary', icon: 'pi pi-wallet' },
   { value: 'pdaVsShop', label: 'PDA vs Shop', icon: 'pi pi-arrows-h' },
+  { value: 'salesmanStatement', label: 'Salesman Statement', icon: 'pi pi-file-edit' },
   { value: 'downloads', label: 'Downloads', icon: 'pi pi-download' },
 ]
 const VIEW_OPTIONS = [
@@ -870,6 +878,7 @@ const isProductPerformance = computed(() => reportType.value === 'productPerform
 const isCustomerItem = computed(() => reportType.value === 'customerItem')
 const isShopPaymentSummary = computed(() => reportType.value === 'shopPaymentSummary')
 const isPdaVsShop = computed(() => reportType.value === 'pdaVsShop')
+const isStatement = computed(() => reportType.value === 'salesmanStatement')
 const isDownloads = computed(() => reportType.value === 'downloads')
 const isComparisonReport = computed(() => ['routeWeekOnWeek', 'customerWeekOnWeek', 'weekOnWeek', 'productPerformance'].includes(reportType.value))
 
@@ -1813,7 +1822,7 @@ function switchReport(type) {
   selectedPgGroup.value = null
   pgItemDrawerVisible.value = false
   pgItemRows.value = []
-  if (!isDownloads.value) runReport()
+  if (!isDownloads.value && !isStatement.value) runReport()
 }
 
 function openRouteDrawer(country) {

@@ -1850,6 +1850,21 @@ export async function listSalespersons(companies) {
   }));
 }
 
+/** Distinct Customer Posting Groups across the selected companies (for the statement filter). */
+export async function listCustomerPostingGroups(companies) {
+  const resolved = resolveCompanies(companies);
+  const blocks = resolved.map((c) =>
+    `SELECT DISTINCT NULLIF([Customer Posting Group], '') AS pg FROM ${bcTable(c, 'Customer')}
+     WHERE NULLIF([Customer Posting Group], '') IS NOT NULL`
+  ).join('\nUNION\n');
+  const querySql = `SELECT DISTINCT pg FROM (${blocks}) x ORDER BY pg`;
+
+  const pool = await bcDb.getPool();
+  const req = pool.request();
+  const result = await executeLoggedQuery(req, querySql, { slicer: 'customerPostingGroups', companies: resolved });
+  return result.recordset.map((r) => ({ value: r.pg, label: r.pg }));
+}
+
 export async function listRoutes(companies) {
   const resolved = resolveCompanies(companies);
   const blocks = resolved.map((c) => {
@@ -2133,4 +2148,244 @@ export async function runCustomerAging({ asOfDate, companies: companiesFilter })
   );
 
   return { rows, meta: { asOfDate } };
+}
+
+// ── Salesman Statement (outstanding customer balances by salesperson) ─────────
+// Open-item statement, as at a date, for one salesperson: per customer it lists
+// outstanding invoices (open debit entries), then unallocated credits (open
+// credit entries) at the bottom, with a per-customer and grand-total balance.
+// "Salesperson Code" on the Cust. Ledger Entry is the salesman.
+
+const CLE_DOC_TYPE_LABELS = {
+  0: '', 1: 'Payment', 2: 'Invoice', 3: 'Credit Memo',
+  4: 'Finance Charge', 5: 'Reminder', 6: 'Refund',
+};
+
+export async function runSalesmanStatement({ salespersonCode, salespersonCodes, salespersonName, postingGroups, asOfDate, companies: companiesFilter }) {
+  // Accept either a single code (legacy) or a set of codes — one salesperson name
+  // can map to different codes across companies, and selecting the name should
+  // pull them all.
+  const codes = [...new Set(
+    (Array.isArray(salespersonCodes) && salespersonCodes.length ? salespersonCodes : [salespersonCode])
+      .map((c) => String(c || '').trim())
+      .filter(Boolean)
+  )];
+  const nameLabel = String(salespersonName || '').trim();
+  const metaBase = { salespersonCode: codes[0] || '', salespersonCodes: codes, salespersonName: nameLabel, asOfDate };
+  if (!codes.length) return { customers: [], meta: metaBase };
+
+  const companies = resolveCompanies(companiesFilter);
+  if (!companies.length) return { customers: [], meta: metaBase };
+
+  const asOf = parseDateOnly(asOfDate);
+  const codeParams = codes.map((_, i) => `@Sp${i}`).join(', ');
+
+  // Optional Customer Posting Group filter (e.g. CASH SALE, BCASHSALE, SHOP).
+  const pgs = [...new Set(
+    (Array.isArray(postingGroups) ? postingGroups : [])
+      .map((p) => String(p || '').trim())
+      .filter(Boolean)
+  )];
+  const pgParams = pgs.map((_, i) => `@Pg${i}`).join(', ');
+  const pgFilter = pgs.length ? `AND cle.[Customer Posting Group] IN (${pgParams})` : '';
+
+  // One open-item sub-query per company. The as-of date filters which LEDGER
+  // ENTRIES qualify (posted on/before the date), but Remaining = SUM of ALL
+  // detailed entries with NO date cap — i.e. the CURRENT remaining, net of every
+  // application regardless of when it posted. So an invoice reduced by a later
+  // payment/credit shows its lower current balance, and only entries that are
+  // still open now (remaining <> 0) are kept.
+  const segments = [];
+  for (const companyId of companies) {
+    const cle         = bcTable(companyId, 'Cust_ Ledger Entry');
+    const dcle        = bcTable(companyId, 'Detailed Cust_ Ledg_ Entry');
+    const customer    = bcTable(companyId, 'Customer');
+    const salesperson = bcTable(companyId, 'Salesperson_Purchaser');
+    const sih         = bcTable(companyId, 'Sales Invoice Header');
+    const scmh        = bcTable(companyId, 'Sales Cr_Memo Header');
+    const sil         = bcTable(companyId, 'Sales Invoice Line');
+    const scml        = bcTable(companyId, 'Sales Cr_Memo Line');
+    // Sell-to customer + ship-to address are looked up from the posted header
+    // (by Document No_). The ledger entry's own [Customer No_] is the bill-to,
+    // which stays the grouping/balance key. Invoices → Sales Invoice Header,
+    // credit memos → Cr.Memo Header.
+    const sellTo   = `COALESCE(NULLIF(sih.[Sell-to Customer No_], ''), NULLIF(scmh.[Sell-to Customer No_], ''))`;
+    const shipCode = `COALESCE(NULLIF(sih.[Ship-to Code], ''), NULLIF(scmh.[Ship-to Code], ''))`;
+    const shipName = `COALESCE(NULLIF(sih.[Ship-to Name], ''), NULLIF(scmh.[Ship-to Name], ''))`;
+    const shipAddr = `COALESCE(NULLIF(sih.[Ship-to Address], ''), NULLIF(scmh.[Ship-to Address], ''))`;
+    const shipCity = `COALESCE(NULLIF(sih.[Ship-to City], ''), NULLIF(scmh.[Ship-to City], ''))`;
+    segments.push(`
+      SELECT
+        '${companyId}' AS Company,
+        cle.[Customer No_] AS CustomerNo,
+        MAX(ISNULL(NULLIF(c.[Name], ''), cle.[Customer No_])) AS CustomerName,
+        MAX(NULLIF(sp.[Name], '')) AS SalespersonName,
+        cle.[Entry No_] AS EntryNo,
+        MAX(cle.[Document Type]) AS DocTypeInt,
+        MAX(cle.[Document No_]) AS DocumentNo,
+        MAX(cle.[External Document No_]) AS ExternalDocNo,
+        MAX(NULLIF(cle.[Currency Code], '')) AS CurrencyCode,
+        MAX(CAST(cle.[Posting Date] AS date)) AS PostingDate,
+        MAX(CAST(cle.[Due Date] AS date)) AS DueDate,
+        MAX(${sellTo})   AS SellToCustomerNo,
+        MAX(${shipCode}) AS ShipToCode,
+        MAX(${shipName}) AS ShipToName,
+        MAX(${shipAddr}) AS ShipToAddress,
+        MAX(${shipCity}) AS ShipToCity,
+        -- Original (full) document amount incl. VAT, from the posted invoice /
+        -- credit-memo lines (credits negated to match the ledger sign).
+        COALESCE(
+          (SELECT SUM(il.[Amount Including VAT]) FROM ${sil} il WHERE il.[Document No_] = cle.[Document No_]),
+          -(SELECT SUM(cl.[Amount Including VAT]) FROM ${scml} cl WHERE cl.[Document No_] = cle.[Document No_]),
+          0
+        ) AS OriginalAmount,
+        SUM(dcle.[Amount]) AS Remaining
+      FROM ${cle} cle
+      JOIN ${dcle} dcle
+        ON dcle.[Cust_ Ledger Entry No_] = cle.[Entry No_]
+      LEFT JOIN ${customer} c    ON c.[No_]   = cle.[Customer No_]
+      LEFT JOIN ${salesperson} sp ON sp.[Code] = cle.[Salesperson Code]
+      LEFT JOIN ${sih}  sih  ON sih.[No_]  = cle.[Document No_]
+      LEFT JOIN ${scmh} scmh ON scmh.[No_] = cle.[Document No_]
+      WHERE CAST(cle.[Posting Date] AS date) <= @AsOfDate
+        AND cle.[Salesperson Code] IN (${codeParams})
+        ${pgFilter}
+      GROUP BY cle.[Entry No_], cle.[Customer No_], cle.[Document No_]
+      HAVING SUM(dcle.[Amount]) <> 0
+    `);
+  }
+
+  const querySql = segments.join('\nUNION ALL\n') +
+    '\nORDER BY CustomerName, CustomerNo, PostingDate, EntryNo';
+
+  const pool = await bcDb.getPool();
+  const req = pool.request();
+  req.input('AsOfDate', sql.Date, asOf);
+  codes.forEach((c, i) => req.input(`Sp${i}`, sql.NVarChar(20), c));
+  pgs.forEach((p, i) => req.input(`Pg${i}`, sql.NVarChar(50), p));
+
+  const result = await executeLoggedQuery(req, querySql, {
+    reportType: 'salesmanStatement',
+    companies,
+    salespersonCodes: codes,
+    asOfDate,
+  });
+
+  // Merge by customer NAME (normalised) so the same customer across companies is
+  // one block; track each company's balance/No separately for per-company columns.
+  const normName = (s) => String(s || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  const custMap = new Map();
+  let resolvedName = nameLabel;
+  for (const r of result.recordset) {
+    if (!resolvedName && r.SalespersonName) resolvedName = r.SalespersonName;
+    const displayName = r.CustomerName || r.CustomerNo;
+    const key = normName(displayName);
+    if (!custMap.has(key)) {
+      custMap.set(key, {
+        key,
+        customerName: displayName,
+        companies:    new Map(), // company -> { company, customerNo, balance }
+        invoices:     [],
+        credits:      [],
+        balance:      0,
+      });
+    }
+    const cust = custMap.get(key);
+    const remaining = Number(r.Remaining) || 0;
+    const entry = {
+      company:       r.Company,
+      customerNo:    r.CustomerNo,                                   // bill-to (account owing)
+      sellToCustomerNo: (r.SellToCustomerNo || '').trim(),          // from posted invoice/cr.memo header
+      shipToCode:    (r.ShipToCode || '').trim(),
+      shipToName:    (r.ShipToName || '').trim(),
+      shipToAddress: [r.ShipToAddress, r.ShipToCity].map(x => (x || '').trim()).filter(Boolean).join(', '),
+      entryNo:       r.EntryNo,
+      documentType:  CLE_DOC_TYPE_LABELS[r.DocTypeInt] ?? String(r.DocTypeInt ?? ''),
+      documentNo:    (r.DocumentNo || '').trim(),
+      externalDocNo: (r.ExternalDocNo || '').trim(),
+      currencyCode:  (r.CurrencyCode || '').trim(),
+      postingDate:   r.PostingDate ? formatDateOnly(new Date(r.PostingDate)) : null,
+      dueDate:       r.DueDate ? formatDateOnly(new Date(r.DueDate)) : null,
+      originalAmount: Number(r.OriginalAmount) || 0,
+      remaining,
+    };
+    cust.balance += remaining;
+    if (!cust.companies.has(r.Company)) {
+      cust.companies.set(r.Company, { company: r.Company, customerNo: r.CustomerNo, balance: 0 });
+    }
+    cust.companies.get(r.Company).balance += remaining;
+    if (remaining >= 0) cust.invoices.push(entry);
+    else cust.credits.push(entry);
+  }
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const customers = [...custMap.values()].map((c) => {
+    const byCompany = [...c.companies.values()]
+      .map((x) => ({ ...x, balance: round2(x.balance) }))
+      .sort((a, b) => a.company.localeCompare(b.company));
+    return {
+      key:          c.key,
+      customerName: c.customerName,
+      customerNo:   byCompany[0]?.customerNo || '',
+      byCompany,                                  // per-company { company, customerNo, balance }
+      companies:    byCompany.map((x) => x.company),
+      invoices:     c.invoices,
+      credits:      c.credits,
+      balance:      round2(c.balance),
+    };
+  }).sort((a, b) => a.customerName.localeCompare(b.customerName) || a.customerNo.localeCompare(b.customerNo));
+
+  let invoiceTotal = 0, creditTotal = 0;
+  for (const c of customers) {
+    for (const e of c.invoices) invoiceTotal += e.remaining;
+    for (const e of c.credits)  creditTotal += e.remaining;
+  }
+  const grandTotal = round2(invoiceTotal + creditTotal);
+
+  // Period split (per company): outstanding broken down by posting date relative
+  // to the as-of date — before the date vs on the day — for sales (debits) and
+  // credits. salesBefore + salesDay = invoiceTotal; creditsBefore + creditsDay = creditTotal.
+  const asOfStr = String(asOfDate);
+  const periodMap = new Map();
+  const bucket = (co) => {
+    if (!periodMap.has(co)) periodMap.set(co, { company: co, salesBefore: 0, salesDay: 0, creditsBefore: 0, creditsDay: 0 });
+    return periodMap.get(co);
+  };
+  for (const c of customers) {
+    for (const e of [...c.invoices, ...c.credits]) {
+      const b = bucket(e.company);
+      const onDay = e.postingDate === asOfStr;
+      if (e.remaining >= 0) { if (onDay) b.salesDay += e.remaining; else b.salesBefore += e.remaining; }
+      else                  { if (onDay) b.creditsDay += e.remaining; else b.creditsBefore += e.remaining; }
+    }
+  }
+  const periodSplit = [...periodMap.values()]
+    .map((x) => ({
+      company: x.company,
+      salesBefore: round2(x.salesBefore), salesDay: round2(x.salesDay),
+      creditsBefore: round2(x.creditsBefore), creditsDay: round2(x.creditsDay),
+    }))
+    .sort((a, b) => a.company.localeCompare(b.company));
+  const periodTotal = periodSplit.reduce((t, x) => ({
+    salesBefore: round2(t.salesBefore + x.salesBefore), salesDay: round2(t.salesDay + x.salesDay),
+    creditsBefore: round2(t.creditsBefore + x.creditsBefore), creditsDay: round2(t.creditsDay + x.creditsDay),
+  }), { salesBefore: 0, salesDay: 0, creditsBefore: 0, creditsDay: 0 });
+
+  return {
+    customers,
+    meta: {
+      salespersonCode:  codes[0] || '',
+      salespersonCodes: codes,
+      salespersonName:  resolvedName || codes.join(', '),
+      postingGroups:    pgs,
+      asOfDate,
+      companies,
+      invoiceTotal: round2(invoiceTotal),
+      creditTotal:  round2(creditTotal),
+      grandTotal,
+      periodSplit,
+      periodTotal,
+      customerCount: customers.length,
+    },
+  };
 }
