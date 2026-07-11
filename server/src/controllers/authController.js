@@ -186,7 +186,7 @@ export async function createUser(req, res) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin role required' });
   }
-  const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN, ROLES.FINANCE, ROLES.COSTING];
+  const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN, ROLES.FINANCE, ROLES.COSTING, ROLES.PRODUCTION, ROLES.DISPATCH_REGISTRY, ROLES.DISPATCH_SUPERVISOR, ROLES.PACKER, ROLES.CHECKER, ROLES.LOADER];
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
   }

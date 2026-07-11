@@ -23,8 +23,11 @@ import * as auditCtrl     from '../controllers/auditController.js';
 import * as costingCtrl   from '../controllers/costingController.js';
 import * as templatesCtrl from '../controllers/templatesController.js';
 import * as systemCtrl    from '../controllers/systemController.js';
+import * as productionCtrl from '../controllers/productionController.js';
+import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import { auditMiddleware } from '../services/audit.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES } from '../services/access.js';
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
+  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -75,12 +78,14 @@ router.get('/bc-reports/posting-groups',     ...canReport, reportCtrl.listPostin
 router.get('/bc-reports/sectors',            ...canReport, reportCtrl.listSectors);
 router.get('/bc-reports/gen-bus-pgs',        ...canReport, reportCtrl.listGenBusPostingGroups);
 router.get('/bc-reports/salespersons',       ...canReport, reportCtrl.listSalespersons);
+router.get('/bc-reports/customer-posting-groups', ...canReport, reportCtrl.listCustomerPostingGroups);
 router.get('/bc-reports/routes',             ...canReport, reportCtrl.listRoutes);
 router.get('/bc-reports/customers',          ...canReport, reportCtrl.listCustomers);
 router.get('/bc-reports/items',              ...canReport, reportCtrl.listItems);
 router.get('/bc-reports/downloads',          ...canReport, reportCtrl.downloadDataset);
 router.get('/bc-reports/blank-route-lines',  ...canReport, reportCtrl.blankRouteLines);
 router.get('/bc-reports/customer-aging',     ...canReport, reportCtrl.customerAging);
+router.get('/bc-reports/salesman-statement', ...canReport, reportCtrl.salesmanStatement);
 router.get('/bc-reports/cust-pg-mappings',   ...canReport, reportCtrl.listCustPgMappings);
 router.post('/bc-reports/cache/clear',       ...canReport, reportCtrl.clearCache);
 
@@ -106,6 +111,12 @@ router.get('/finance/gl-mappings',            ...canFinance, financeCtrl.listGlM
 router.post('/finance/gl-mappings',           authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.saveGlMapping);
 router.patch('/finance/gl-mappings/:mapId',   authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.saveGlMapping);
 router.delete('/finance/gl-mappings/:mapId',  authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.deleteGlMapping);
+
+// ── Production (inventory analysis by location) ──────────────────────────────
+const canProduction = [authMiddleware, requireRole(...PRODUCTION_ROLES)];
+router.get('/production/locations',  ...canProduction, productionCtrl.getLocations);
+router.put('/production/locations',  authMiddleware, requireRole(...ADMIN_ROLES), productionCtrl.saveLocations);
+router.get('/production/analysis',   ...canProduction, productionCtrl.analysis);
 
 // ── Management Accounts ──────────────────────────────────────────────────────
 // Finance + admin roles can read; admin only can write.
@@ -360,6 +371,20 @@ router.get(   '/costing/templates/:no/lines',   ...canCost, templatesCtrl.listLi
 router.get(   '/costing/templates/:no',         ...canCost, templatesCtrl.getTemplate);
 router.patch( '/costing/templates/:id',         ...canCost, templatesCtrl.updateHeader);
 router.delete('/costing/templates/:id',         ...canCost, templatesCtrl.deleteTemplate);
+
+// ── Dispatch / pick-and-pack ──────────────────────────────────────────────────
+const canDispatch     = [authMiddleware, requireRole(...DISPATCH_ROLES)];
+const canDispRegistry = [authMiddleware, requireRole(...DISPATCH_REGISTRY_ROLES)];
+const canDispSuper    = [authMiddleware, requireRole(...DISPATCH_SUPERVISOR_ROLES)];
+// Registry (confirm the 4 parts)
+router.post( '/dispatch/import',              ...canDispRegistry, dispatchCtrl.importFromBc);
+router.get(  '/dispatch/confirmation',        ...canDispRegistry, dispatchCtrl.listConfirmation);
+router.get(  '/dispatch/orders/:id',          ...canDispatch,     dispatchCtrl.getOrder);
+router.post( '/dispatch/orders/:id/confirm',  ...canDispRegistry, dispatchCtrl.confirmPart);
+// Assignment (supervisor → packer)
+router.get(  '/dispatch/unassigned',          ...canDispSuper,    dispatchCtrl.listUnassigned);
+router.get(  '/dispatch/packers',             ...canDispSuper,    dispatchCtrl.listPackers);
+router.post( '/dispatch/orders/:id/assign',   ...canDispSuper,    dispatchCtrl.assign);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login);

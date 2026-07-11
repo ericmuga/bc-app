@@ -4,6 +4,7 @@ import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, RO
 import { canAccessFinance, FINANCE_ROLE } from '@/lib/financeAccess.js'
 import { canAccessPos, POS_ROLE, SHOP_ADMIN_ROLE } from '@/lib/posAccess.js'
 import { canAccessCosting, COSTING_ROLE } from '@/lib/costingAccess.js'
+import { canAccessDispatch, canDispatchAssign } from '@/lib/dispatchAccess.js'
 
 // Local replacement for the lib/access.js default-route helper, which is missing
 // the POS / Finance fall-throughs (so shop-admin / shop / finance roles get
@@ -17,6 +18,7 @@ function defaultRouteForRole(role) {
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
   if (canAccessCosting(r))  return '/costing'
+  if (canAccessDispatch(r)) return '/dispatch/registry'
   return '/login'
 }
 
@@ -51,6 +53,8 @@ const routes = [
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
+      { path: 'dispatch/registry',   name: 'DispatchRegistry',   component: () => import('@/pages/DispatchRegistryPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'dispatch-registry'] } },
+      { path: 'dispatch/assignment', name: 'DispatchAssignment', component: () => import('@/pages/DispatchAssignmentPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor'] } },
       { path: 'admin/setup',          name: 'AdminSetup',    component: () => import('@/pages/AdminSetupPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'admin/audit',          name: 'AuditLog',      component: () => import('@/pages/AuditLogPage.vue'),      meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'admin/cashier-shops',  name: 'CashierShops',  component: () => import('@/pages/CashierShopsPage.vue'),  meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
@@ -80,6 +84,7 @@ router.beforeEach((to) => {
       if (canAccessFinance(role)) return '/finance'
       if (canAccessPos(role)) return '/pos'
       if (canAccessCosting(role)) return '/costing'
+      if (canAccessDispatch(role)) return '/dispatch/registry'
       return '/login'
     }
   }

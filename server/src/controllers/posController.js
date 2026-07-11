@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as Pos from '../models/PosModel.js';
 import * as Stock from '../models/PosStockModel.js';
+import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
          fetchPaymentsFromService, buildPrintPayload } from '../services/posReceiptService.js';
@@ -146,6 +147,9 @@ export async function confirmPayment(req, res) {
       // Post stock movements for the sale (inventory ledger)
       try { await Stock.postSaleMovementsForOrder(order); }
       catch (movErr) { logger.error('stock movement post failed', { error: movErr.message }); }
+      // Create the dispatch/pick-and-pack order (non-fatal: never blocks the sale)
+      try { await Dispatch.createForOrder(order); }
+      catch (dispErr) { logger.error('dispatch order creation failed', { error: dispErr.message }); }
       etimsResult = await signPosOrder(order);
       if (etimsResult) await Pos.storeSignResult(orderId, etimsResult);
       const fresh = await Pos.getOrder(orderId);
@@ -324,6 +328,8 @@ export async function checkoutMulti(req, res) {
       const fresh = await Pos.getOrder(req.params.orderId);
       try { await Stock.postSaleMovementsForOrder(fresh); }
       catch (movErr) { logger.error('stock movement post failed', { error: movErr.message }); }
+      try { await Dispatch.createForOrder(fresh); }
+      catch (dispErr) { logger.error('dispatch order creation failed', { error: dispErr.message }); }
       etimsResult = await signPosOrder(fresh);
       if (etimsResult) await Pos.storeSignResult(req.params.orderId, etimsResult);
       const printRes = await printPosOrder(fresh, etimsResult);
@@ -705,6 +711,8 @@ export async function setOrderContact(req, res) {
 export async function completeOrder(req, res) {
   try {
     await Pos.completeOrder(req.params.orderId);
+    try { await Dispatch.createForOrder(await Pos.getOrder(req.params.orderId)); }
+    catch (dispErr) { logger.error('dispatch order creation failed', { error: dispErr.message }); }
     ok(res, { ok: true });
   } catch (e) { err(res, e, e.message.includes('not found') ? 404 : 400); }
 }

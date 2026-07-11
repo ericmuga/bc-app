@@ -108,6 +108,18 @@
           </RouterLink>
         </details>
 
+        <details v-if="canViewDispatch" class="nav-section" :open="navOpen.dispatch" @toggle="onNavToggle('dispatch', $event)">
+          <summary class="section-label">Dispatch</summary>
+          <RouterLink v-if="canDispRegistry" to="/dispatch/registry" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-check-square" />
+            <span>Registry</span>
+          </RouterLink>
+          <RouterLink v-if="canDispAssign" to="/dispatch/assignment" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-users" />
+            <span>Assignment</span>
+          </RouterLink>
+        </details>
+
         <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
           <summary class="section-label">Point of Sale</summary>
           <RouterLink to="/pos" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
@@ -218,6 +230,7 @@ import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/l
 import { canAccessFinance } from '@/lib/financeAccess.js'
 import { canAccessPos, isGlobalAdmin } from '@/lib/posAccess.js'
 import { canAccessCosting } from '@/lib/costingAccess.js'
+import { canAccessDispatch, canDispatchRegistry, canDispatchAssign } from '@/lib/dispatchAccess.js'
 
 const auth    = useAuthStore()
 const company = useCompanyStore()
@@ -255,6 +268,9 @@ const canViewReports = computed(() => canAccessReports(role.value))
 const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
 const canViewCosting = computed(() => canAccessCosting(role.value))
+const canViewDispatch = computed(() => canAccessDispatch(role.value))
+const canDispRegistry = computed(() => canDispatchRegistry(role.value))
+const canDispAssign   = computed(() => canDispatchAssign(role.value))
 
 // Role switcher (admin only)
 const roleOptions = [

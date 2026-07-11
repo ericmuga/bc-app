@@ -1025,6 +1025,259 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[CustPostingGroupMap] OK');
 
+  // ══ Dispatch / Pick-and-Pack module ([dbo], global like Pos*) ═══════════════
+  // Fulfilment pipeline off a paid POS order:
+  //   pending → confirmed (4 parts) → assigned → assembled → packed → loaded.
+
+  // ── [dbo].[DispatchOrder] ───────────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchOrder' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchOrder] (
+      [DispatchOrderId]  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [DispatchNo]       NVARCHAR(30)     NOT NULL UNIQUE,
+      [SourceType]       NVARCHAR(20)     NOT NULL DEFAULT 'pos',
+      [SourceOrderId]    UNIQUEIDENTIFIER NULL,
+      [Company]          NVARCHAR(10)     NULL,
+      [OrderNo]          NVARCHAR(40)     NULL,
+      [CustomerNo]       NVARCHAR(30)     NULL,
+      [CustomerName]     NVARCHAR(200)    NULL,
+      [ShopCode]         NVARCHAR(50)     NULL,
+      [ShopName]         NVARCHAR(200)    NULL,
+      [RouteCode]        NVARCHAR(40)     NULL,
+      [SalespersonCode]  NVARCHAR(20)     NULL,
+      [SalespersonName]  NVARCHAR(200)    NULL,
+      [ShipmentDate]     DATE             NULL,
+      [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'pending',
+      [Confirmed]        BIT              NOT NULL DEFAULT 0,
+      [Assembled]        BIT              NOT NULL DEFAULT 0,
+      [Packed]           BIT              NOT NULL DEFAULT 0,
+      [Loaded]           BIT              NOT NULL DEFAULT 0,
+      [AssignedToUserId] NVARCHAR(100)    NULL,
+      [AssignedToName]   NVARCHAR(200)    NULL,
+      [AssignedAt]       DATETIME2        NULL,
+      [TotalAmount]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Notes]            NVARCHAR(500)    NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrder]') AND name='Company')
+      ALTER TABLE [dbo].[DispatchOrder] ADD [Company] NVARCHAR(10) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='UX_DispatchOrder_Source' AND object_id=OBJECT_ID('[dbo].[DispatchOrder]'))
+    CREATE UNIQUE INDEX [UX_DispatchOrder_Source] ON [dbo].[DispatchOrder]([SourceOrderId]) WHERE [SourceOrderId] IS NOT NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='UX_DispatchOrder_BC' AND object_id=OBJECT_ID('[dbo].[DispatchOrder]'))
+    CREATE UNIQUE INDEX [UX_DispatchOrder_BC] ON [dbo].[DispatchOrder]([Company],[OrderNo]) WHERE [SourceType]='bc'
+  `);
+  console.log('  [dbo].[DispatchOrder] OK');
+
+  // ── [dbo].[DispatchOrderLine] ───────────────────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchOrderLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchOrderLine] (
+      [LineId]          UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [DispatchOrderId] UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]          NVARCHAR(30)     NULL,
+      [Barcode]         NVARCHAR(50)     NULL,
+      [Description]     NVARCHAR(250)    NULL,
+      [OrderQty]        DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Uom]             NVARCHAR(20)     NULL,
+      [IsWeighted]      BIT              NOT NULL DEFAULT 0,
+      [SortOrder]       INT              NOT NULL DEFAULT 0,
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchOrderLine_Order] FOREIGN KEY ([DispatchOrderId])
+        REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[DispatchOrderLine] OK');
+
+  // ── [dbo].[DispatchOrderPart] (the 4 A/B/C/D checkpoints per order) ──────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchOrderPart' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchOrderPart] (
+      [PartId]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [DispatchOrderId]   UNIQUEIDENTIFIER NOT NULL,
+      [Part]              CHAR(1)          NOT NULL,
+      [Confirmed]         BIT              NOT NULL DEFAULT 0,
+      [ConfirmedByUserId] NVARCHAR(100)    NULL,
+      [ConfirmedByName]   NVARCHAR(200)    NULL,
+      [ConfirmedAt]       DATETIME2        NULL,
+      [Assembled]         BIT              NOT NULL DEFAULT 0,
+      [AssembledByUserId] NVARCHAR(100)    NULL,
+      [AssembledByName]   NVARCHAR(200)    NULL,
+      [AssembledAt]       DATETIME2        NULL,
+      [Packed]            BIT              NOT NULL DEFAULT 0,
+      [PackedAt]          DATETIME2        NULL,
+      [CreatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]         DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchOrderPart_Order] FOREIGN KEY ([DispatchOrderId])
+        REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE,
+      CONSTRAINT [UQ_DispatchOrderPart] UNIQUE ([DispatchOrderId],[Part])
+    )
+  `);
+  console.log('  [dbo].[DispatchOrderPart] OK');
+
+  // ── [dbo].[DispatchAssemblyLine] (assembled qty per order line) ──────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchAssemblyLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchAssemblyLine] (
+      [AssemblyLineId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [DispatchOrderId]   UNIQUEIDENTIFIER NOT NULL,
+      [LineId]            UNIQUEIDENTIFIER NOT NULL,
+      [AssembledQty]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [AssembledWeight]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [ReturnReasonCode]  NVARCHAR(20)     NULL,
+      [ReturnReasonName]  NVARCHAR(200)    NULL,
+      [AssembledByUserId] NVARCHAR(100)    NULL,
+      [AssembledByName]   NVARCHAR(200)    NULL,
+      [AssembledAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchAssemblyLine_Order] FOREIGN KEY ([DispatchOrderId])
+        REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE,
+      CONSTRAINT [UQ_DispatchAssemblyLine] UNIQUE ([LineId])
+    )
+  `);
+  console.log('  [dbo].[DispatchAssemblyLine] OK');
+
+  // ── [dbo].[DispatchVesselType] (carton / vessel size master) ────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchVesselType' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchVesselType] (
+      [VesselTypeId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Code]         NVARCHAR(30)     NOT NULL UNIQUE,
+      [Description]  NVARCHAR(200)    NULL,
+      [TareWeight]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Blocked]      BIT              NOT NULL DEFAULT 0,
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[DispatchVesselType] OK');
+
+  // ── [dbo].[DispatchPackingSession] (one packer + one checker per session) ────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchPackingSession' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchPackingSession] (
+      [SessionId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [SessionNo]       NVARCHAR(30)     NOT NULL UNIQUE,
+      [DispatchOrderId] UNIQUEIDENTIFIER NOT NULL,
+      [PackerUserId]    NVARCHAR(100)    NULL,
+      [PackerName]      NVARCHAR(200)    NULL,
+      [CheckerUserId]   NVARCHAR(100)    NULL,
+      [CheckerName]     NVARCHAR(200)    NULL,
+      [Status]          NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchPackingSession_Order] FOREIGN KEY ([DispatchOrderId])
+        REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[DispatchPackingSession] OK');
+
+  // ── [dbo].[DispatchBox] (a physical closed carton; QrToken is the QR payload) ─
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchBox' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchBox] (
+      [BoxId]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [BoxNo]            NVARCHAR(40)     NOT NULL UNIQUE,
+      [QrToken]          NVARCHAR(64)     NOT NULL UNIQUE,
+      [SessionId]        UNIQUEIDENTIFIER NULL,
+      [DispatchOrderId]  UNIQUEIDENTIFIER NOT NULL,
+      [VesselTypeId]     UNIQUEIDENTIFIER NULL,
+      [VesselCode]       NVARCHAR(30)     NULL,
+      [GrossWeight]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [CheckedByUserId]  NVARCHAR(100)    NULL,
+      [CheckedByName]    NVARCHAR(200)    NULL,
+      [CheckedAt]        DATETIME2        NULL,
+      [ClosedByUserId]   NVARCHAR(100)    NULL,
+      [ClosedByName]     NVARCHAR(200)    NULL,
+      [ClosedAt]         DATETIME2        NULL,
+      [LoadingSessionId] UNIQUEIDENTIFIER NULL,
+      [LoadedAt]         DATETIME2        NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchBox_Order] FOREIGN KEY ([DispatchOrderId])
+        REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[DispatchBox] OK');
+
+  // ── [dbo].[DispatchBoxLine] (items in a box — what the QR resolves to) ───────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchBoxLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchBoxLine] (
+      [BoxLineId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [BoxId]       UNIQUEIDENTIFIER NOT NULL,
+      [ItemNo]      NVARCHAR(30)     NULL,
+      [Description] NVARCHAR(250)    NULL,
+      [Qty]         DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Weight]      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [CreatedAt]   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchBoxLine_Box] FOREIGN KEY ([BoxId])
+        REFERENCES [dbo].[DispatchBox]([BoxId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[DispatchBoxLine] OK');
+
+  // ── [dbo].[DispatchVehicle] (vehicle master) ────────────────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchVehicle' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchVehicle] (
+      [VehicleId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [Plate]        NVARCHAR(30)     NOT NULL UNIQUE,
+      [Make]         NVARCHAR(100)    NULL,
+      [LoadCapacity] DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [Status]       NVARCHAR(20)     NOT NULL DEFAULT 'active',
+      [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[DispatchVehicle] OK');
+
+  // ── [dbo].[DispatchLoadingSession] (vehicle + driver + route + ship date) ────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchLoadingSession' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchLoadingSession] (
+      [LoadingSessionId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [SessionNo]        NVARCHAR(30)     NOT NULL UNIQUE,
+      [RouteCode]        NVARCHAR(40)     NULL,
+      [VehicleId]        UNIQUEIDENTIFIER NULL,
+      [VehiclePlate]     NVARCHAR(30)     NULL,
+      [DriverName]       NVARCHAR(200)    NULL,
+      [ShipmentDate]     DATE             NULL,
+      [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'open',
+      [CreatedByUserId]  NVARCHAR(100)    NULL,
+      [CreatedByName]    NVARCHAR(200)    NULL,
+      [ClosedAt]         DATETIME2        NULL,
+      [CreatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[DispatchLoadingSession] OK');
+
+  // ── [dbo].[DispatchLoadingLine] (boxes scanned onto a loading session) ───────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchLoadingLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchLoadingLine] (
+      [LoadingLineId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [LoadingSessionId] UNIQUEIDENTIFIER NOT NULL,
+      [BoxId]            UNIQUEIDENTIFIER NOT NULL,
+      [BoxNo]            NVARCHAR(40)     NULL,
+      [ScannedByUserId]  NVARCHAR(100)    NULL,
+      [ScannedByName]    NVARCHAR(200)    NULL,
+      [ScannedAt]        DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [FK_DispatchLoadingLine_Session] FOREIGN KEY ([LoadingSessionId])
+        REFERENCES [dbo].[DispatchLoadingSession]([LoadingSessionId]) ON DELETE CASCADE,
+      CONSTRAINT [UQ_DispatchLoadingLine] UNIQUE ([LoadingSessionId],[BoxId])
+    )
+  `);
+  console.log('  [dbo].[DispatchLoadingLine] OK');
+
   // ── [s].[SalesHeader] ─────────────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesHeader' AND schema_id=SCHEMA_ID('${s}'))

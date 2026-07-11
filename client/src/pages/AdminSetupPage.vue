@@ -1302,6 +1302,11 @@ const roleOptions = [
   { label: 'Shop',     value: 'shop' },
   { label: 'Shop Admin', value: 'shop-admin' },
   { label: 'Costing',  value: 'costing' },
+  { label: 'Dispatch Registry',   value: 'dispatch-registry' },
+  { label: 'Dispatch Supervisor', value: 'dispatch-supervisor' },
+  { label: 'Packer',   value: 'packer' },
+  { label: 'Checker',  value: 'checker' },
+  { label: 'Loader',   value: 'loader' },
 ]
 const reportTypeOptions = [
   { label: 'Posting Group',       value: 'postingGroup' },

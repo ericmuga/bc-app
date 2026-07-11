@@ -3,7 +3,7 @@ import logger from '../services/logger.js';
 import { ROLES } from '../services/access.js';
 import { computeNextRunAt, runScheduledReportNow } from '../services/reportScheduler.js';
 
-const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN, ROLES.FINANCE, ROLES.COSTING];
+const VALID_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.DISPATCH, ROLES.SECURITY, ROLES.ANALYST, ROLES.SHOP, ROLES.SHOP_ADMIN, ROLES.FINANCE, ROLES.COSTING, ROLES.PRODUCTION, ROLES.DISPATCH_REGISTRY, ROLES.DISPATCH_SUPERVISOR, ROLES.PACKER, ROLES.CHECKER, ROLES.LOADER];
 const VALID_REPORT_TYPES = ['postingGroup', 'sector', 'salesperson', 'route', 'weekOnWeek', 'productPerformance'];
 const VALID_FORMATS = ['xlsx', 'pdf'];
 const VALID_FREQUENCIES = ['interval', 'daily', 'weekly', 'monthly'];
