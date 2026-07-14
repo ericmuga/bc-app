@@ -36,6 +36,7 @@ const routes = [
       { path: 'invoices',       name: 'Invoices',     component: () => import('@/pages/InvoicesListPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
+      { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
       { path: 'finance',        name: 'Finance',      component: () => import('@/pages/FinanceReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'costing',        name: 'Costing',      component: () => import('@/pages/CostingPage.vue'), props: { company: 'FCL' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
       { path: 'costing/cm',     name: 'CostingCM',    component: () => import('@/pages/CostingPage.vue'), props: { company: 'CM' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
