@@ -45,6 +45,12 @@
             <Column header="Active" style="width:90px">
               <template #body="{ data }"><Checkbox v-model="data.isActive" binary /></template>
             </Column>
+            <Column header="Registry" style="width:80px">
+              <template #body="{ data }">
+                <Button icon="pi pi-building" text size="small" v-tooltip="'Dispatch registry company access'"
+                        @click="openRegistryAccess(data)" />
+              </template>
+            </Column>
             <Column header="" style="width:90px">
               <template #body="{ data }"><Button icon="pi pi-save" text @click="saveUser(data)" /></template>
             </Column>
@@ -1264,6 +1270,17 @@ GROUP BY [G_L Account No_]</pre>
               @click="postSpImport" />
     </template>
   </Dialog>
+
+  <!-- Dispatch registry company access -->
+  <Dialog v-model:visible="regAccess.open" modal header="Dispatch registry access" :style="{ width: '420px' }">
+    <p class="text-sm text-muted">Companies <strong>{{ regAccess.userName }}</strong> may act on in the dispatch registry. Leave empty for <em>all companies</em>.</p>
+    <MultiSelect v-model="regAccess.companies" :options="dispatchCompanyOptions" display="chip"
+                 placeholder="All companies" fluid style="margin-top:8px" />
+    <template #footer>
+      <Button label="Cancel" text @click="regAccess.open = false" />
+      <Button label="Save" icon="pi pi-save" :loading="regAccess.saving" @click="saveRegistryAccess" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
@@ -1284,6 +1301,7 @@ import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
 import { posSetupApi, yieldApi } from '@/services/pos.js'
+import { dispatchApi } from '@/services/dispatch.js'
 import Dialog from 'primevue/dialog'
 import { useAuthStore } from '@/stores/auth.js'
 import { isGlobalAdmin } from '@/lib/posAccess.js'
@@ -1723,6 +1741,27 @@ async function saveUser(user) {
       isActive: user.isActive, shopCode: user.shopCode || null,
     })
   } catch (err) { error.value = err.response?.data?.error || err.message }
+}
+
+// ── Dispatch registry per-company access ──────────────────────────────────
+const dispatchCompanyOptions = ['FCL', 'CM', 'FLM', 'RMK']
+const regAccess = reactive({ open: false, userId: null, userName: '', companies: [], saving: false })
+async function openRegistryAccess(u) {
+  error.value = ''
+  regAccess.userId = u.userId
+  regAccess.userName = u.displayName || u.username
+  regAccess.companies = []
+  regAccess.open = true
+  try { regAccess.companies = (await dispatchApi.getUserCompanies(u.userId)).data.companies || [] }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function saveRegistryAccess() {
+  regAccess.saving = true; error.value = ''
+  try {
+    await dispatchApi.setUserCompanies(regAccess.userId, regAccess.companies)
+    regAccess.open = false
+  } catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { regAccess.saving = false }
 }
 
 function resetScheduleForm() { scheduleForm.value = blankSchedule() }

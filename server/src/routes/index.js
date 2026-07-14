@@ -25,6 +25,7 @@ import * as templatesCtrl from '../controllers/templatesController.js';
 import * as systemCtrl    from '../controllers/systemController.js';
 import * as productionCtrl from '../controllers/productionController.js';
 import * as dispatchCtrl   from '../controllers/dispatchController.js';
+import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES } from '../services/access.js';
@@ -378,13 +379,26 @@ const canDispRegistry = [authMiddleware, requireRole(...DISPATCH_REGISTRY_ROLES)
 const canDispSuper    = [authMiddleware, requireRole(...DISPATCH_SUPERVISOR_ROLES)];
 // Registry (confirm the 4 parts)
 router.post( '/dispatch/import',              ...canDispRegistry, dispatchCtrl.importFromBc);
+router.get(  '/dispatch/registry-companies',  ...canDispRegistry, dispatchCtrl.registryCompanies);
 router.get(  '/dispatch/confirmation',        ...canDispRegistry, dispatchCtrl.listConfirmation);
+router.get(  '/dispatch/confirmations/report', ...canDispRegistry, dispatchCtrl.confirmationReport);
 router.get(  '/dispatch/orders/:id',          ...canDispatch,     dispatchCtrl.getOrder);
 router.post( '/dispatch/orders/:id/confirm',  ...canDispRegistry, dispatchCtrl.confirmPart);
+// Per-user registry company permissions (supervisor/admin)
+router.get(  '/dispatch/users/:userId/companies', ...canDispSuper, dispatchCtrl.getUserCompanies);
+router.put(  '/dispatch/users/:userId/companies', ...canDispSuper, dispatchCtrl.setUserCompanies);
 // Assignment (supervisor → packer)
 router.get(  '/dispatch/unassigned',          ...canDispSuper,    dispatchCtrl.listUnassigned);
 router.get(  '/dispatch/packers',             ...canDispSuper,    dispatchCtrl.listPackers);
 router.post( '/dispatch/orders/:id/assign',   ...canDispSuper,    dispatchCtrl.assign);
+
+// ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
+const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];
+router.get( '/weekly-targets',         ...canSalesTargets, weeklyTargetsCtrl.list);
+router.get( '/weekly-targets/months',  ...canSalesTargets, weeklyTargetsCtrl.months);
+router.get( '/weekly-targets/columns', ...canSalesTargets, weeklyTargetsCtrl.columns);
+router.post('/weekly-targets/upload',  ...canSalesTargets, weeklyTargetsCtrl.upload);
+router.post('/weekly-targets/split',   ...canSalesTargets, weeklyTargetsCtrl.split);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login);

@@ -5,7 +5,13 @@
         <h2>Dispatch Registry</h2>
         <p class="sub">Confirm the four parts (A · B · C · D) of each order. Once all are confirmed the order is due for assignment.</p>
       </div>
-      <Button icon="pi pi-cloud-download" label="Refresh from BC" size="small" :loading="refreshing" @click="refreshFromBc" />
+      <div class="head-actions">
+        <MultiSelect v-if="companyOptions.length > 1" v-model="selectedCompanies" :options="companyOptions"
+                     display="chip" placeholder="All companies" class="co-filter" @change="load" />
+        <Button icon="pi pi-file-excel" label="Confirmations report" size="small" severity="secondary"
+                :loading="downloading" @click="downloadReport" />
+        <Button icon="pi pi-cloud-download" label="Refresh from BC" size="small" :loading="refreshing" @click="refreshFromBc" />
+      </div>
     </div>
 
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
@@ -13,6 +19,7 @@
     <DataTable :value="orders" :loading="loading" dataKey="DispatchOrderId" paginator :rows="15"
                responsiveLayout="scroll" class="disp-table" @row-click="openOrder($event.data)">
       <template #empty><div class="empty">No orders pending confirmation.</div></template>
+      <Column field="Company" header="Co." style="width:70px" />
       <Column field="DispatchNo" header="Dispatch #" style="width:150px" />
       <Column field="OrderNo" header="Order #" style="width:150px" />
       <Column field="CustomerName" header="Customer" />
@@ -39,10 +46,11 @@
         </div>
 
         <div class="parts-grid">
-          <div v-for="p in detail.parts" :key="p.Part" class="part-card" :class="{ done: p.Confirmed }">
+          <div v-for="p in detail.parts" :key="p.Part" class="part-card" :class="{ done: p.Confirmed, inactive: !p.Active }">
             <div class="part-letter">{{ p.Part }}</div>
             <div class="part-state">
-              <span v-if="p.Confirmed" class="ok"><i class="pi pi-check-circle" /> Confirmed</span>
+              <span v-if="!p.Active" class="none">No items</span>
+              <span v-else-if="p.Confirmed" class="ok"><i class="pi pi-check-circle" /> Confirmed</span>
               <Button v-else label="Confirm" size="small" :loading="busyPart === p.Part" @click="confirm(p.Part)" />
             </div>
           </div>
@@ -69,20 +77,25 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'primevue/usetoast'
+import * as XLSX from 'xlsx'
 import { dispatchApi } from '@/services/dispatch.js'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
+import MultiSelect from 'primevue/multiselect'
 
 const toast = useToast()
 const orders = ref([])
 const loading = ref(false)
 const refreshing = ref(false)
+const downloading = ref(false)
 const error = ref(null)
+const companyOptions = ref([])
+const selectedCompanies = ref([])
 
 const dialog = ref(false)
 const active = ref(null)
@@ -90,13 +103,40 @@ const detail = ref(null)
 const busyPart = ref(null)
 const busyAll = ref(false)
 
-const allConfirmed = computed(() => detail.value?.parts?.every(p => p.Confirmed))
+const allConfirmed = computed(() => {
+  const active = detail.value?.parts?.filter(p => p.Active) || []
+  return active.length > 0 && active.every(p => p.Confirmed)
+})
+
+const filterCompanies = () => (selectedCompanies.value.length ? selectedCompanies.value : undefined)
+
+async function loadCompanies() {
+  try { companyOptions.value = (await dispatchApi.registryCompanies()).data?.companies || [] }
+  catch { /* non-fatal */ }
+}
 
 async function load() {
   loading.value = true; error.value = null
-  try { orders.value = (await dispatchApi.confirmation()).data || [] }
+  try { orders.value = (await dispatchApi.confirmation(filterCompanies())).data || [] }
   catch (e) { error.value = e.response?.data?.error || e.message }
   finally { loading.value = false }
+}
+
+async function downloadReport() {
+  downloading.value = true
+  try {
+    const rows = (await dispatchApi.confirmationReport(filterCompanies())).data || []
+    if (!rows.length) { toast.add({ severity: 'info', summary: 'Nothing to export', detail: 'No confirmed parts yet.', life: 3000 }); return }
+    const data = rows.map(r => ({
+      Company: r.Company, 'Dispatch #': r.DispatchNo, 'Order #': r.OrderNo, Customer: r.CustomerName,
+      Part: r.Part, 'Confirmed By': r.ConfirmedByName || r.ConfirmedByUserId,
+      'Confirmed At': r.ConfirmedAt ? new Date(r.ConfirmedAt).toISOString().replace('T', ' ').slice(0, 19) : '',
+    }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Confirmations')
+    XLSX.writeFile(wb, `dispatch-confirmations-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  } catch (e) { toast.add({ severity: 'error', summary: 'Export failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
+  finally { downloading.value = false }
 }
 
 async function refreshFromBc() {
@@ -131,7 +171,7 @@ async function confirm(part) {
 async function confirmAll() {
   busyAll.value = true
   try {
-    for (const p of detail.value.parts.filter(x => !x.Confirmed)) {
+    for (const p of detail.value.parts.filter(x => !x.Confirmed && x.Active)) {
       await dispatchApi.confirmPart(active.value.DispatchOrderId, p.Part)
     }
     toast.add({ severity: 'success', summary: 'Order confirmed', detail: 'Due for assignment.', life: 3000 })
@@ -140,7 +180,7 @@ async function confirmAll() {
   finally { busyAll.value = false }
 }
 
-load()
+onMounted(() => { loadCompanies(); load() })
 </script>
 
 <style scoped>
@@ -148,6 +188,8 @@ load()
 .disp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .disp-head h2 { margin: 0; font-size: 20px; }
 .disp-head .sub { margin: 2px 0 0; color: #6b7280; font-size: 13px; max-width: 620px; }
+.head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.co-filter { min-width: 200px; }
 .disp-table :deep(.p-datatable-tbody > tr) { cursor: pointer; }
 .empty { padding: 32px; text-align: center; color: #9ca3af; }
 .parts-chip { font-size: 12px; font-weight: 600; color: #1e40af; background: #e0e7ff; padding: 2px 8px; border-radius: 999px; }
@@ -157,6 +199,8 @@ load()
 .parts-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
 .part-card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; text-align: center; }
 .part-card.done { border-color: #86efac; background: #f0fdf4; }
+.part-card.inactive { opacity: .5; background: #f9fafb; }
+.part-state .none { font-size: 12px; color: #9ca3af; }
 .part-letter { font-size: 22px; font-weight: 800; color: #374151; }
 .part-state { margin-top: 6px; min-height: 30px; display: flex; align-items: center; justify-content: center; }
 .part-state .ok { color: #15803d; font-size: 12px; font-weight: 600; }

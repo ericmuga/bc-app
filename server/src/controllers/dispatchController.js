@@ -3,6 +3,7 @@
  * REST handlers for the dispatch / pick-and-pack pipeline.
  */
 import * as Dispatch from '../models/DispatchModel.js';
+import { ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 
 const ok  = (res, data) => res.json(data);
@@ -10,11 +11,40 @@ const err = (res, e, code = 500) => {
   logger.error('dispatch controller error', { error: e.message });
   res.status(code).json({ error: e.message });
 };
+const splitCSV = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : []);
 
 // ── Registry (confirm the 4 parts) ───────────────────────────────────────────
-export async function listConfirmation(_req, res) {
-  try { ok(res, await Dispatch.listForConfirmation()); }
+export async function listConfirmation(req, res) {
+  try {
+    const companies = await Dispatch.resolveRegistryCompanies(req.user.userId, splitCSV(req.query.companies));
+    ok(res, await Dispatch.listForConfirmation({ companies }));
+  } catch (e) { err(res, e); }
+}
+
+/** GET /dispatch/registry-companies — the companies this user may act on. */
+export async function registryCompanies(req, res) {
+  try {
+    const allowed = await Dispatch.listUserCompanies(req.user.userId);
+    ok(res, { companies: allowed.length ? allowed : ALL_COMPANIES, restricted: allowed.length > 0 });
+  } catch (e) { err(res, e); }
+}
+
+/** GET /dispatch/confirmations/report — who confirmed each part (for download). */
+export async function confirmationReport(req, res) {
+  try {
+    const companies = await Dispatch.resolveRegistryCompanies(req.user.userId, splitCSV(req.query.companies));
+    ok(res, await Dispatch.listConfirmationReport({ companies }));
+  } catch (e) { err(res, e); }
+}
+
+// Per-user registry company permissions (admin/supervisor).
+export async function getUserCompanies(req, res) {
+  try { ok(res, { companies: await Dispatch.listUserCompanies(req.params.userId) }); }
   catch (e) { err(res, e); }
+}
+export async function setUserCompanies(req, res) {
+  try { ok(res, { companies: await Dispatch.setUserCompanies(req.params.userId, req.body?.companies || []) }); }
+  catch (e) { err(res, e, 400); }
 }
 
 /** POST /dispatch/import — pull today's Execute orders from BC into the registry. */
@@ -44,7 +74,10 @@ export async function confirmPart(req, res) {
     }
     const result = await Dispatch.confirmPart(req.params.id, part, req.user);
     ok(res, result);
-  } catch (e) { err(res, e, 400); }
+  } catch (e) {
+    const code = e.code === 'ALREADY_CONFIRMED' ? 409 : e.code === 'NOT_FOUND' ? 404 : 400;
+    err(res, e, code);
+  }
 }
 
 // ── Assignment (supervisor → packer) ─────────────────────────────────────────

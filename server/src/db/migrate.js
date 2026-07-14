@@ -1087,12 +1087,17 @@ async function migrate(companyId) {
       [OrderQty]        DECIMAL(18,4)    NOT NULL DEFAULT 0,
       [Uom]             NVARCHAR(20)     NULL,
       [IsWeighted]      BIT              NOT NULL DEFAULT 0,
+      [Part]            CHAR(1)          NULL,
       [SortOrder]       INT              NOT NULL DEFAULT 0,
       [CreatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
       [UpdatedAt]       DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
       CONSTRAINT [FK_DispatchOrderLine_Order] FOREIGN KEY ([DispatchOrderId])
         REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrderLine]') AND name='Part')
+      ALTER TABLE [dbo].[DispatchOrderLine] ADD [Part] CHAR(1) NULL
   `);
   console.log('  [dbo].[DispatchOrderLine] OK');
 
@@ -1103,6 +1108,7 @@ async function migrate(companyId) {
       [PartId]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
       [DispatchOrderId]   UNIQUEIDENTIFIER NOT NULL,
       [Part]              CHAR(1)          NOT NULL,
+      [Active]            BIT              NOT NULL DEFAULT 1,
       [Confirmed]         BIT              NOT NULL DEFAULT 0,
       [ConfirmedByUserId] NVARCHAR(100)    NULL,
       [ConfirmedByName]   NVARCHAR(200)    NULL,
@@ -1119,6 +1125,10 @@ async function migrate(companyId) {
         REFERENCES [dbo].[DispatchOrder]([DispatchOrderId]) ON DELETE CASCADE,
       CONSTRAINT [UQ_DispatchOrderPart] UNIQUE ([DispatchOrderId],[Part])
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrderPart]') AND name='Active')
+      ALTER TABLE [dbo].[DispatchOrderPart] ADD [Active] BIT NOT NULL DEFAULT 1
   `);
   console.log('  [dbo].[DispatchOrderPart] OK');
 
@@ -1277,6 +1287,19 @@ async function migrate(companyId) {
     )
   `);
   console.log('  [dbo].[DispatchLoadingLine] OK');
+
+  // ── [dbo].[DispatchUserCompany] (per-user registry company permissions) ─────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='DispatchUserCompany' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[DispatchUserCompany] (
+      [Id]        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [UserId]    NVARCHAR(100)    NOT NULL,
+      [Company]   NVARCHAR(10)     NOT NULL,
+      [CreatedAt] DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [UQ_DispatchUserCompany] UNIQUE ([UserId],[Company])
+    )
+  `);
+  console.log('  [dbo].[DispatchUserCompany] OK');
 
   // ── [s].[SalesHeader] ─────────────────────────────────────────────────────
   await run(`

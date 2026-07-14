@@ -76,11 +76,15 @@
           </RouterLink>
         </details>
 
-        <details v-if="canViewReports || canViewFinance" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
+        <details v-if="canViewReports || canViewFinance || canViewTargets" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
           <summary class="section-label">Analytics</summary>
           <RouterLink v-if="canViewReports" to="/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-chart-bar" />
             <span>Reports</span>
+          </RouterLink>
+          <RouterLink v-if="canViewTargets" to="/weekly-targets" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-bullseye" />
+            <span>Sales Targets</span>
           </RouterLink>
           <RouterLink v-if="canViewReports" to="/bc-reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-database" />
@@ -269,6 +273,7 @@ const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
 const canViewCosting = computed(() => canAccessCosting(role.value))
 const canViewDispatch = computed(() => canAccessDispatch(role.value))
+const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.value || '').toLowerCase()))
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 
@@ -283,6 +288,11 @@ const roleOptions = [
   { label: 'analyst',         value: 'analyst' },
   { label: 'finance',         value: 'finance' },
   { label: 'costing',         value: 'costing' },
+  { label: 'dispatch-registry',   value: 'dispatch-registry' },
+  { label: 'dispatch-supervisor', value: 'dispatch-supervisor' },
+  { label: 'packer',          value: 'packer' },
+  { label: 'checker',         value: 'checker' },
+  { label: 'loader',          value: 'loader' },
 ]
 function defaultRouteForRole(r) {
   if (canAccessOrders(r))   return '/orders/scan'
@@ -291,6 +301,7 @@ function defaultRouteForRole(r) {
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
   if (canAccessCosting(r))  return '/costing'
+  if (canAccessDispatch(r)) return '/dispatch/registry'
   return '/'
 }
 

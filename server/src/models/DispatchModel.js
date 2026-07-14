@@ -11,7 +11,7 @@
 import { randomUUID } from 'crypto';
 import { db as appDb, sql } from '../db/pool.js';
 import { bcDb, bcSql } from '../db/bcPool.js';
-import { bcTable, ALL_COMPANIES } from '../services/bcTables.js';
+import { bcTable, extCol, ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 
 const PARTS = ['A', 'B', 'C', 'D'];
@@ -138,22 +138,91 @@ export async function getDispatchOrder(dispatchOrderId) {
   return { ...hdr.recordset[0], lines: lines.recordset, parts: parts.recordset };
 }
 
-/** Registry worklist: orders not yet fully confirmed. */
-export async function listForConfirmation() {
+// Build a `[Company] IN (@c0,@c1,...)` clause + bind the params. Empty list =
+// no rows (a restricted user with no companies sees nothing).
+function companyFilter(request, companies) {
+  if (!Array.isArray(companies)) return ''; // undefined = no restriction
+  if (!companies.length) return 'AND 1=0';
+  companies.forEach((c, i) => request.input(`c${i}`, sql.NVarChar(10), c));
+  return `AND o.[Company] IN (${companies.map((_, i) => `@c${i}`).join(', ')})`;
+}
+
+/** Registry worklist: orders not yet fully confirmed, optionally scoped to companies. */
+export async function listForConfirmation({ companies } = {}) {
   const pool = await appPool();
-  const r = await pool.request().query(`
-    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
+  const r = pool.request();
+  const filter = companyFilter(r, companies);
+  const res = await r.query(`
+    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
            o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt],
-           SUM(CASE WHEN p.[Confirmed]=1 THEN 1 ELSE 0 END) AS ConfirmedParts,
-           COUNT(p.[PartId]) AS TotalParts
+           SUM(CASE WHEN p.[Confirmed]=1 AND p.[Active]=1 THEN 1 ELSE 0 END) AS ConfirmedParts,
+           SUM(CASE WHEN p.[Active]=1 THEN 1 ELSE 0 END) AS TotalParts
     FROM [dbo].[DispatchOrder] o
     LEFT JOIN [dbo].[DispatchOrderPart] p ON p.[DispatchOrderId]=o.[DispatchOrderId]
-    WHERE o.[Confirmed]=0 AND o.[Status]='pending'
-    GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
+    WHERE o.[Confirmed]=0 AND o.[Status]='pending' ${filter}
+    GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
              o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt]
     ORDER BY o.[CreatedAt] DESC
   `);
-  return r.recordset;
+  return res.recordset;
+}
+
+/** Downloadable report: who confirmed each part, optionally scoped to companies. */
+export async function listConfirmationReport({ companies } = {}) {
+  const pool = await appPool();
+  const r = pool.request();
+  const filter = companyFilter(r, companies);
+  const res = await r.query(`
+    SELECT o.[Company], o.[DispatchNo], o.[OrderNo], o.[CustomerName],
+           p.[Part], p.[ConfirmedByUserId], p.[ConfirmedByName], p.[ConfirmedAt]
+    FROM [dbo].[DispatchOrderPart] p
+    JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=p.[DispatchOrderId]
+    WHERE p.[Confirmed]=1 ${filter}
+    ORDER BY p.[ConfirmedAt] DESC
+  `);
+  return res.recordset;
+}
+
+// ── Per-user, per-company registry permissions ──────────────────────────────
+/** Companies a user is explicitly permitted for (empty array = unrestricted). */
+export async function listUserCompanies(userId) {
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('uid', sql.NVarChar(100), String(userId || ''))
+    .query(`SELECT [Company] FROM [dbo].[DispatchUserCompany] WHERE [UserId]=@uid ORDER BY [Company]`);
+  return r.recordset.map((x) => x.Company);
+}
+
+/** Replace a user's permitted companies. */
+export async function setUserCompanies(userId, companies) {
+  const pool = await appPool();
+  const list = [...new Set((Array.isArray(companies) ? companies : []).map((c) => String(c || '').trim()).filter(Boolean))];
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    await new sql.Request(tx).input('uid', sql.NVarChar(100), String(userId))
+      .query(`DELETE FROM [dbo].[DispatchUserCompany] WHERE [UserId]=@uid`);
+    for (const c of list) {
+      await new sql.Request(tx)
+        .input('uid', sql.NVarChar(100), String(userId)).input('co', sql.NVarChar(10), c)
+        .query(`INSERT INTO [dbo].[DispatchUserCompany] ([UserId],[Company]) VALUES (@uid,@co)`);
+    }
+    await tx.commit();
+  } catch (e) { try { await tx.rollback(); } catch { /* noop */ } throw e; }
+  return list;
+}
+
+/**
+ * Effective companies for a registry request: the intersection of the user's
+ * permitted set (empty = all) with an optional requested filter. Returns
+ * undefined when the user is unrestricted AND no filter was requested (= all rows).
+ */
+export async function resolveRegistryCompanies(userId, requested) {
+  const allowed = await listUserCompanies(userId);
+  const req = Array.isArray(requested) ? requested.filter(Boolean) : null;
+  if (!allowed.length) return (req && req.length) ? req : undefined; // unrestricted
+  if (!req || !req.length) return allowed;
+  return allowed.filter((c) => req.includes(c));
 }
 
 /** Assignment worklist: confirmed but not yet assigned to a packer. */
@@ -181,23 +250,40 @@ export async function listUsersByRole(role) {
 }
 
 // ── Stage transitions ────────────────────────────────────────────────────────
-/** Registry: confirm one part; flips the order to 'confirmed' once all 4 are done. */
+/**
+ * Registry: confirm one part (once only). Flips the order to 'confirmed' when
+ * every part is done. Throws ALREADY_CONFIRMED / NOT_FOUND if it can't confirm.
+ */
 export async function confirmPart(dispatchOrderId, part, user = {}) {
   const pool = await appPool();
-  await pool.request()
+  const P = String(part || '').toUpperCase();
+  const res = await pool.request()
     .input('doid',  sql.UniqueIdentifier, dispatchOrderId)
-    .input('part',  sql.Char(1), String(part || '').toUpperCase())
+    .input('part',  sql.Char(1), P)
     .input('uid',   sql.NVarChar(100), str(user.userId, 100))
     .input('uname', sql.NVarChar(200), str(user.userName, 200))
     .query(`
       UPDATE [dbo].[DispatchOrderPart]
       SET [Confirmed]=1,[ConfirmedByUserId]=@uid,[ConfirmedByName]=@uname,
           [ConfirmedAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
-      WHERE [DispatchOrderId]=@doid AND [Part]=@part
+      WHERE [DispatchOrderId]=@doid AND [Part]=@part AND [Confirmed]=0 AND [Active]=1
     `);
+  if (!res.rowsAffected[0]) {
+    // Nothing updated → part is missing or already confirmed (confirm-once).
+    const cur = await pool.request()
+      .input('doid', sql.UniqueIdentifier, dispatchOrderId).input('part', sql.Char(1), P)
+      .query(`SELECT [Active],[Confirmed],[ConfirmedByName],[ConfirmedAt] FROM [dbo].[DispatchOrderPart]
+              WHERE [DispatchOrderId]=@doid AND [Part]=@part`);
+    const row = cur.recordset[0];
+    if (!row) { const e = new Error(`Part ${P} not found on this order`); e.code = 'NOT_FOUND'; throw e; }
+    if (!row.Active) { const e = new Error(`Part ${P} is inactive (no items) on this order`); e.code = 'INACTIVE'; throw e; }
+    const e = new Error(`Part ${P} was already confirmed by ${row.ConfirmedByName || 'another user'}`);
+    e.code = 'ALREADY_CONFIRMED'; throw e;
+  }
   const chk = await pool.request()
     .input('doid', sql.UniqueIdentifier, dispatchOrderId)
-    .query(`SELECT SUM(CASE WHEN [Confirmed]=1 THEN 1 ELSE 0 END) AS c, COUNT(*) AS t
+    .query(`SELECT SUM(CASE WHEN [Confirmed]=1 AND [Active]=1 THEN 1 ELSE 0 END) AS c,
+                   SUM(CASE WHEN [Active]=1 THEN 1 ELSE 0 END) AS t
             FROM [dbo].[DispatchOrderPart] WHERE [DispatchOrderId]=@doid`);
   const c = Number(chk.recordset[0]?.c || 0);
   const t = Number(chk.recordset[0]?.t || 0);
@@ -214,18 +300,25 @@ export async function confirmPart(dispatchOrderId, part, user = {}) {
 // BC Sales Header [Status] is a customised option; 4 = "Execute" (env-overridable).
 const EXECUTE_STATUS = () => Number(process.env.DISPATCH_EXECUTE_STATUS ?? 4);
 
-async function fetchBcOrderLines(bcPool, slTable, orderNo) {
+// Each Sales Line's dispatch Part (A/B/C/D) lives on the coreExt table's
+// [Part No_] field; join it in so lines can be tagged and empty parts deactivated.
+async function fetchBcOrderLines(bcPool, slTable, slExtTable, orderNo) {
+  const partCol = extCol('Part No_');
   const r = await bcPool.request()
     .input('no', bcSql.NVarChar(20), orderNo)
     .query(`
-      SELECT [Line No_] AS [LineNo], [No_] AS ItemNo, [Description] AS Descr,
-             [Quantity] AS Qty, [Unit of Measure Code] AS Uom
-      FROM ${slTable}
-      WHERE [Document No_]=@no AND [Type]=2 AND [Quantity] <> 0
-      ORDER BY [Line No_]
+      SELECT l.[Line No_] AS [LineNo], l.[No_] AS ItemNo, l.[Description] AS Descr,
+             l.[Quantity] AS Qty, l.[Unit of Measure Code] AS Uom, e.${partCol} AS PartNo
+      FROM ${slTable} l
+      LEFT JOIN ${slExtTable} e
+        ON e.[Document Type]=l.[Document Type] AND e.[Document No_]=l.[Document No_] AND e.[Line No_]=l.[Line No_]
+      WHERE l.[Document No_]=@no AND l.[Type]=2 AND l.[Quantity] <> 0
+      ORDER BY l.[Line No_]
     `);
   return r.recordset;
 }
+
+const partOf = (v) => { const s = String(v || '').trim().toUpperCase(); return PARTS.includes(s) ? s : null; };
 
 async function insertBcDispatchOrder(appP, company, h, lines) {
   const dispatchNo = await nextNo(appP, 'DSP', 'DispatchOrder', 'DispatchNo');
@@ -250,9 +343,12 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         VALUES (@no,'bc',@company,@orderNo,@custNo,@custName,@sp,@route,@shop,@shipDate,'pending')
       `);
     const id = hdr.recordset[0].DispatchOrderId;
+    const present = new Set();
     for (let i = 0; i < lines.length; i++) {
       const ln = lines[i];
       const uom = str(ln.Uom, 20);
+      const part = partOf(ln.PartNo);
+      if (part) present.add(part);
       await new sql.Request(tx)
         .input('doid',     sql.UniqueIdentifier, id)
         .input('itemNo',   sql.NVarChar(30),  str(ln.ItemNo, 30))
@@ -260,17 +356,20 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         .input('qty',      sql.Decimal(18, 4), num(ln.Qty))
         .input('uom',      sql.NVarChar(20),  uom)
         .input('weighted', sql.Bit, isWeightUom(uom) ? 1 : 0)
+        .input('part',     sql.Char(1), part)
         .input('sort',     sql.Int, Number(ln.LineNo) || i)
         .query(`
           INSERT INTO [dbo].[DispatchOrderLine]
-            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[SortOrder])
-          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@sort)
+            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[Part],[SortOrder])
+          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@part,@sort)
         `);
     }
+    // A part is Active only if the order actually has line(s) of it.
     for (const part of PARTS) {
       await new sql.Request(tx)
         .input('doid', sql.UniqueIdentifier, id).input('part', sql.Char(1), part)
-        .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part]) VALUES (@doid,@part)`);
+        .input('active', sql.Bit, present.has(part) ? 1 : 0)
+        .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part],[Active]) VALUES (@doid,@part,@active)`);
     }
     await tx.commit();
   } catch (e) {
@@ -320,10 +419,11 @@ export async function importFromBc({ companies } = {}) {
     const existing = new Set(existRes.recordset.map((r) => r.OrderNo));
 
     const sl = bcTable(c, 'Sales Line');
+    const slExt = bcTable(c, 'Sales Line', { coreExt: true });
     for (const h of headers) {
       if (existing.has(h.OrderNo)) { skipped++; continue; }
       try {
-        const lines = await fetchBcOrderLines(bcPool, sl, h.OrderNo);
+        const lines = await fetchBcOrderLines(bcPool, sl, slExt, h.OrderNo);
         await insertBcDispatchOrder(appP, c, h, lines);
         imported++; byCompany[c].imported++;
       } catch (e) {
