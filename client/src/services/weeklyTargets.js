@@ -10,6 +10,6 @@ export const weeklyTargetsApi = {
   list:    (filter)      => api.get('/weekly-targets', { params: clean(filter) }),
   months:  ()           => api.get('/weekly-targets/months'),
   columns: ()           => api.get('/weekly-targets/columns'),
-  upload:  (rows, mode) => api.post('/weekly-targets/upload', { rows, mode }),
+  upload:  (rows, mode, replaceMonths) => api.post('/weekly-targets/upload', { rows, mode, replaceMonths }),
   split:   (body)       => api.post('/weekly-targets/split', body),
 }

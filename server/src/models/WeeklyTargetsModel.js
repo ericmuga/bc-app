@@ -30,34 +30,38 @@ function pick(raw = {}) {
   };
 }
 
-function buildTable() {
-  const t = new sql.Table('FACT_WEEKLYTARGETS');
-  t.create = false;
-  t.columns.add('CustomerNo',      sql.VarChar(20),   { nullable: true });
-  t.columns.add('ShipToCode',      sql.VarChar(10),   { nullable: true });
-  t.columns.add('ItemNo',          sql.VarChar(20),   { nullable: true });
-  t.columns.add('VolTargetKgs',    sql.Decimal(18, 9), { nullable: true });
-  t.columns.add('ValTarget',       sql.Decimal(18, 9), { nullable: true });
-  t.columns.add('Company',         sql.VarChar(10),   { nullable: true });
-  t.columns.add('Outlet',          sql.VarChar(20),   { nullable: true });
-  t.columns.add('MonthNameSorted', sql.Char(7),       { nullable: true });
-  t.columns.add('WatermarkLoadedAt', sql.DateTime2,   { nullable: true });
-  return t;
-}
+// Batched multi-row INSERT. 8 params/row + inline WatermarkLoadedAt; chunked to
+// stay well under SQL Server's 2100-parameter statement limit.
+const CHUNK = 200;
 
-/** Fast bulk insert of already-normalised rows. Returns { inserted }. */
+/** Insert already-normalised rows. Returns { inserted }. */
 export async function bulkInsert(rows) {
-  const clean = (Array.isArray(rows) ? rows : []).map(pick);
+  const clean = (Array.isArray(rows) ? rows : []).map(pick).filter((r) => r.CustomerNo || r.ItemNo);
   if (!clean.length) return { inserted: 0 };
   const pool = await whsDb.getPool();
-  const table = buildTable();
-  const now = new Date();
-  for (const r of clean) {
-    table.rows.add(r.CustomerNo, r.ShipToCode, r.ItemNo, r.VolTargetKgs, r.ValTarget,
-                   r.Company, r.Outlet, r.MonthNameSorted, now);
+  let inserted = 0;
+  for (let i = 0; i < clean.length; i += CHUNK) {
+    const batch = clean.slice(i, i + CHUNK);
+    const req = pool.request();
+    const tuples = batch.map((r, j) => {
+      req.input(`c${j}`,   sql.VarChar(20),   r.CustomerNo);
+      req.input(`s${j}`,   sql.VarChar(10),   r.ShipToCode);
+      req.input(`i${j}`,   sql.VarChar(20),   r.ItemNo);
+      req.input(`v${j}`,   sql.Decimal(18, 9), r.VolTargetKgs);
+      req.input(`val${j}`, sql.Decimal(18, 9), r.ValTarget);
+      req.input(`co${j}`,  sql.VarChar(10),   r.Company);
+      req.input(`o${j}`,   sql.VarChar(20),   r.Outlet);
+      req.input(`m${j}`,   sql.Char(7),       r.MonthNameSorted);
+      return `(@c${j},@s${j},@i${j},@v${j},@val${j},@co${j},@o${j},@m${j},SYSUTCDATETIME())`;
+    });
+    await req.query(`
+      INSERT INTO ${TABLE}
+        ([CustomerNo],[ShipToCode],[ItemNo],[VolTargetKgs],[ValTarget],[Company],[Outlet],[MonthNameSorted],[WatermarkLoadedAt])
+      VALUES ${tuples.join(',')}
+    `);
+    inserted += batch.length;
   }
-  const res = await pool.request().bulk(table);
-  return { inserted: res.rowsAffected ?? clean.length };
+  return { inserted };
 }
 
 /** Delete all rows for the given MonthNameSorted values. Returns rows deleted. */

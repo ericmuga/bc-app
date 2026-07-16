@@ -38,7 +38,11 @@ export async function upload(req, res) {
     const mode = req.body?.mode === 'replace' ? 'replace' : 'append';
     let deleted = 0;
     if (mode === 'replace') {
-      const monthsPresent = [...new Set(rows.map((r) => r.MonthNameSorted).filter(Boolean))];
+      // Client may pass the FULL month list (chunked uploads) so every target
+      // month is cleared on the first chunk; else fall back to months in the rows.
+      const monthsPresent = (Array.isArray(req.body?.replaceMonths) && req.body.replaceMonths.length)
+        ? req.body.replaceMonths
+        : [...new Set(rows.map((r) => r.MonthNameSorted).filter(Boolean))];
       if (!monthsPresent.length) return res.status(400).json({ error: 'Replace mode needs a MonthNameSorted on the rows' });
       deleted = await Targets.deleteMonths(monthsPresent);
     }

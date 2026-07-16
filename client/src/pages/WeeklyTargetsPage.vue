@@ -104,16 +104,23 @@
       </div>
       <Message v-if="upload.error" severity="error" :closable="false">{{ upload.error }}</Message>
       <div v-if="upload.rows.length" class="up-summary">
-        Parsed <strong>{{ upload.rows.length.toLocaleString() }}</strong> rows · months:
-        <strong>{{ [...new Set(upload.rows.map(r => r.MonthNameSorted).filter(Boolean))].join(', ') || '—' }}</strong>
+        Sheet <strong>{{ upload.sheetName }}</strong> · parsed <strong>{{ upload.rows.length.toLocaleString() }}</strong> rows · months:
+        <strong>{{ monthsInUpload.join(', ') || '—' }}</strong>
+        <div v-if="upload.mode === 'replace'" class="warn">
+          <i class="pi pi-exclamation-triangle" /> Replace will DELETE all existing rows for
+          {{ monthsInUpload.length ? monthsInUpload.join(', ') : 'the month(s) in this sheet' }} before inserting.
+        </div>
+        <div v-if="upload.mode === 'replace' && !monthsInUpload.length" class="err-note">
+          No MonthNameSorted found — Replace needs a month column (YYYY-MM). Use Append or add the month.
+        </div>
       </div>
       <DataTable v-if="upload.rows.length" :value="upload.rows.slice(0, 50)" size="small" class="up-preview">
         <Column v-for="c in TARGET_COLS" :key="c" :field="c" :header="c" />
       </DataTable>
       <template #footer>
         <Button label="Cancel" text @click="upload.open = false" />
-        <Button :label="upload.mode === 'replace' ? 'Replace & upload' : 'Append & upload'" icon="pi pi-cloud-upload"
-                :disabled="!upload.rows.length" :loading="upload.busy" @click="submitUpload" />
+        <Button :label="upload.busy ? `Uploading… ${upload.progress}%` : (upload.mode === 'replace' ? 'Replace & upload' : 'Append & upload')"
+                icon="pi pi-cloud-upload" :disabled="!upload.rows.length" :loading="upload.busy" @click="submitUpload" />
       </template>
     </Dialog>
   </div>
@@ -178,7 +185,7 @@ async function load() {
 }
 
 // ── Upload ──
-const upload = reactive({ open: false, rows: [], mode: 'replace', busy: false, error: null })
+const upload = reactive({ open: false, rows: [], mode: 'replace', busy: false, error: null, sheetName: '', progress: 0 })
 const ALIASES = {
   CustomerNo: ['customerno', 'customer no', 'customer', 'cust no', 'custno'],
   ShipToCode: ['shiptocode', 'ship-to code', 'ship to code', 'shipto', 'ship-to'],
@@ -200,7 +207,8 @@ function normalizeRow(raw) {
   if (!out.Outlet && out.CustomerNo) out.Outlet = `${out.CustomerNo}_${out.ShipToCode || ''}_${out.Company || ''}`
   return out
 }
-function openUpload() { upload.open = true; upload.rows = []; upload.error = null }
+const monthsInUpload = computed(() => [...new Set(upload.rows.map(r => r.MonthNameSorted).filter(Boolean))])
+function openUpload() { upload.open = true; upload.rows = []; upload.error = null; upload.sheetName = '' }
 function onFile(e) {
   const file = e.target.files?.[0]; if (!file) return
   upload.error = null
@@ -208,19 +216,39 @@ function onFile(e) {
   reader.onload = (ev) => {
     try {
       const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const json = XLSX.utils.sheet_to_json(ws, { defval: '' })
-      upload.rows = json.map(normalizeRow).filter(r => r.CustomerNo || r.ItemNo)
-      if (!upload.rows.length) upload.error = 'No rows recognised — check the column headers.'
+      // Scan every sheet; use the one that yields the most recognised rows
+      // (prefer a sheet literally named "UPLOAD" on a tie).
+      let best = [], bestName = ''
+      for (const name of wb.SheetNames) {
+        const json = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: '' })
+        const rows = json.map(normalizeRow).filter(r => r.CustomerNo || r.ItemNo)
+        const better = rows.length > best.length ||
+          (rows.length === best.length && rows.length > 0 && name.toUpperCase() === 'UPLOAD')
+        if (better) { best = rows; bestName = name }
+      }
+      upload.rows = best
+      upload.sheetName = bestName
+      if (!best.length) upload.error = `No rows recognised in any sheet (${wb.SheetNames.join(', ')}) — check the column headers.`
     } catch (err) { upload.error = err.message }
   }
   reader.readAsArrayBuffer(file)
 }
 async function submitUpload() {
-  upload.busy = true; upload.error = null
+  upload.busy = true; upload.error = null; upload.progress = 0
   try {
-    const { data } = await weeklyTargetsApi.upload(upload.rows, upload.mode)
-    toast.add({ severity: 'success', summary: 'Uploaded', detail: `${data.inserted} inserted, ${data.deleted} replaced (${data.mode}).`, life: 4000 })
+    const CHUNK = 5000
+    const rows = upload.rows
+    const allMonths = monthsInUpload.value
+    let inserted = 0, deleted = 0
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = rows.slice(i, i + CHUNK)
+      // First chunk carries the mode (replace clears ALL target months up front); rest append.
+      const mode = i === 0 ? upload.mode : 'append'
+      const { data } = await weeklyTargetsApi.upload(batch, mode, i === 0 ? allMonths : undefined)
+      inserted += data.inserted; deleted += data.deleted
+      upload.progress = Math.round(Math.min(i + CHUNK, rows.length) / rows.length * 100)
+    }
+    toast.add({ severity: 'success', summary: 'Uploaded', detail: `${inserted.toLocaleString()} inserted, ${deleted.toLocaleString()} replaced.`, life: 6000 })
     upload.open = false
     loadMonths(); load()
   } catch (e) { upload.error = e.response?.data?.error || e.message }
@@ -286,6 +314,8 @@ loadMonths(); load()
 .up-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; }
 .up-controls .mode { display: flex; gap: 14px; font-size: 13px; }
 .up-summary { margin: 6px 0; font-size: 13px; }
+.up-summary .warn { color: #b45309; margin-top: 4px; }
+.up-summary .err-note { color: #b91c1c; margin-top: 2px; font-weight: 600; }
 .up-preview { margin-top: 8px; }
 .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
 .split-grid .f { display: flex; flex-direction: column; gap: 3px; }

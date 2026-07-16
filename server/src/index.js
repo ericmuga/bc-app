@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 // ── Security & parsing ───────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '50mb' })); // large bulk uploads (e.g. weekly targets sheets)
 
 // Static uploads (item photos, etc.) — mounted under /api so it rides the dev
 // proxy + same prod origin, and BEFORE the rate limiter so image-heavy pages
