@@ -421,6 +421,15 @@ router.get(  '/dispatch/loading/:id',                 ...canDispLoad, dispatchCt
 router.post( '/dispatch/loading/:id/scan',            ...canDispLoad, dispatchCtrl.loadBox);
 router.delete('/dispatch/loading-lines/:loadingLineId', ...canDispLoad, dispatchCtrl.removeLoadingLine);
 router.post( '/dispatch/loading/:id/close',           ...canDispLoad, dispatchCtrl.closeLoadingSession);
+// Setup: vessels + vehicles CRUD (supervisor/admin); BC routes + salespersons
+router.get(  '/dispatch/setup/vessels',   ...canDispatch,  dispatchCtrl.vesselTypes);
+router.post( '/dispatch/setup/vessels',   ...canDispSuper, dispatchCtrl.saveVesselType);
+router.delete('/dispatch/setup/vessels/:id', ...canDispSuper, dispatchCtrl.deleteVesselType);
+router.get(  '/dispatch/setup/vehicles',  ...canDispatch,  dispatchCtrl.listVehiclesAll);
+router.post( '/dispatch/setup/vehicles',  ...canDispSuper, dispatchCtrl.saveVehicle);
+router.delete('/dispatch/setup/vehicles/:id', ...canDispSuper, dispatchCtrl.deleteVehicle);
+router.get(  '/dispatch/bc-routes',       ...canDispatch,  dispatchCtrl.bcRoutes);
+router.get(  '/dispatch/bc-salespersons', ...canDispatch,  dispatchCtrl.bcSalespersons);
 
 // ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
 const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];

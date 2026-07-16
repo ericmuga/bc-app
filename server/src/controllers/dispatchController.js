@@ -3,6 +3,7 @@
  * REST handlers for the dispatch / pick-and-pack pipeline.
  */
 import * as Dispatch from '../models/DispatchModel.js';
+import * as BcReport from '../models/BcReport.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 
@@ -242,4 +243,35 @@ export async function removeLoadingLine(req, res) {
 export async function closeLoadingSession(req, res) {
   try { ok(res, await Dispatch.closeLoadingSession(req.params.id)); }
   catch (e) { err(res, e, 400); }
+}
+
+// ── Setup: vessels, vehicles, BC routes/salespersons ─────────────────────────
+export async function listVehiclesAll(req, res) {
+  try { ok(res, await Dispatch.listVehicles(req.query.all === '1' || req.query.all === 'true')); }
+  catch (e) { err(res, e); }
+}
+export async function saveVesselType(req, res) {
+  try { ok(res, await Dispatch.saveVesselType(req.body)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function deleteVesselType(req, res) {
+  try { ok(res, await Dispatch.deleteVesselType(req.params.id)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function saveVehicle(req, res) {
+  try { ok(res, await Dispatch.saveVehicle(req.body)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function deleteVehicle(req, res) {
+  try { ok(res, await Dispatch.deleteVehicle(req.params.id)); }
+  catch (e) { err(res, e, 400); }
+}
+// BC-synced routes (District Group Code) + salespersons — reuse the report model.
+export async function bcRoutes(req, res) {
+  try { ok(res, await BcReport.listRoutes(splitCSV(req.query.companies))); }
+  catch (e) { err(res, e); }
+}
+export async function bcSalespersons(req, res) {
+  try { ok(res, await BcReport.listSalespersons(splitCSV(req.query.companies))); }
+  catch (e) { err(res, e); }
 }

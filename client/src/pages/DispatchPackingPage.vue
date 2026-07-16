@@ -114,16 +114,23 @@
       </div>
     </div>
 
-    <!-- QR dialog after close -->
+    <!-- QR label dialog after close -->
     <Dialog v-model:visible="qr.open" modal header="Box label" :style="{ width: '360px' }">
-      <div class="qr-wrap">
+      <div v-if="qr.label" class="qr-wrap">
         <img v-if="qr.image" :src="qr.image" class="qr-img" />
-        <div class="qr-box">{{ qr.boxNo }}</div>
-        <div class="qr-token muted">{{ qr.token }}</div>
+        <div class="qr-box">{{ qr.label.boxNo }}</div>
+        <div class="qr-fields">
+          <div><strong>Order {{ qr.label.orderNo }}</strong> · Part {{ qr.label.part }}</div>
+          <div>Est. weight <strong>{{ fmt(qr.label.estWeight) }} kg</strong></div>
+          <div class="q-sub">{{ qr.label.customerName }}</div>
+          <div class="q-sub">Salesperson: {{ qr.label.salesperson || '—' }}</div>
+          <div class="q-sub">Route: {{ qr.label.route || '—' }} · Ship: {{ qr.label.shipmentDate || '—' }}</div>
+          <div class="q-sub">LPO: {{ qr.label.lpo || '—' }}</div>
+        </div>
       </div>
       <template #footer>
-        <Button label="Print" icon="pi pi-print" text @click="printQr" />
-        <Button label="Done" @click="qr.open = false" />
+        <Button label="Print" icon="pi pi-print" @click="printQr" />
+        <Button label="Done" text @click="qr.open = false" />
       </template>
     </Dialog>
   </div>
@@ -162,7 +169,7 @@ const grossWeight = ref(null)
 const scan = ref('')
 const highlight = ref(null)
 const busySession = ref(false), busyBox = ref(false), busyClose = ref(false), busyComplete = ref(false)
-const qr = reactive({ open: false, image: null, boxNo: '', token: '' })
+const qr = reactive({ open: false, image: null, label: null })
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 4 })
 const remaining = (l) => Number(l.AssembledQty ?? l.OrderQty ?? 0) - Number(l.PackedQty || 0)
@@ -231,7 +238,7 @@ async function closeBox() {
     const { data } = await dispatchApi.closeBox(currentBox.value.boxId, {
       checkerUserId: order.value.session.CheckerUserId, checkerName: order.value.session.CheckerName, grossWeight: grossWeight.value,
     })
-    qr.image = data.qrImage; qr.boxNo = data.box.BoxNo; qr.token = data.box.QrToken; qr.open = true
+    qr.image = data.qrImage; qr.label = data.label; qr.open = true
     currentBox.value = null; grossWeight.value = null
     await refreshOrder()
   } catch (e) { toast.add({ severity: 'error', summary: 'Close failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
@@ -258,10 +265,28 @@ function onScan() {
 }
 
 function printQr() {
+  const L = qr.label; if (!L) return
   const w = window.open('', '_blank'); if (!w) return
-  w.document.write(`<html><head><title>${qr.boxNo}</title></head><body style="text-align:center;font-family:sans-serif">
-    <img src="${qr.image}" style="width:260px" /><h2>${qr.boxNo}</h2><div style="font-size:10px;color:#888">${qr.token}</div>
-    <script>window.onload=function(){window.print()}<\/script></body></html>`)
+  const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  w.document.write(`<html><head><title>${esc(L.boxNo)}</title>
+    <style>
+      body{font-family:Segoe UI,Arial,sans-serif;text-align:center;margin:8mm;color:#111;}
+      img{width:230px;height:230px;}
+      .b{font-weight:800;font-size:20px;margin:6px 0 2px;}
+      .big{font-size:15px;font-weight:700;}
+      .r{font-size:13px;margin:2px 0;}
+      @media print{@page{margin:6mm;}}
+    </style></head><body>
+    <img src="${qr.image}" />
+    <div class="b">${esc(L.boxNo)}</div>
+    <div class="big">Order ${esc(L.orderNo)} &middot; Part ${esc(L.part)}</div>
+    <div class="r">Est. weight <b>${fmt(L.estWeight)} kg</b></div>
+    <div class="r">${esc(L.customerName)}</div>
+    <div class="r">Salesperson: ${esc(L.salesperson || '—')}</div>
+    <div class="r">Route: ${esc(L.route || '—')} &nbsp; Ship: ${esc(L.shipmentDate || '—')}</div>
+    <div class="r">LPO: ${esc(L.lpo || '—')}</div>
+    <script>window.onload=function(){window.print()}<\/script>
+    </body></html>`)
   w.document.close()
 }
 
@@ -336,7 +361,8 @@ loadRefData(); loadList()
 .qr-wrap { text-align: center; }
 .qr-img { width: 220px; height: 220px; }
 .qr-box { font-weight: 800; font-size: 16px; margin-top: 6px; }
-.qr-token { font-size: 10px; word-break: break-all; }
+.qr-fields { margin-top: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+.qr-fields .q-sub { color: #667085; font-size: 12px; }
 
 @media (max-width: 820px) { .pos-grid { grid-template-columns: 1fr; } }
 @media (prefers-color-scheme: dark) {

@@ -15,8 +15,12 @@
       <div class="new-session">
         <div class="ns-title">New loading session</div>
         <div class="ns-grid">
-          <div class="f"><label>Route</label><InputText v-model="form.routeCode" placeholder="Route / salesperson" class="fi" /></div>
-          <div class="f"><label>Vehicle plate</label><InputText v-model="form.vehiclePlate" placeholder="KDA 123A" class="fi" /></div>
+          <div class="f"><label>Route</label>
+            <Select v-model="form.routeCode" :options="routeOptions" option-label="label" option-value="value"
+                    filter editable placeholder="BC route…" class="fi" /></div>
+          <div class="f"><label>Vehicle</label>
+            <Select v-model="form.vehiclePlate" :options="vehicleOptions" option-label="Plate" option-value="Plate"
+                    filter editable placeholder="Vehicle plate…" class="fi" /></div>
           <div class="f"><label>Driver</label><InputText v-model="form.driverName" placeholder="Driver name" class="fi" /></div>
           <div class="f"><label>Shipment date</label><DatePicker v-model="form.shipmentDate" date-format="yy-mm-dd" show-icon class="fi" /></div>
           <Button label="Create load" icon="pi pi-plus" size="small" :loading="busyCreate" @click="createSession" />
@@ -86,11 +90,14 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import DatePicker from 'primevue/datepicker'
 import Message from 'primevue/message'
 
 const toast = useToast()
 const sessions = ref([])
+const routeOptions = ref([])
+const vehicleOptions = ref([])
 const session = ref(null)
 const loading = ref(false)
 const error = ref(null)
@@ -160,7 +167,11 @@ async function closeLoad() {
   finally { busyClose.value = false }
 }
 
-loadList()
+async function loadRefData() {
+  try { routeOptions.value = (await dispatchApi.bcRoutes()).data || [] } catch { /* */ }
+  try { vehicleOptions.value = (await dispatchApi.setupVehicles()).data || [] } catch { /* */ }
+}
+loadRefData(); loadList()
 </script>
 
 <style scoped>

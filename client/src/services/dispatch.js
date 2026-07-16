@@ -41,4 +41,13 @@ export const dispatchApi = {
   scanBox:        (id, qrToken) => api.post(`/dispatch/loading/${id}/scan`, { qrToken }),
   removeLoadingLine: (loadingLineId) => api.delete(`/dispatch/loading-lines/${loadingLineId}`),
   closeLoading:   (id)       => api.post(`/dispatch/loading/${id}/close`),
+  // Setup + BC master data
+  setupVessels:   ()        => api.get('/dispatch/setup/vessels'),
+  saveVessel:     (body)     => api.post('/dispatch/setup/vessels', body),
+  deleteVessel:   (id)       => api.delete(`/dispatch/setup/vessels/${id}`),
+  setupVehicles:  ()        => api.get('/dispatch/setup/vehicles', { params: { all: 1 } }),
+  saveVehicle:    (body)     => api.post('/dispatch/setup/vehicles', body),
+  deleteVehicle:  (id)       => api.delete(`/dispatch/setup/vehicles/${id}`),
+  bcRoutes:       (companies) => api.get('/dispatch/bc-routes', { params: { companies: companies?.join(',') || undefined } }),
+  bcSalespersons: (companies) => api.get('/dispatch/bc-salespersons', { params: { companies: companies?.join(',') || undefined } }),
 }

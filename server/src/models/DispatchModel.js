@@ -333,15 +333,17 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
       .input('custNo',   sql.NVarChar(30),  str(h.CustomerNo, 30))
       .input('custName', sql.NVarChar(200), str(h.CustomerName, 200))
       .input('sp',       sql.NVarChar(20),  str(h.SalespersonCode, 20))
+      .input('spName',   sql.NVarChar(200), str(h.SalespersonName, 200))
       .input('route',    sql.NVarChar(40),  str(h.SalespersonCode, 40))
       .input('shop',     sql.NVarChar(50),  str(h.LocationCode, 50))
+      .input('lpo',      sql.NVarChar(50),  str(h.Lpo, 50))
       .input('shipDate', sql.Date,          h.ShipmentDate || null)
       .query(`
         INSERT INTO [dbo].[DispatchOrder]
           ([DispatchNo],[SourceType],[Company],[OrderNo],[CustomerNo],[CustomerName],
-           [SalespersonCode],[RouteCode],[ShopCode],[ShipmentDate],[Status])
+           [SalespersonCode],[SalespersonName],[RouteCode],[ShopCode],[LpoNo],[ShipmentDate],[Status])
         OUTPUT INSERTED.[DispatchOrderId]
-        VALUES (@no,'bc',@company,@orderNo,@custNo,@custName,@sp,@route,@shop,@shipDate,'pending')
+        VALUES (@no,'bc',@company,@orderNo,@custNo,@custName,@sp,@spName,@route,@shop,@lpo,@shipDate,'pending')
       `);
     const id = hdr.recordset[0].DispatchOrderId;
     const present = new Set();
@@ -397,14 +399,17 @@ export async function importFromBc({ companies } = {}) {
     let headers = [];
     try {
       const sh = bcTable(c, 'Sales Header');
+      const sp = bcTable(c, 'Salesperson_Purchaser');
       const hRes = await bcPool.request()
         .input('st', bcSql.Int, status)
         .query(`
-          SELECT [No_] AS OrderNo, [Sell-to Customer No_] AS CustomerNo,
-                 [Sell-to Customer Name] AS CustomerName, [Salesperson Code] AS SalespersonCode,
-                 [Location Code] AS LocationCode, [Shipment Date] AS ShipmentDate
-          FROM ${sh}
-          WHERE [Status]=@st AND CAST([Shipment Date] AS date)=CAST(GETDATE() AS date)
+          SELECT h.[No_] AS OrderNo, h.[Sell-to Customer No_] AS CustomerNo,
+                 h.[Sell-to Customer Name] AS CustomerName, h.[Salesperson Code] AS SalespersonCode,
+                 sp.[Name] AS SalespersonName, h.[Location Code] AS LocationCode,
+                 h.[Shipment Date] AS ShipmentDate, h.[External Document No_] AS Lpo
+          FROM ${sh} h
+          LEFT JOIN ${sp} sp ON sp.[Code] = h.[Salesperson Code]
+          WHERE h.[Status]=@st AND CAST(h.[Shipment Date] AS date)=CAST(GETDATE() AS date)
         `);
       headers = hRes.recordset;
     } catch (e) {
@@ -702,17 +707,37 @@ export async function closeBox(boxId, { checkerUserId, checkerName, grossWeight 
             WHERE [BoxId]=@id AND [Status]='open'`);
   if (!res.rowsAffected[0]) { const e = new Error('Box is not open'); e.code = 'INVALID'; throw e; }
   const box = await getBox(boxId);
-  const qrImage = await QRCode.toDataURL(box.QrToken, { margin: 1, width: 240 });
-  return { box, qrImage };
+  const ord = (await pool.request().input('id', sql.UniqueIdentifier, box.DispatchOrderId).query(`
+    SELECT [OrderNo],[CustomerName],[Company],[SalespersonCode],[SalespersonName],[RouteCode],[LpoNo],[ShipmentDate]
+    FROM [dbo].[DispatchOrder] WHERE [DispatchOrderId]=@id`)).recordset[0] || {};
+  const partsRes = await pool.request().input('bid', sql.UniqueIdentifier, boxId).input('doid', sql.UniqueIdentifier, box.DispatchOrderId).query(`
+    SELECT DISTINCT l.[Part] p FROM [dbo].[DispatchBoxLine] bl
+    JOIN [dbo].[DispatchOrderLine] l ON l.[DispatchOrderId]=@doid AND l.[ItemNo]=bl.[ItemNo]
+    WHERE bl.[BoxId]=@bid AND l.[Part] IS NOT NULL`);
+  const partStr = partsRes.recordset.map((r) => r.p).filter(Boolean).sort().join('') || '-';
+  const estWeight = box.lines.reduce((t, l) => t + Number(l.Weight || 0), 0) || Number(box.GrossWeight || 0);
+  const shipDate = ord.ShipmentDate ? new Date(ord.ShipmentDate).toISOString().slice(0, 10) : '';
+  // QR encodes box#, order, part(s) and estimated weight (box# keeps it unique).
+  const qrPayload = `${box.BoxNo}|${ord.OrderNo || ''}|${partStr}|${estWeight}`;
+  const qrImage = await QRCode.toDataURL(qrPayload, { margin: 1, width: 240 });
+  const label = {
+    boxNo: box.BoxNo, orderNo: ord.OrderNo || '', customerName: ord.CustomerName || '', company: ord.Company || '',
+    part: partStr, estWeight, grossWeight: Number(box.GrossWeight || 0),
+    salesperson: ord.SalespersonName || ord.SalespersonCode || '', route: ord.RouteCode || '',
+    shipmentDate: shipDate, lpo: ord.LpoNo || '', qrPayload,
+  };
+  return { box, label, qrImage };
 }
 
-/** Resolve a scanned QR to its box + item list (unique reference). */
-export async function getBoxByQr(qrToken) {
+/** Resolve a scanned QR (token OR "BoxNo|Order|Part|Weight") to its box + item list. */
+export async function getBoxByQr(scanned) {
   const pool = await appPool();
-  const b = await pool.request().input('qr', sql.NVarChar(64), String(qrToken)).query(`
+  const raw = String(scanned || '').trim();
+  const boxNo = raw.includes('|') ? raw.split('|')[0].trim() : raw;
+  const b = await pool.request().input('qr', sql.NVarChar(64), raw.slice(0, 64)).input('bn', sql.NVarChar(40), boxNo).query(`
     SELECT b.*, o.[DispatchNo], o.[OrderNo], o.[CustomerName], o.[Company]
     FROM [dbo].[DispatchBox] b JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=b.[DispatchOrderId]
-    WHERE b.[QrToken]=@qr`);
+    WHERE b.[QrToken]=@qr OR b.[BoxNo]=@bn`);
   if (!b.recordset.length) return null;
   const lines = await pool.request().input('id', sql.UniqueIdentifier, b.recordset[0].BoxId)
     .query(`SELECT [ItemNo],[Description],[Qty],[Weight] FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id`);
@@ -733,11 +758,61 @@ export async function completePacking(dispatchOrderId) {
 }
 
 // ── Loading (vehicle + driver + route + ship date; scan boxes on) ─────────────
-export async function listVehicles() {
+export async function listVehicles(all = false) {
   const pool = await appPool();
+  const where = all ? '' : `WHERE [Status]='active'`;
   return (await pool.request().query(
-    `SELECT [VehicleId],[Plate],[Make],[LoadCapacity] FROM [dbo].[DispatchVehicle] WHERE [Status]='active' ORDER BY [Plate]`
+    `SELECT [VehicleId],[Plate],[Make],[LoadCapacity],[TareWeight],[Status] FROM [dbo].[DispatchVehicle] ${where} ORDER BY [Plate]`
   )).recordset;
+}
+
+// ── Setup: vessel types + vehicles CRUD ──────────────────────────────────────
+export async function saveVesselType({ vesselTypeId, code, description, tareWeight, blocked } = {}) {
+  const pool = await appPool();
+  const c = str(code, 30);
+  if (!c) throw new Error('Code is required');
+  if (vesselTypeId) {
+    await pool.request().input('id', sql.UniqueIdentifier, vesselTypeId)
+      .input('c', sql.NVarChar(30), c).input('d', sql.NVarChar(200), str(description, 200))
+      .input('t', sql.Decimal(18, 4), num(tareWeight)).input('b', sql.Bit, blocked ? 1 : 0)
+      .query(`UPDATE [dbo].[DispatchVesselType] SET [Code]=@c,[Description]=@d,[TareWeight]=@t,[Blocked]=@b,[UpdatedAt]=GETUTCDATE() WHERE [VesselTypeId]=@id`);
+    return { ok: true };
+  }
+  const r = await pool.request()
+    .input('c', sql.NVarChar(30), c).input('d', sql.NVarChar(200), str(description, 200)).input('t', sql.Decimal(18, 4), num(tareWeight))
+    .query(`INSERT INTO [dbo].[DispatchVesselType]([Code],[Description],[TareWeight]) OUTPUT INSERTED.[VesselTypeId] VALUES (@c,@d,@t)`);
+  return { vesselTypeId: r.recordset[0].VesselTypeId };
+}
+
+export async function deleteVesselType(id) {
+  const pool = await appPool();
+  const r = await pool.request().input('id', sql.UniqueIdentifier, id).query(`DELETE FROM [dbo].[DispatchVesselType] WHERE [VesselTypeId]=@id`);
+  return { deleted: r.rowsAffected[0] || 0 };
+}
+
+export async function saveVehicle({ vehicleId, plate, make, loadCapacity, tareWeight, status } = {}) {
+  const pool = await appPool();
+  const p = str(plate, 30);
+  if (!p) throw new Error('Plate is required');
+  const st = ['active', 'inactive'].includes(String(status)) ? status : 'active';
+  if (vehicleId) {
+    await pool.request().input('id', sql.UniqueIdentifier, vehicleId)
+      .input('p', sql.NVarChar(30), p).input('m', sql.NVarChar(100), str(make, 100))
+      .input('lc', sql.Decimal(18, 4), num(loadCapacity)).input('tw', sql.Decimal(18, 4), num(tareWeight)).input('s', sql.NVarChar(20), st)
+      .query(`UPDATE [dbo].[DispatchVehicle] SET [Plate]=@p,[Make]=@m,[LoadCapacity]=@lc,[TareWeight]=@tw,[Status]=@s,[UpdatedAt]=GETUTCDATE() WHERE [VehicleId]=@id`);
+    return { ok: true };
+  }
+  const r = await pool.request()
+    .input('p', sql.NVarChar(30), p).input('m', sql.NVarChar(100), str(make, 100))
+    .input('lc', sql.Decimal(18, 4), num(loadCapacity)).input('tw', sql.Decimal(18, 4), num(tareWeight))
+    .query(`INSERT INTO [dbo].[DispatchVehicle]([Plate],[Make],[LoadCapacity],[TareWeight]) OUTPUT INSERTED.[VehicleId] VALUES (@p,@m,@lc,@tw)`);
+  return { vehicleId: r.recordset[0].VehicleId };
+}
+
+export async function deleteVehicle(id) {
+  const pool = await appPool();
+  const r = await pool.request().input('id', sql.UniqueIdentifier, id).query(`DELETE FROM [dbo].[DispatchVehicle] WHERE [VehicleId]=@id`);
+  return { deleted: r.rowsAffected[0] || 0 };
 }
 
 export async function listLoadingSessions() {

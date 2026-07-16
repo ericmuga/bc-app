@@ -50,26 +50,28 @@
           <Button v-else label="Mark part assembled" size="small" icon="pi pi-check" class="mark-btn"
                   :loading="busyPart === p.Part" @click="markPart(p.Part)" />
         </div>
-        <table class="lines">
-          <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Assembled</th><th v-if="anyWeighted(p.Part)" class="n">Weight</th><th>Return reason</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="l in linesOfPart(p.Part)" :key="l.LineId" :class="{ hl: highlight === l.LineId, short: isShort(l) }">
-              <td><div class="it-no">{{ l.ItemNo }}</div><div class="it-desc">{{ l.Description }}</div></td>
-              <td class="n">{{ fmt(l.OrderQty) }} <span class="uom">{{ l.Uom }}</span></td>
-              <td class="n"><InputNumber v-model="l._qty" :min="0" :maxFractionDigits="4" inputClass="qty-in" :disabled="p.Assembled" /></td>
-              <td v-if="anyWeighted(p.Part)" class="n">
-                <InputNumber v-if="l.IsWeighted" v-model="l._wt" :min="0" :maxFractionDigits="4" inputClass="qty-in" :disabled="p.Assembled" />
-                <span v-else class="muted">—</span>
-              </td>
-              <td>
-                <Select v-if="isShort(l)" v-model="l._rc" :options="returnReasons" option-label="label" option-value="code"
-                        placeholder="Reason…" filter class="reason" :disabled="p.Assembled" />
-                <span v-else class="muted">—</span>
-              </td>
-              <td><Button icon="pi pi-save" text size="small" :disabled="p.Assembled" :loading="l._busy" @click="saveLine(l)" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="line-cards">
+          <div v-for="l in linesOfPart(p.Part)" :key="l.LineId" class="line-card"
+               :class="{ hl: highlight === l.LineId, short: isShort(l), done: p.Assembled }">
+            <div class="lc-head">
+              <span class="lc-item">{{ l.ItemNo }}</span>
+              <span class="lc-ord">ordered {{ fmt(l.OrderQty) }} {{ l.Uom }}</span>
+            </div>
+            <div class="lc-desc">{{ l.Description }}</div>
+            <div class="lc-inputs">
+              <div class="lci"><label>Assembled</label>
+                <InputNumber v-model="l._qty" :min="0" :maxFractionDigits="4" inputClass="qty-in" :disabled="p.Assembled" showButtons buttonLayout="horizontal" /></div>
+              <div v-if="l.IsWeighted" class="lci"><label>Weight (kg)</label>
+                <InputNumber v-model="l._wt" :min="0" :maxFractionDigits="4" inputClass="qty-in" :disabled="p.Assembled" /></div>
+              <Button class="lc-save" icon="pi pi-save" label="Save" size="small" :disabled="p.Assembled" :loading="l._busy" @click="saveLine(l)" />
+            </div>
+            <div v-if="isShort(l)" class="lc-reason">
+              <label>Return reason (qty differs)</label>
+              <Select v-model="l._rc" :options="returnReasons" option-label="label" option-value="code"
+                      placeholder="Select reason…" filter fluid :disabled="p.Assembled" />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -202,17 +204,35 @@ loadReasons(); loadAssemblers(); loadList()
 .part-badge.done { background: #dcfce7; color: #15803d; }
 .part-done { color: #15803d; font-size: 12px; }
 .mark-btn { margin-left: auto; }
-.lines { width: 100%; border-collapse: collapse; font-size: 13px; }
-.lines th, .lines td { padding: 6px 10px; border-bottom: 1px solid #f0f2f5; text-align: left; vertical-align: middle; }
-.lines .n { text-align: right; }
-.it-no { font-weight: 600; }
-.it-desc { font-size: 11px; color: #98a2b3; }
-.uom { font-size: 11px; color: #98a2b3; }
-:deep(.qty-in) { width: 90px; text-align: right; }
-.reason { min-width: 180px; }
+.line-cards { display: flex; flex-direction: column; }
+.line-card { padding: 10px 12px; border-bottom: 1px solid #f0f2f5; }
+.line-card.hl { background: #eff6ff; }
+.line-card.short { background: #fff7ed; }
+.line-card.done { opacity: .7; }
+.lc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lc-item { font-weight: 700; font-size: 15px; }
+.lc-ord { font-size: 12px; color: #667085; }
+.lc-desc { font-size: 12px; color: #98a2b3; margin: 2px 0 8px; }
+.lc-inputs { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.lci { display: flex; flex-direction: column; gap: 3px; }
+.lci label { font-size: 11px; font-weight: 600; color: #475467; }
+:deep(.qty-in) { width: 96px; text-align: right; font-size: 16px; }
+.lc-save { margin-left: auto; }
+.lc-reason { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.lc-reason label { font-size: 11px; font-weight: 600; color: #b45309; }
 .muted { color: #98a2b3; }
-tr.hl { background: #eff6ff; }
-tr.short td { background: #fff7ed; }
+
+/* Handheld / mobile — bigger tap targets, sticky prominent scan bar */
+.scan-row { position: sticky; top: 0; z-index: 5; }
+.scan-row :deep(input) { font-size: 16px; padding: 10px 12px; }
+@media (max-width: 640px) {
+  .asm-page { padding: 10px 10px; }
+  .cards { grid-template-columns: 1fr; }
+  .lc-save { width: 100%; margin-left: 0; }
+  .lc-inputs { gap: 8px; }
+  :deep(.qty-in) { width: 100%; }
+  .lci { flex: 1 1 120px; }
+}
 
 @media (prefers-color-scheme: dark) {
   .asm-head .sub, .muted { color: #94a3b8; }
@@ -223,8 +243,9 @@ tr.short td { background: #fff7ed; }
   .part-block { border-color: #2c3a4f; }
   .part-head { background: #1f2937; border-bottom-color: #2c3a4f; }
   .part-badge { background: #374151; color: #e5e7eb; }
-  .lines th, .lines td { border-bottom-color: #212b3a; color: #e5e7eb; }
-  tr.hl { background: #17233a; }
-  tr.short td { background: #2a2113; }
+  .line-card { border-bottom-color: #212b3a; color: #e5e7eb; }
+  .line-card.hl { background: #17233a; }
+  .line-card.short { background: #2a2113; }
+  .lci label { color: #cbd5e1; }
 }
 </style>

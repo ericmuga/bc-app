@@ -1046,6 +1046,7 @@ async function migrate(companyId) {
       [RouteCode]        NVARCHAR(40)     NULL,
       [SalespersonCode]  NVARCHAR(20)     NULL,
       [SalespersonName]  NVARCHAR(200)    NULL,
+      [LpoNo]            NVARCHAR(50)     NULL,
       [ShipmentDate]     DATE             NULL,
       [Status]           NVARCHAR(20)     NOT NULL DEFAULT 'pending',
       [Confirmed]        BIT              NOT NULL DEFAULT 0,
@@ -1064,6 +1065,10 @@ async function migrate(companyId) {
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrder]') AND name='Company')
       ALTER TABLE [dbo].[DispatchOrder] ADD [Company] NVARCHAR(10) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrder]') AND name='LpoNo')
+      ALTER TABLE [dbo].[DispatchOrder] ADD [LpoNo] NVARCHAR(50) NULL
   `);
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='UX_DispatchOrder_Source' AND object_id=OBJECT_ID('[dbo].[DispatchOrder]'))
@@ -1242,10 +1247,15 @@ async function migrate(companyId) {
       [Plate]        NVARCHAR(30)     NOT NULL UNIQUE,
       [Make]         NVARCHAR(100)    NULL,
       [LoadCapacity] DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [TareWeight]   DECIMAL(18,4)    NOT NULL DEFAULT 0,
       [Status]       NVARCHAR(20)     NOT NULL DEFAULT 'active',
       [CreatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
       [UpdatedAt]    DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchVehicle]') AND name='TareWeight')
+      ALTER TABLE [dbo].[DispatchVehicle] ADD [TareWeight] DECIMAL(18,4) NOT NULL DEFAULT 0
   `);
   console.log('  [dbo].[DispatchVehicle] OK');
 

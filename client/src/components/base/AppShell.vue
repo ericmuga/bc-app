@@ -134,6 +134,10 @@
             <i class="pi pi-truck" />
             <span>Loading</span>
           </RouterLink>
+          <RouterLink v-if="canDispAssign" to="/dispatch/setup" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-cog" />
+            <span>Setup</span>
+          </RouterLink>
         </details>
 
         <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
