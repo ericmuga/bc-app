@@ -28,7 +28,7 @@ import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
-  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES } from '../services/access.js';
+  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -391,6 +391,14 @@ router.put(  '/dispatch/users/:userId/companies', ...canDispSuper, dispatchCtrl.
 router.get(  '/dispatch/unassigned',          ...canDispSuper,    dispatchCtrl.listUnassigned);
 router.get(  '/dispatch/packers',             ...canDispSuper,    dispatchCtrl.listPackers);
 router.post( '/dispatch/orders/:id/assign',   ...canDispSuper,    dispatchCtrl.assign);
+// Assembly (packer; admin/supervisor can view any assembler via ?userId=)
+const canDispAssemble = [authMiddleware, requireRole(...DISPATCH_ASSEMBLE_ROLES)];
+router.get(  '/dispatch/assembly',                 ...canDispAssemble, dispatchCtrl.listAssembly);
+router.get(  '/dispatch/assemblers',               ...canDispSuper,    dispatchCtrl.listAssemblers);
+router.get(  '/dispatch/return-reasons',           ...canDispAssemble, dispatchCtrl.returnReasons);
+router.get(  '/dispatch/assembly/:id',             ...canDispAssemble, dispatchCtrl.getAssemblyOrder);
+router.put(  '/dispatch/assembly/lines/:lineId',   ...canDispAssemble, dispatchCtrl.saveAssemblyLine);
+router.post( '/dispatch/assembly/:id/complete-part', ...canDispAssemble, dispatchCtrl.completeAssemblyPart);
 
 // ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
 const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];

@@ -100,3 +100,49 @@ export async function assign(req, res) {
     ok(res, { ok: true });
   } catch (e) { err(res, e, 400); }
 }
+
+// ── Assembly ─────────────────────────────────────────────────────────────────
+// Elevated users (admin/supervisor) may view any assembler via ?userId=; a
+// packer only ever sees their own assigned orders.
+const ELEVATED = ['admin', 'dispatch-supervisor'];
+function assemblyUser(req) {
+  if (ELEVATED.includes(req.user.role)) return req.query.userId || null; // null = all
+  return req.user.userId;
+}
+
+export async function listAssembly(req, res) {
+  try { ok(res, await Dispatch.listForAssembly(assemblyUser(req))); }
+  catch (e) { err(res, e); }
+}
+
+export async function getAssemblyOrder(req, res) {
+  try {
+    const order = await Dispatch.getAssemblyOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    ok(res, order);
+  } catch (e) { err(res, e); }
+}
+
+export async function saveAssemblyLine(req, res) {
+  try { ok(res, await Dispatch.saveAssemblyLine(req.params.lineId, req.body?.dispatchOrderId, req.body, req.user)); }
+  catch (e) { err(res, e, 400); }
+}
+
+export async function completeAssemblyPart(req, res) {
+  try {
+    const part = String(req.body?.part || '').toUpperCase();
+    if (!['A', 'B', 'C', 'D'].includes(part)) return res.status(400).json({ error: 'part must be A/B/C/D' });
+    ok(res, await Dispatch.markPartAssembled(req.params.id, part, req.user));
+  } catch (e) { err(res, e, e.code === 'INVALID' ? 409 : 400); }
+}
+
+export async function returnReasons(req, res) {
+  try { ok(res, await Dispatch.listReturnReasons(req.query.company || 'FCL')); }
+  catch (e) { err(res, e); }
+}
+
+// Assemblers list (for the elevated "view as" picker) = packers.
+export async function listAssemblers(_req, res) {
+  try { ok(res, await Dispatch.listUsersByRole('packer')); }
+  catch (e) { err(res, e); }
+}

@@ -14,4 +14,11 @@ export const dispatchApi = {
   unassigned:    ()          => api.get('/dispatch/unassigned'),
   packers:       ()          => api.get('/dispatch/packers'),
   assign:        (id, body)  => api.post(`/dispatch/orders/${id}/assign`, body),
+  // Assembly
+  assembly:       (userId)        => api.get('/dispatch/assembly', { params: { userId: userId || undefined } }),
+  assemblers:     ()             => api.get('/dispatch/assemblers'),
+  returnReasons:  (company)       => api.get('/dispatch/return-reasons', { params: { company } }),
+  assemblyOrder:  (id)            => api.get(`/dispatch/assembly/${id}`),
+  saveAssemblyLine: (lineId, body) => api.put(`/dispatch/assembly/lines/${lineId}`, body),
+  completeAssemblyPart: (id, part) => api.post(`/dispatch/assembly/${id}/complete-part`, { part }),
 }
