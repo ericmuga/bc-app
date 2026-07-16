@@ -28,7 +28,7 @@ import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
-  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES } from '../services/access.js';
+  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -412,6 +412,15 @@ router.delete('/dispatch/box-lines/:boxLineId', ...canDispPack, dispatchCtrl.rem
 router.post( '/dispatch/boxes/:boxId/close',   ...canDispPack, dispatchCtrl.closeBox);
 router.get(  '/dispatch/box-by-qr/:qr',        ...canDispPack, dispatchCtrl.boxByQr);
 router.post( '/dispatch/packing/:id/complete', ...canDispPack, dispatchCtrl.completePacking);
+// Loading (vehicle + driver + route + ship date; scan boxes on)
+const canDispLoad = [authMiddleware, requireRole(...DISPATCH_LOAD_ROLES)];
+router.get(  '/dispatch/vehicles',                    ...canDispLoad, dispatchCtrl.listVehicles);
+router.get(  '/dispatch/loading',                     ...canDispLoad, dispatchCtrl.listLoadingSessions);
+router.post( '/dispatch/loading',                     ...canDispLoad, dispatchCtrl.createLoadingSession);
+router.get(  '/dispatch/loading/:id',                 ...canDispLoad, dispatchCtrl.getLoadingSession);
+router.post( '/dispatch/loading/:id/scan',            ...canDispLoad, dispatchCtrl.loadBox);
+router.delete('/dispatch/loading-lines/:loadingLineId', ...canDispLoad, dispatchCtrl.removeLoadingLine);
+router.post( '/dispatch/loading/:id/close',           ...canDispLoad, dispatchCtrl.closeLoadingSession);
 
 // ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
 const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];

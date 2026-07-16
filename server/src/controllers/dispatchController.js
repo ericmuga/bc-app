@@ -207,3 +207,39 @@ export async function completePacking(req, res) {
   try { ok(res, await Dispatch.completePacking(req.params.id)); }
   catch (e) { err(res, e, 400); }
 }
+
+// ── Loading ──────────────────────────────────────────────────────────────────
+export async function listVehicles(_req, res) {
+  try { ok(res, await Dispatch.listVehicles()); }
+  catch (e) { err(res, e); }
+}
+export async function listLoadingSessions(_req, res) {
+  try { ok(res, await Dispatch.listLoadingSessions()); }
+  catch (e) { err(res, e); }
+}
+export async function createLoadingSession(req, res) {
+  try { ok(res, await Dispatch.createLoadingSession(req.body, req.user)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function getLoadingSession(req, res) {
+  try {
+    const s = await Dispatch.getLoadingSession(req.params.id);
+    if (!s) return res.status(404).json({ error: 'Loading session not found' });
+    ok(res, s);
+  } catch (e) { err(res, e); }
+}
+export async function loadBox(req, res) {
+  try {
+    const qr = req.body?.qrToken;
+    if (!qr) return res.status(400).json({ error: 'qrToken is required' });
+    ok(res, await Dispatch.loadBoxByQr(req.params.id, qr, req.user));
+  } catch (e) { err(res, e, e.code === 'NOT_FOUND' ? 404 : e.code === 'INVALID' ? 409 : 400); }
+}
+export async function removeLoadingLine(req, res) {
+  try { ok(res, await Dispatch.removeLoadingLine(req.params.loadingLineId)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function closeLoadingSession(req, res) {
+  try { ok(res, await Dispatch.closeLoadingSession(req.params.id)); }
+  catch (e) { err(res, e, 400); }
+}

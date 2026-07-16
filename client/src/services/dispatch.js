@@ -33,4 +33,12 @@ export const dispatchApi = {
   closeBox:       (boxId, body) => api.post(`/dispatch/boxes/${boxId}/close`, body),
   boxByQr:        (qr)       => api.get(`/dispatch/box-by-qr/${encodeURIComponent(qr)}`),
   completePacking: (id)      => api.post(`/dispatch/packing/${id}/complete`),
+  // Loading
+  vehicles:       ()        => api.get('/dispatch/vehicles'),
+  loadingSessions: ()       => api.get('/dispatch/loading'),
+  createLoading:  (body)     => api.post('/dispatch/loading', body),
+  loadingSession: (id)       => api.get(`/dispatch/loading/${id}`),
+  scanBox:        (id, qrToken) => api.post(`/dispatch/loading/${id}/scan`, { qrToken }),
+  removeLoadingLine: (loadingLineId) => api.delete(`/dispatch/loading-lines/${loadingLineId}`),
+  closeLoading:   (id)       => api.post(`/dispatch/loading/${id}/close`),
 }

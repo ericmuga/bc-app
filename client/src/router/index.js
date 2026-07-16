@@ -58,6 +58,7 @@ const routes = [
       { path: 'dispatch/assignment', name: 'DispatchAssignment', component: () => import('@/pages/DispatchAssignmentPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor'] } },
       { path: 'dispatch/assembly',   name: 'DispatchAssembly',   component: () => import('@/pages/DispatchAssemblyPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'packer'] } },
       { path: 'dispatch/packing',    name: 'DispatchPacking',    component: () => import('@/pages/DispatchPackingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'packer', 'checker'] } },
+      { path: 'dispatch/loading',    name: 'DispatchLoading',    component: () => import('@/pages/DispatchLoadingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'loader'] } },
       { path: 'admin/setup',          name: 'AdminSetup',    component: () => import('@/pages/AdminSetupPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'admin/audit',          name: 'AuditLog',      component: () => import('@/pages/AuditLogPage.vue'),      meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'admin/cashier-shops',  name: 'CashierShops',  component: () => import('@/pages/CashierShopsPage.vue'),  meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },

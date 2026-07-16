@@ -731,3 +731,98 @@ export async function completePacking(dispatchOrderId) {
             WHERE [DispatchOrderId]=@doid AND [Status] IN ('assembled','packing')`);
   return { packed: r.rowsAffected[0] || 0 };
 }
+
+// ── Loading (vehicle + driver + route + ship date; scan boxes on) ─────────────
+export async function listVehicles() {
+  const pool = await appPool();
+  return (await pool.request().query(
+    `SELECT [VehicleId],[Plate],[Make],[LoadCapacity] FROM [dbo].[DispatchVehicle] WHERE [Status]='active' ORDER BY [Plate]`
+  )).recordset;
+}
+
+export async function listLoadingSessions() {
+  const pool = await appPool();
+  return (await pool.request().query(`
+    SELECT s.*, (SELECT COUNT(*) FROM [dbo].[DispatchLoadingLine] l WHERE l.[LoadingSessionId]=s.[LoadingSessionId]) AS BoxCount
+    FROM [dbo].[DispatchLoadingSession] s ORDER BY s.[CreatedAt] DESC
+  `)).recordset;
+}
+
+export async function createLoadingSession({ routeCode, vehicleId, vehiclePlate, driverName, shipmentDate } = {}, user = {}) {
+  const pool = await appPool();
+  const no = await nextNo(pool, 'LOAD', 'DispatchLoadingSession', 'SessionNo');
+  const res = await pool.request()
+    .input('no', sql.NVarChar(30), no).input('route', sql.NVarChar(40), str(routeCode, 40))
+    .input('vid', sql.UniqueIdentifier, vehicleId || null).input('plate', sql.NVarChar(30), str(vehiclePlate, 30))
+    .input('driver', sql.NVarChar(200), str(driverName, 200)).input('sd', sql.Date, shipmentDate ? new Date(shipmentDate) : null)
+    .input('uid', sql.NVarChar(100), str(user.userId, 100)).input('un', sql.NVarChar(200), str(user.userName, 200))
+    .query(`INSERT INTO [dbo].[DispatchLoadingSession]
+              ([SessionNo],[RouteCode],[VehicleId],[VehiclePlate],[DriverName],[ShipmentDate],[CreatedByUserId],[CreatedByName])
+            OUTPUT INSERTED.[LoadingSessionId] VALUES (@no,@route,@vid,@plate,@driver,@sd,@uid,@un)`);
+  return { loadingSessionId: res.recordset[0].LoadingSessionId, sessionNo: no };
+}
+
+export async function getLoadingSession(sessionId) {
+  const pool = await appPool();
+  const s = await pool.request().input('id', sql.UniqueIdentifier, sessionId)
+    .query(`SELECT * FROM [dbo].[DispatchLoadingSession] WHERE [LoadingSessionId]=@id`);
+  if (!s.recordset.length) return null;
+  const boxes = await pool.request().input('id', sql.UniqueIdentifier, sessionId).query(`
+    SELECT ll.[LoadingLineId], ll.[ScannedAt], b.[BoxId], b.[BoxNo], b.[QrToken], b.[VesselCode], b.[GrossWeight],
+           o.[DispatchNo], o.[OrderNo], o.[CustomerName], o.[Company]
+    FROM [dbo].[DispatchLoadingLine] ll
+    JOIN [dbo].[DispatchBox] b ON b.[BoxId]=ll.[BoxId]
+    JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=b.[DispatchOrderId]
+    WHERE ll.[LoadingSessionId]=@id ORDER BY ll.[ScannedAt] DESC`);
+  return { ...s.recordset[0], boxes: boxes.recordset };
+}
+
+/** Scan a box QR onto a loading session. Box must be closed & not already loaded elsewhere. */
+export async function loadBoxByQr(sessionId, qrToken, user = {}) {
+  const pool = await appPool();
+  const box = await getBoxByQr(qrToken);
+  if (!box) { const e = new Error('Box not found for that QR'); e.code = 'NOT_FOUND'; throw e; }
+  if (box.Status === 'open') { const e = new Error(`Box ${box.BoxNo} is not closed yet`); e.code = 'INVALID'; throw e; }
+  if (box.LoadingSessionId && String(box.LoadingSessionId) !== String(sessionId)) {
+    const e = new Error(`Box ${box.BoxNo} is already on another load`); e.code = 'INVALID'; throw e;
+  }
+  const dup = await pool.request().input('sid', sql.UniqueIdentifier, sessionId).input('bid', sql.UniqueIdentifier, box.BoxId)
+    .query(`SELECT TOP 1 1 FROM [dbo].[DispatchLoadingLine] WHERE [LoadingSessionId]=@sid AND [BoxId]=@bid`);
+  if (!dup.recordset.length) {
+    await pool.request()
+      .input('sid', sql.UniqueIdentifier, sessionId).input('bid', sql.UniqueIdentifier, box.BoxId).input('bno', sql.NVarChar(40), box.BoxNo)
+      .input('uid', sql.NVarChar(100), str(user.userId, 100)).input('un', sql.NVarChar(200), str(user.userName, 200))
+      .query(`INSERT INTO [dbo].[DispatchLoadingLine]([LoadingSessionId],[BoxId],[BoxNo],[ScannedByUserId],[ScannedByName])
+              VALUES (@sid,@bid,@bno,@uid,@un)`);
+  }
+  await pool.request().input('bid', sql.UniqueIdentifier, box.BoxId).input('sid', sql.UniqueIdentifier, sessionId)
+    .query(`UPDATE [dbo].[DispatchBox] SET [Status]='loaded',[LoadingSessionId]=@sid,[LoadedAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE() WHERE [BoxId]=@bid`);
+  return { boxNo: box.BoxNo, orderNo: box.OrderNo, customerName: box.CustomerName, itemCount: box.lines.length };
+}
+
+export async function removeLoadingLine(loadingLineId) {
+  const pool = await appPool();
+  const ln = await pool.request().input('id', sql.UniqueIdentifier, loadingLineId)
+    .query(`SELECT [BoxId] FROM [dbo].[DispatchLoadingLine] WHERE [LoadingLineId]=@id`);
+  if (!ln.recordset.length) return { removed: 0 };
+  await pool.request().input('id', sql.UniqueIdentifier, loadingLineId).query(`DELETE FROM [dbo].[DispatchLoadingLine] WHERE [LoadingLineId]=@id`);
+  await pool.request().input('bid', sql.UniqueIdentifier, ln.recordset[0].BoxId)
+    .query(`UPDATE [dbo].[DispatchBox] SET [Status]='closed',[LoadingSessionId]=NULL,[LoadedAt]=NULL,[UpdatedAt]=GETUTCDATE() WHERE [BoxId]=@bid`);
+  return { removed: 1 };
+}
+
+/** Close a loading session; orders with all boxes loaded become 'loaded' (dispatched). */
+export async function closeLoadingSession(sessionId) {
+  const pool = await appPool();
+  await pool.request().input('id', sql.UniqueIdentifier, sessionId)
+    .query(`UPDATE [dbo].[DispatchLoadingSession] SET [Status]='closed',[ClosedAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE() WHERE [LoadingSessionId]=@id`);
+  const r = await pool.request().input('id', sql.UniqueIdentifier, sessionId).query(`
+    UPDATE o SET o.[Loaded]=1, o.[Status]='loaded', o.[UpdatedAt]=GETUTCDATE()
+    FROM [dbo].[DispatchOrder] o
+    WHERE o.[DispatchOrderId] IN (
+      SELECT DISTINCT b.[DispatchOrderId] FROM [dbo].[DispatchLoadingLine] ll JOIN [dbo].[DispatchBox] b ON b.[BoxId]=ll.[BoxId]
+      WHERE ll.[LoadingSessionId]=@id)
+    AND NOT EXISTS (SELECT 1 FROM [dbo].[DispatchBox] bx WHERE bx.[DispatchOrderId]=o.[DispatchOrderId] AND bx.[Status] <> 'loaded')
+  `);
+  return { ordersLoaded: r.rowsAffected[0] || 0 };
+}

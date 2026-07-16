@@ -130,6 +130,10 @@
             <i class="pi pi-inbox" />
             <span>Packing</span>
           </RouterLink>
+          <RouterLink v-if="canDispLoad" to="/dispatch/loading" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-truck" />
+            <span>Loading</span>
+          </RouterLink>
         </details>
 
         <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
@@ -242,7 +246,7 @@ import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/l
 import { canAccessFinance } from '@/lib/financeAccess.js'
 import { canAccessPos, isGlobalAdmin } from '@/lib/posAccess.js'
 import { canAccessCosting } from '@/lib/costingAccess.js'
-import { canAccessDispatch, canDispatchRegistry, canDispatchAssign, canDispatchAssemble, canDispatchPack } from '@/lib/dispatchAccess.js'
+import { canAccessDispatch, canDispatchRegistry, canDispatchAssign, canDispatchAssemble, canDispatchPack, canDispatchLoad } from '@/lib/dispatchAccess.js'
 
 const auth    = useAuthStore()
 const company = useCompanyStore()
@@ -286,6 +290,7 @@ const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 const canDispAssemble = computed(() => canDispatchAssemble(role.value))
 const canDispPack     = computed(() => canDispatchPack(role.value))
+const canDispLoad     = computed(() => canDispatchLoad(role.value))
 
 // Role switcher (admin only)
 const roleOptions = [
