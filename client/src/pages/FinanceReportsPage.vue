@@ -527,9 +527,7 @@ function switchTab(type) {
   agingExpandedGroups.value = {}
   agingExpandedCompanies.value = {}
   error.value = null
-  if (type === 'mgmt') runMgmt()
-  else if (type === 'customerAging') { /* wait for user to click Run */ }
-  else run()
+  // Load only when the user clicks Run Report — avoids auto-loading heavy queries.
 }
 
 // ── Formatters ──────────────────────────────────────────────────────────────
@@ -837,8 +835,8 @@ function exportExcel() {
 }
 
 onMounted(async () => {
+  // Load slicer options only; the report itself loads when the user clicks Run.
   await Promise.all([loadMgmtTemplates(), loadDimensionValues()])
-  run()
 })
 </script>
 
