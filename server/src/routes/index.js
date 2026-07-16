@@ -28,7 +28,7 @@ import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
-  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES } from '../services/access.js';
+  DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES } from '../services/access.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -399,10 +399,24 @@ router.get(  '/dispatch/return-reasons',           ...canDispAssemble, dispatchC
 router.get(  '/dispatch/assembly/:id',             ...canDispAssemble, dispatchCtrl.getAssemblyOrder);
 router.put(  '/dispatch/assembly/lines/:lineId',   ...canDispAssemble, dispatchCtrl.saveAssemblyLine);
 router.post( '/dispatch/assembly/:id/complete-part', ...canDispAssemble, dispatchCtrl.completeAssemblyPart);
+// Packing / boxing (packer + checker)
+const canDispPack = [authMiddleware, requireRole(...DISPATCH_PACK_ROLES)];
+router.get(  '/dispatch/packing',              ...canDispPack, dispatchCtrl.listPacking);
+router.get(  '/dispatch/vessel-types',         ...canDispPack, dispatchCtrl.vesselTypes);
+router.get(  '/dispatch/checkers',             ...canDispPack, dispatchCtrl.listCheckers);
+router.get(  '/dispatch/packing/:id',          ...canDispPack, dispatchCtrl.getPackingOrder);
+router.post( '/dispatch/packing/:id/session',  ...canDispPack, dispatchCtrl.startPackingSession);
+router.post( '/dispatch/packing/:id/boxes',    ...canDispPack, dispatchCtrl.openBox);
+router.post( '/dispatch/boxes/:boxId/lines',   ...canDispPack, dispatchCtrl.addBoxLine);
+router.delete('/dispatch/box-lines/:boxLineId', ...canDispPack, dispatchCtrl.removeBoxLine);
+router.post( '/dispatch/boxes/:boxId/close',   ...canDispPack, dispatchCtrl.closeBox);
+router.get(  '/dispatch/box-by-qr/:qr',        ...canDispPack, dispatchCtrl.boxByQr);
+router.post( '/dispatch/packing/:id/complete', ...canDispPack, dispatchCtrl.completePacking);
 
 // ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
 const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];
 router.get( '/weekly-targets',         ...canSalesTargets, weeklyTargetsCtrl.list);
+router.get( '/weekly-targets/summary', ...canSalesTargets, weeklyTargetsCtrl.summary);
 router.get( '/weekly-targets/months',  ...canSalesTargets, weeklyTargetsCtrl.months);
 router.get( '/weekly-targets/columns', ...canSalesTargets, weeklyTargetsCtrl.columns);
 router.post('/weekly-targets/upload',  ...canSalesTargets, weeklyTargetsCtrl.upload);

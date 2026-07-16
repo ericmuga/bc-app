@@ -21,4 +21,16 @@ export const dispatchApi = {
   assemblyOrder:  (id)            => api.get(`/dispatch/assembly/${id}`),
   saveAssemblyLine: (lineId, body) => api.put(`/dispatch/assembly/lines/${lineId}`, body),
   completeAssemblyPart: (id, part) => api.post(`/dispatch/assembly/${id}/complete-part`, { part }),
+  // Packing
+  packing:        (userId)   => api.get('/dispatch/packing', { params: { userId: userId || undefined } }),
+  vesselTypes:    ()        => api.get('/dispatch/vessel-types'),
+  checkers:       ()        => api.get('/dispatch/checkers'),
+  packingOrder:   (id)       => api.get(`/dispatch/packing/${id}`),
+  startSession:   (id, body) => api.post(`/dispatch/packing/${id}/session`, body),
+  openBox:        (id, body) => api.post(`/dispatch/packing/${id}/boxes`, body),
+  addBoxLine:     (boxId, body) => api.post(`/dispatch/boxes/${boxId}/lines`, body),
+  removeBoxLine:  (boxLineId) => api.delete(`/dispatch/box-lines/${boxLineId}`),
+  closeBox:       (boxId, body) => api.post(`/dispatch/boxes/${boxId}/close`, body),
+  boxByQr:        (qr)       => api.get(`/dispatch/box-by-qr/${encodeURIComponent(qr)}`),
+  completePacking: (id)      => api.post(`/dispatch/packing/${id}/complete`),
 }

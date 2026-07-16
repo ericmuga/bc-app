@@ -9,6 +9,7 @@
  * transaction (local app DB, so no MSDTC concern).
  */
 import { randomUUID } from 'crypto';
+import QRCode from 'qrcode';
 import { db as appDb, sql } from '../db/pool.js';
 import { bcDb, bcSql } from '../db/bcPool.js';
 import { bcTable, extCol, ALL_COMPANIES } from '../services/bcTables.js';
@@ -560,4 +561,173 @@ export async function markPartAssembled(dispatchOrderId, part, user = {}) {
       .query(`UPDATE [dbo].[DispatchOrder] SET [Assembled]=1,[Status]='assembled',[UpdatedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid`);
   }
   return { assembledParts: c, activeParts: t, fullyAssembled: t > 0 && c >= t };
+}
+
+// ── Packing / boxing (packer + checker) ──────────────────────────────────────
+const DEFAULT_VESSELS = [
+  { code: 'CRATE',    description: 'Standard crate', tare: 1.5 },
+  { code: 'CARTON-S', description: 'Small carton',   tare: 0.3 },
+  { code: 'CARTON-M', description: 'Medium carton',  tare: 0.5 },
+  { code: 'CARTON-L', description: 'Large carton',   tare: 0.8 },
+];
+
+/** Carton/vessel sizes (seeds defaults on first call). */
+export async function listVesselTypes() {
+  const pool = await appPool();
+  const n = (await pool.request().query(`SELECT COUNT(*) n FROM [dbo].[DispatchVesselType]`)).recordset[0].n;
+  if (!n) {
+    for (const v of DEFAULT_VESSELS) {
+      await pool.request()
+        .input('c', sql.NVarChar(30), v.code).input('d', sql.NVarChar(200), v.description).input('t', sql.Decimal(18, 4), v.tare)
+        .query(`IF NOT EXISTS (SELECT 1 FROM [dbo].[DispatchVesselType] WHERE [Code]=@c)
+                INSERT INTO [dbo].[DispatchVesselType]([Code],[Description],[TareWeight]) VALUES (@c,@d,@t)`);
+    }
+  }
+  return (await pool.request().query(
+    `SELECT [VesselTypeId],[Code],[Description],[TareWeight] FROM [dbo].[DispatchVesselType] WHERE [Blocked]=0 ORDER BY [Code]`
+  )).recordset;
+}
+
+/** Packing worklist: assembled orders ready to box (optionally scoped to a packer). */
+export async function listForPacking(userId) {
+  const pool = await appPool();
+  const r = pool.request();
+  let filter = '';
+  if (userId) { r.input('uid', sql.NVarChar(100), String(userId)); filter = 'AND o.[AssignedToUserId]=@uid'; }
+  return (await r.query(`
+    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],o.[AssignedToName],
+           (SELECT COUNT(*) FROM [dbo].[DispatchBox] b WHERE b.[DispatchOrderId]=o.[DispatchOrderId]) AS BoxCount
+    FROM [dbo].[DispatchOrder] o
+    WHERE o.[Status] IN ('assembled','packing') ${filter}
+    ORDER BY o.[UpdatedAt] DESC
+  `)).recordset;
+}
+
+/** Get (or create) the open packing session for an order; sets/updates the checker. */
+export async function startOrGetPackingSession(dispatchOrderId, packer = {}, checker = {}) {
+  const pool = await appPool();
+  const open = await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`SELECT TOP 1 * FROM [dbo].[DispatchPackingSession] WHERE [DispatchOrderId]=@doid AND [Status]='open' ORDER BY [CreatedAt] DESC`);
+  if (open.recordset.length) {
+    if (checker.userId) {
+      await pool.request().input('sid', sql.UniqueIdentifier, open.recordset[0].SessionId)
+        .input('cid', sql.NVarChar(100), str(checker.userId, 100)).input('cn', sql.NVarChar(200), str(checker.name, 200))
+        .query(`UPDATE [dbo].[DispatchPackingSession] SET [CheckerUserId]=@cid,[CheckerName]=@cn,[UpdatedAt]=GETUTCDATE() WHERE [SessionId]=@sid`);
+    }
+    return open.recordset[0].SessionId;
+  }
+  const no = await nextNo(pool, 'PSN', 'DispatchPackingSession', 'SessionNo');
+  const res = await pool.request()
+    .input('no', sql.NVarChar(30), no).input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .input('pid', sql.NVarChar(100), str(packer.userId, 100)).input('pn', sql.NVarChar(200), str(packer.name, 200))
+    .input('cid', sql.NVarChar(100), str(checker.userId, 100)).input('cn', sql.NVarChar(200), str(checker.name, 200))
+    .query(`INSERT INTO [dbo].[DispatchPackingSession]([SessionNo],[DispatchOrderId],[PackerUserId],[PackerName],[CheckerUserId],[CheckerName])
+            OUTPUT INSERTED.[SessionId] VALUES (@no,@doid,@pid,@pn,@cid,@cn)`);
+  await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`UPDATE [dbo].[DispatchOrder] SET [Status]='packing',[UpdatedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid AND [Status]='assembled'`);
+  return res.recordset[0].SessionId;
+}
+
+/** Packing detail: order + lines (assembled + packed qty) + open session + boxes. */
+export async function getPackingOrder(dispatchOrderId) {
+  const pool = await appPool();
+  const hdr = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`SELECT * FROM [dbo].[DispatchOrder] WHERE [DispatchOrderId]=@id`);
+  if (!hdr.recordset.length) return null;
+  const lines = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId).query(`
+    SELECT l.[LineId],l.[ItemNo],l.[Barcode],l.[Description],l.[OrderQty],l.[Uom],l.[IsWeighted],l.[Part],
+           a.[AssembledQty],
+           (SELECT ISNULL(SUM(bl.[Qty]),0) FROM [dbo].[DispatchBoxLine] bl
+             JOIN [dbo].[DispatchBox] b ON b.[BoxId]=bl.[BoxId]
+             WHERE b.[DispatchOrderId]=@id AND bl.[ItemNo]=l.[ItemNo]) AS PackedQty
+    FROM [dbo].[DispatchOrderLine] l
+    LEFT JOIN [dbo].[DispatchAssemblyLine] a ON a.[LineId]=l.[LineId]
+    WHERE l.[DispatchOrderId]=@id ORDER BY l.[Part], l.[SortOrder]
+  `);
+  const session = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`SELECT TOP 1 * FROM [dbo].[DispatchPackingSession] WHERE [DispatchOrderId]=@id AND [Status]='open' ORDER BY [CreatedAt] DESC`);
+  const boxes = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId).query(`
+    SELECT b.*, (SELECT COUNT(*) FROM [dbo].[DispatchBoxLine] bl WHERE bl.[BoxId]=b.[BoxId]) AS LineCount
+    FROM [dbo].[DispatchBox] b WHERE b.[DispatchOrderId]=@id ORDER BY b.[CreatedAt]`);
+  return { ...hdr.recordset[0], lines: lines.recordset, session: session.recordset[0] || null, boxes: boxes.recordset };
+}
+
+export async function openBox(sessionId, dispatchOrderId, { vesselTypeId, vesselCode } = {}) {
+  const pool = await appPool();
+  const boxNo = await nextNo(pool, 'BOX', 'DispatchBox', 'BoxNo');
+  const token = genQrToken();
+  const res = await pool.request()
+    .input('no', sql.NVarChar(40), boxNo).input('qr', sql.NVarChar(64), token)
+    .input('sid', sql.UniqueIdentifier, sessionId || null).input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .input('vtid', sql.UniqueIdentifier, vesselTypeId || null).input('vc', sql.NVarChar(30), str(vesselCode, 30))
+    .query(`INSERT INTO [dbo].[DispatchBox]([BoxNo],[QrToken],[SessionId],[DispatchOrderId],[VesselTypeId],[VesselCode])
+            OUTPUT INSERTED.[BoxId] VALUES (@no,@qr,@sid,@doid,@vtid,@vc)`);
+  return { boxId: res.recordset[0].BoxId, boxNo, qrToken: token };
+}
+
+export async function addBoxLine(boxId, { itemNo, description, qty, weight } = {}) {
+  const pool = await appPool();
+  await pool.request()
+    .input('bid', sql.UniqueIdentifier, boxId).input('itm', sql.NVarChar(30), str(itemNo, 30))
+    .input('desc', sql.NVarChar(250), str(description, 250)).input('q', sql.Decimal(18, 4), num(qty)).input('w', sql.Decimal(18, 4), num(weight))
+    .query(`INSERT INTO [dbo].[DispatchBoxLine]([BoxId],[ItemNo],[Description],[Qty],[Weight]) VALUES (@bid,@itm,@desc,@q,@w)`);
+  return { ok: true };
+}
+
+export async function removeBoxLine(boxLineId) {
+  const pool = await appPool();
+  const r = await pool.request().input('id', sql.UniqueIdentifier, boxLineId).query(`DELETE FROM [dbo].[DispatchBoxLine] WHERE [BoxLineId]=@id`);
+  return { deleted: r.rowsAffected[0] || 0 };
+}
+
+export async function getBox(boxId) {
+  const pool = await appPool();
+  const b = await pool.request().input('id', sql.UniqueIdentifier, boxId).query(`SELECT * FROM [dbo].[DispatchBox] WHERE [BoxId]=@id`);
+  if (!b.recordset.length) return null;
+  const lines = await pool.request().input('id', sql.UniqueIdentifier, boxId).query(`SELECT * FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id ORDER BY [CreatedAt]`);
+  return { ...b.recordset[0], lines: lines.recordset };
+}
+
+/** Checker confirms + closes a box; generates its QR (encodes the unique QrToken). */
+export async function closeBox(boxId, { checkerUserId, checkerName, grossWeight } = {}, user = {}) {
+  const pool = await appPool();
+  const res = await pool.request()
+    .input('id', sql.UniqueIdentifier, boxId)
+    .input('cid', sql.NVarChar(100), str(checkerUserId, 100)).input('cn', sql.NVarChar(200), str(checkerName, 200))
+    .input('gw', sql.Decimal(18, 4), num(grossWeight))
+    .input('uid', sql.NVarChar(100), str(user.userId, 100)).input('un', sql.NVarChar(200), str(user.userName, 200))
+    .query(`UPDATE [dbo].[DispatchBox]
+            SET [Status]='closed',[CheckedByUserId]=@cid,[CheckedByName]=@cn,[CheckedAt]=GETUTCDATE(),
+                [GrossWeight]=@gw,[ClosedByUserId]=@uid,[ClosedByName]=@un,[ClosedAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+            WHERE [BoxId]=@id AND [Status]='open'`);
+  if (!res.rowsAffected[0]) { const e = new Error('Box is not open'); e.code = 'INVALID'; throw e; }
+  const box = await getBox(boxId);
+  const qrImage = await QRCode.toDataURL(box.QrToken, { margin: 1, width: 240 });
+  return { box, qrImage };
+}
+
+/** Resolve a scanned QR to its box + item list (unique reference). */
+export async function getBoxByQr(qrToken) {
+  const pool = await appPool();
+  const b = await pool.request().input('qr', sql.NVarChar(64), String(qrToken)).query(`
+    SELECT b.*, o.[DispatchNo], o.[OrderNo], o.[CustomerName], o.[Company]
+    FROM [dbo].[DispatchBox] b JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=b.[DispatchOrderId]
+    WHERE b.[QrToken]=@qr`);
+  if (!b.recordset.length) return null;
+  const lines = await pool.request().input('id', sql.UniqueIdentifier, b.recordset[0].BoxId)
+    .query(`SELECT [ItemNo],[Description],[Qty],[Weight] FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id`);
+  return { ...b.recordset[0], lines: lines.recordset };
+}
+
+/** Finish packing: close session, mark parts + order packed. (BC fireback = TODO.) */
+export async function completePacking(dispatchOrderId) {
+  const pool = await appPool();
+  await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`UPDATE [dbo].[DispatchPackingSession] SET [Status]='closed',[UpdatedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid AND [Status]='open'`);
+  await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`UPDATE [dbo].[DispatchOrderPart] SET [Packed]=1,[PackedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid AND [Active]=1`);
+  const r = await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+    .query(`UPDATE [dbo].[DispatchOrder] SET [Packed]=1,[Status]='packed',[UpdatedAt]=GETUTCDATE()
+            WHERE [DispatchOrderId]=@doid AND [Status] IN ('assembled','packing')`);
+  return { packed: r.rowsAffected[0] || 0 };
 }

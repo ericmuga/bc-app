@@ -146,3 +146,64 @@ export async function listAssemblers(_req, res) {
   try { ok(res, await Dispatch.listUsersByRole('packer')); }
   catch (e) { err(res, e); }
 }
+
+// ── Packing / boxing ─────────────────────────────────────────────────────────
+export async function listPacking(req, res) {
+  try { ok(res, await Dispatch.listForPacking(assemblyUser(req))); }
+  catch (e) { err(res, e); }
+}
+export async function vesselTypes(_req, res) {
+  try { ok(res, await Dispatch.listVesselTypes()); }
+  catch (e) { err(res, e); }
+}
+export async function listCheckers(_req, res) {
+  try { ok(res, await Dispatch.listUsersByRole('checker')); }
+  catch (e) { err(res, e); }
+}
+export async function getPackingOrder(req, res) {
+  try {
+    const o = await Dispatch.getPackingOrder(req.params.id);
+    if (!o) return res.status(404).json({ error: 'Order not found' });
+    ok(res, o);
+  } catch (e) { err(res, e); }
+}
+export async function startPackingSession(req, res) {
+  try {
+    const { checkerUserId, checkerName } = req.body || {};
+    const sessionId = await Dispatch.startOrGetPackingSession(
+      req.params.id,
+      { userId: req.user.userId, name: req.user.userName },
+      { userId: checkerUserId, name: checkerName },
+    );
+    ok(res, { sessionId });
+  } catch (e) { err(res, e, 400); }
+}
+export async function openBox(req, res) {
+  try {
+    const { sessionId, vesselTypeId, vesselCode } = req.body || {};
+    ok(res, await Dispatch.openBox(sessionId, req.params.id, { vesselTypeId, vesselCode }));
+  } catch (e) { err(res, e, 400); }
+}
+export async function addBoxLine(req, res) {
+  try { ok(res, await Dispatch.addBoxLine(req.params.boxId, req.body)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function removeBoxLine(req, res) {
+  try { ok(res, await Dispatch.removeBoxLine(req.params.boxLineId)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function closeBox(req, res) {
+  try { ok(res, await Dispatch.closeBox(req.params.boxId, req.body, req.user)); }
+  catch (e) { err(res, e, e.code === 'INVALID' ? 409 : 400); }
+}
+export async function boxByQr(req, res) {
+  try {
+    const box = await Dispatch.getBoxByQr(req.params.qr);
+    if (!box) return res.status(404).json({ error: 'Box not found' });
+    ok(res, box);
+  } catch (e) { err(res, e); }
+}
+export async function completePacking(req, res) {
+  try { ok(res, await Dispatch.completePacking(req.params.id)); }
+  catch (e) { err(res, e, 400); }
+}
