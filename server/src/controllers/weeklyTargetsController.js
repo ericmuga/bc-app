@@ -10,13 +10,24 @@ const err = (res, e, code = 500) => {
   logger.error('weekly targets error', { error: e.message });
   res.status(code).json({ error: e.message });
 };
+const splitCSV = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : []);
 
 export async function list(req, res) {
   try {
     ok(res, await Targets.listTargets({
-      month: req.query.month, company: req.query.company,
-      customerNo: req.query.customerNo, q: req.query.q, limit: req.query.limit,
+      months: splitCSV(req.query.months), companies: splitCSV(req.query.companies),
+      q: req.query.q, limit: req.query.limit,
     }));
+  } catch (e) { err(res, e); }
+}
+
+/** GET /weekly-targets/summary — correct totals + drill-down subtotals (server aggregate). */
+export async function summary(req, res) {
+  try {
+    ok(res, await Targets.summarize(
+      { months: splitCSV(req.query.months), companies: splitCSV(req.query.companies), q: req.query.q },
+      req.query.groupBy || 'none',
+    ));
   } catch (e) { err(res, e); }
 }
 

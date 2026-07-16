@@ -8,6 +8,7 @@ const clean = (obj = {}) => {
 
 export const weeklyTargetsApi = {
   list:    (filter)      => api.get('/weekly-targets', { params: clean(filter) }),
+  summary: (filter)      => api.get('/weekly-targets/summary', { params: clean(filter) }),
   months:  ()           => api.get('/weekly-targets/months'),
   columns: ()           => api.get('/weekly-targets/columns'),
   upload:  (rows, mode, replaceMonths) => api.post('/weekly-targets/upload', { rows, mode, replaceMonths }),

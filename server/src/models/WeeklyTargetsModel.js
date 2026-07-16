@@ -84,27 +84,62 @@ export async function listMonths() {
   return res.recordset.map((x) => x.MonthNameSorted?.trim()).filter(Boolean);
 }
 
-/** List rows with optional filters. */
+// Shared WHERE builder for months[]/companies[]/q. Returns { where, bind }.
+function targetsFilter({ months, companies, q } = {}) {
+  const clauses = [];
+  const binders = [];
+  const addIn = (arr, prefix, type, col, xform = (v) => v) => {
+    const list = [...new Set((Array.isArray(arr) ? arr : (arr ? [arr] : [])).map((x) => String(x).trim()).filter(Boolean))];
+    if (!list.length) return;
+    clauses.push(`[${col}] IN (${list.map((_, i) => `@${prefix}${i}`).join(', ')})`);
+    binders.push((rq) => list.forEach((v, i) => rq.input(`${prefix}${i}`, type, xform(v))));
+  };
+  addIn(months, 'm', sql.Char(7), 'MonthNameSorted', (v) => String(v).slice(0, 7));
+  addIn(companies, 'co', sql.VarChar(10), 'Company');
+  if (q) {
+    clauses.push('([CustomerNo] LIKE @q OR [ItemNo] LIKE @q OR [Outlet] LIKE @q OR [ShipToCode] LIKE @q)');
+    binders.push((rq) => rq.input('q', sql.VarChar(50), `%${q}%`));
+  }
+  return { where: clauses.length ? 'WHERE ' + clauses.join(' AND ') : '', bind: (rq) => { binders.forEach((b) => b(rq)); return rq; } };
+}
+
+/** Detail rows (capped) for browsing — NOT for totals (use summarize). */
 export async function listTargets(filter = {}) {
   const pool = await whsDb.getPool();
-  const r = pool.request();
-  const where = [];
-  if (filter.month)      { r.input('month', sql.Char(7), String(filter.month).slice(0, 7)); where.push('[MonthNameSorted]=@month'); }
-  if (filter.company)    { r.input('company', sql.VarChar(10), filter.company); where.push('[Company]=@company'); }
-  if (filter.customerNo) { r.input('cust', sql.VarChar(20), filter.customerNo); where.push('[CustomerNo]=@cust'); }
-  if (filter.q) {
-    r.input('q', sql.VarChar(50), `%${filter.q}%`);
-    where.push('([CustomerNo] LIKE @q OR [ItemNo] LIKE @q OR [Outlet] LIKE @q OR [ShipToCode] LIKE @q)');
-  }
+  const { where, bind } = targetsFilter(filter);
   const limit = Math.min(Math.max(parseInt(filter.limit, 10) || 1000, 1), 20000);
-  const res = await r.query(`
+  const res = await bind(pool.request()).query(`
     SELECT TOP (${limit}) [CustomerNo],[ShipToCode],[ItemNo],[VolTargetKgs],[ValTarget],
            [Company],[Outlet],[MonthNameSorted],[WatermarkLoadedAt]
-    FROM ${TABLE}
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    FROM ${TABLE} ${where}
     ORDER BY [MonthNameSorted] DESC, [CustomerNo], [ItemNo]
   `);
   return res.recordset;
+}
+
+const GROUP_EXPR = {
+  Company: '[Company]', CustomerNo: '[CustomerNo]', ShipToCode: '[ShipToCode]',
+  ItemNo: '[ItemNo]', MonthNameSorted: '[MonthNameSorted]', Year: 'LEFT([MonthNameSorted],4)',
+};
+
+/** Server-side aggregate: correct grand totals + drill-down subtotals over ALL matching rows. */
+export async function summarize(filter = {}, groupBy = 'none') {
+  const pool = await whsDb.getPool();
+  const { where, bind } = targetsFilter(filter);
+  const t = (await bind(pool.request()).query(
+    `SELECT COUNT_BIG(*) c, SUM([VolTargetKgs]) vol, SUM([ValTarget]) val FROM ${TABLE} ${where}`
+  )).recordset[0];
+  const totals = { count: Number(t.c || 0), vol: Number(t.vol || 0), val: Number(t.val || 0) };
+
+  let groups = [];
+  const gexpr = GROUP_EXPR[groupBy];
+  if (gexpr) {
+    groups = (await bind(pool.request()).query(`
+      SELECT ${gexpr} AS [key], COUNT_BIG(*) AS [count], SUM([VolTargetKgs]) AS vol, SUM([ValTarget]) AS val
+      FROM ${TABLE} ${where} GROUP BY ${gexpr} ORDER BY SUM([ValTarget]) DESC
+    `)).recordset.map((g) => ({ key: g.key, count: Number(g.count || 0), vol: Number(g.vol || 0), val: Number(g.val || 0) }));
+  }
+  return { totals, groups };
 }
 
 export const TARGET_COLUMNS = ['CustomerNo', 'ShipToCode', 'ItemNo', 'VolTargetKgs', 'ValTarget', 'Company', 'Outlet', 'MonthNameSorted'];

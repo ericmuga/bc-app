@@ -16,27 +16,34 @@
 
     <!-- Filters -->
     <div class="wt-filters">
-      <div class="f"><label>Month</label>
-        <Select v-model="filter.month" :options="months" show-clear placeholder="All months" class="fi" @change="load" /></div>
-      <div class="f"><label>Company</label>
-        <Select v-model="filter.company" :options="companyOptions" show-clear placeholder="All" class="fi" @change="load" /></div>
+      <div class="f"><label>Months</label>
+        <MultiSelect v-model="filter.months" :options="months" display="chip" filter placeholder="All months" class="fi" /></div>
+      <div class="f"><label>Companies</label>
+        <MultiSelect v-model="filter.companies" :options="companyOptions" display="chip" placeholder="All" class="fi" /></div>
       <div class="f"><label>Search</label>
         <InputText v-model="filter.q" placeholder="Customer / item / ship-to…" class="fi" @keyup.enter="load" /></div>
       <div class="f"><label>Group by</label>
         <Select v-model="groupBy" :options="groupOptions" option-label="label" option-value="value" class="fi" /></div>
       <Button icon="pi pi-search" label="Run" size="small" :loading="loading" @click="load" />
       <div class="spacer" />
-      <Button icon="pi pi-file-excel" label="Export" size="small" severity="secondary" :disabled="!rows.length" @click="exportView" />
+      <Button icon="pi pi-file-excel" label="Export" size="small" severity="secondary" :disabled="!view.length" @click="exportView" />
     </div>
 
-    <!-- Totals -->
-    <div class="wt-totals">
-      <div class="tot"><span class="k">Rows</span><span class="v">{{ view.length.toLocaleString() }}</span></div>
+    <div v-if="!hasRun" class="run-prompt">
+      <i class="pi pi-filter" /> Set your months / companies / group-by, then click <strong>Run</strong>.
+    </div>
+
+    <!-- Totals (server-computed over ALL matching rows) -->
+    <div v-if="hasRun" class="wt-totals">
+      <div class="tot"><span class="k">Rows</span><span class="v">{{ totalRows.toLocaleString() }}</span></div>
       <div class="tot"><span class="k">Volume (Kgs)</span><span class="v">{{ fmt(totalVol) }}</span></div>
       <div class="tot"><span class="k">Value</span><span class="v">{{ fmt(totalVal) }}</span></div>
     </div>
+    <p v-if="groupBy === 'none' && totalRows > rows.length" class="cap-note">
+      Showing first {{ rows.length.toLocaleString() }} of {{ totalRows.toLocaleString() }} rows — totals above cover all rows. Use Group by or filters to drill down.
+    </p>
 
-    <DataTable :value="view" :loading="loading" paginator :rows="25" size="small" responsiveLayout="scroll" class="wt-table">
+    <DataTable v-if="hasRun" :value="view" :loading="loading" paginator :rows="25" size="small" responsiveLayout="scroll" class="wt-table">
       <template #empty><div class="empty">No targets for the current filters.</div></template>
       <template v-if="groupBy === 'none'">
         <Column field="MonthNameSorted" header="Month" style="width:90px" sortable />
@@ -135,6 +142,7 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
+import MultiSelect from 'primevue/multiselect'
 import InputText from 'primevue/inputtext'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
@@ -149,38 +157,48 @@ const groupOptions = [
   { label: 'Ship-to', value: 'ShipToCode' },
   { label: 'Item', value: 'ItemNo' },
   { label: 'Month', value: 'MonthNameSorted' },
+  { label: 'Year', value: 'Year' },
 ]
 
-const rows = ref([])
+const rows = ref([])                 // detail rows (capped) — only for groupBy 'none'
+const summaryData = ref({ totals: { count: 0, vol: 0, val: 0 }, groups: [] })
 const months = ref([])
 const loading = ref(false)
+const hasRun = ref(false)
 const error = ref(null)
 const groupBy = ref('none')
-const filter = reactive({ month: null, company: null, q: '', limit: 20000 })
+const filter = reactive({ months: [], companies: [], q: '' })
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 })
 const groupLabel = computed(() => groupOptions.find(g => g.value === groupBy.value)?.label || 'Group')
 
-const view = computed(() => {
-  if (groupBy.value === 'none') return rows.value
-  const map = new Map()
-  for (const r of rows.value) {
-    const key = r[groupBy.value] ?? '(blank)'
-    if (!map.has(key)) map.set(key, { key, count: 0, vol: 0, val: 0 })
-    const g = map.get(key); g.count++; g.vol += Number(r.VolTargetKgs || 0); g.val += Number(r.ValTarget || 0)
-  }
-  return [...map.values()].sort((a, b) => b.val - a.val)
+// Report view: detail rows for 'none', else the server-aggregated groups.
+const view = computed(() => (groupBy.value === 'none' ? rows.value : summaryData.value.groups))
+// Totals ALWAYS come from the server aggregate (correct over all rows, not the 20K cap).
+const totalRows = computed(() => summaryData.value.totals.count)
+const totalVol = computed(() => summaryData.value.totals.vol)
+const totalVal = computed(() => summaryData.value.totals.val)
+
+const filterParams = () => ({
+  months: filter.months.join(',') || undefined,
+  companies: filter.companies.join(',') || undefined,
+  q: filter.q || undefined,
 })
-const totalVol = computed(() => rows.value.reduce((t, r) => t + Number(r.VolTargetKgs || 0), 0))
-const totalVal = computed(() => rows.value.reduce((t, r) => t + Number(r.ValTarget || 0), 0))
 
 async function loadMonths() {
   try { months.value = (await weeklyTargetsApi.months()).data || [] } catch { /* non-fatal */ }
 }
 async function load() {
   loading.value = true; error.value = null
-  try { rows.value = (await weeklyTargetsApi.list(filter)).data || [] }
-  catch (e) { error.value = e.response?.data?.error || e.message }
+  try {
+    const [sum, detail] = await Promise.all([
+      weeklyTargetsApi.summary({ ...filterParams(), groupBy: groupBy.value }),
+      groupBy.value === 'none' ? weeklyTargetsApi.list({ ...filterParams(), limit: 20000 }) : Promise.resolve({ data: [] }),
+    ])
+    summaryData.value = sum.data || { totals: { count: 0, vol: 0, val: 0 }, groups: [] }
+    rows.value = detail.data || []
+    hasRun.value = true
+  } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { loading.value = false }
 }
 
@@ -290,7 +308,7 @@ function exportView() {
   XLSX.writeFile(wb, `weekly-targets-${filter.month || 'all'}.xlsx`)
 }
 
-loadMonths(); load()
+loadMonths() // only the month options; data loads on Run
 </script>
 
 <style scoped>
@@ -308,6 +326,8 @@ loadMonths(); load()
 .tot { display: flex; flex-direction: column; padding: 8px 14px; background: #eef2f7; border: 1px solid #dfe4ec; border-radius: 8px; min-width: 130px; }
 .tot .k { font-size: 11px; text-transform: uppercase; color: #667085; }
 .tot .v { font-size: 17px; font-weight: 800; color: #1e40af; }
+.cap-note { margin: -4px 0 0; font-size: 12px; color: #b45309; }
+.run-prompt { padding: 28px; text-align: center; color: #6b7280; background: #f8fafc; border: 1px dashed #d1d5db; border-radius: 10px; }
 .wt-table :deep(.num), .num { text-align: right; font-variant-numeric: tabular-nums; }
 .empty { padding: 28px; text-align: center; color: #9ca3af; }
 .muted { color: #6b7280; }
