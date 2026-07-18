@@ -226,18 +226,33 @@ export async function resolveRegistryCompanies(userId, requested) {
   return allowed.filter((c) => req.includes(c));
 }
 
-/** Assignment worklist: confirmed but not yet assigned to a packer. */
-export async function listUnassigned() {
+/** Assignment worklist: confirmed orders with ≥1 active part still unassigned,
+ *  each with its per-part assignment state (parts A/B/C/D go to assemblers). */
+export async function listForAssignment() {
   const pool = await appPool();
-  const r = await pool.request().query(`
-    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
-           o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt],
-           (SELECT COUNT(*) FROM [dbo].[DispatchOrderLine] l WHERE l.[DispatchOrderId]=o.[DispatchOrderId]) AS LineCount
+  const orders = (await pool.request().query(`
+    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],o.[CreatedAt],
+           SUM(CASE WHEN p.[Active]=1 THEN 1 ELSE 0 END) AS ActiveParts,
+           SUM(CASE WHEN p.[Active]=1 AND p.[AssignedToUserId] IS NOT NULL THEN 1 ELSE 0 END) AS AssignedParts
     FROM [dbo].[DispatchOrder] o
-    WHERE o.[Confirmed]=1 AND o.[Status]='confirmed'
+    JOIN [dbo].[DispatchOrderPart] p ON p.[DispatchOrderId]=o.[DispatchOrderId]
+    WHERE o.[Confirmed]=1 AND o.[Status] IN ('confirmed','assigned')
+    GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],o.[CreatedAt]
+    HAVING SUM(CASE WHEN p.[Active]=1 AND p.[AssignedToUserId] IS NULL THEN 1 ELSE 0 END) > 0
     ORDER BY o.[CreatedAt] DESC
-  `);
-  return r.recordset;
+  `)).recordset;
+  if (!orders.length) return [];
+  const parts = (await pool.request().query(`
+    SELECT p.[DispatchOrderId],p.[Part],p.[AssignedToUserId],p.[AssignedToName]
+    FROM [dbo].[DispatchOrderPart] p
+    JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=p.[DispatchOrderId]
+    WHERE p.[Active]=1 AND o.[Confirmed]=1 AND o.[Status] IN ('confirmed','assigned')
+    ORDER BY p.[Part]
+  `)).recordset;
+  const byOrder = {};
+  parts.forEach((p) => { (byOrder[p.DispatchOrderId] ||= []).push(p); });
+  orders.forEach((o) => { o.parts = byOrder[o.DispatchOrderId] || []; });
+  return orders;
 }
 
 /** Active users of a given role (e.g. packers), for the assignment picker. */
@@ -440,20 +455,33 @@ export async function importFromBc({ companies } = {}) {
   return { imported, skipped, byCompany, executeStatus: status };
 }
 
-/** Supervisor: assign a confirmed order to a packer. */
-export async function assign(dispatchOrderId, { userId, name } = {}) {
+/**
+ * Supervisor: assign ONE confirmed part to an assembler. Different parts of an
+ * order may go to different assemblers. Order flips to 'assigned' once every
+ * active part has an assignee.
+ */
+export async function assignPart(dispatchOrderId, part, { userId, name } = {}) {
   const pool = await appPool();
+  const P = String(part || '').toUpperCase();
   const res = await pool.request()
-    .input('doid',  sql.UniqueIdentifier, dispatchOrderId)
-    .input('uid',   sql.NVarChar(100), str(userId, 100))
-    .input('uname', sql.NVarChar(200), str(name, 200))
+    .input('doid', sql.UniqueIdentifier, dispatchOrderId).input('part', sql.Char(1), P)
+    .input('uid', sql.NVarChar(100), str(userId, 100)).input('un', sql.NVarChar(200), str(name, 200))
     .query(`
-      UPDATE [dbo].[DispatchOrder]
-      SET [AssignedToUserId]=@uid,[AssignedToName]=@uname,[AssignedAt]=GETUTCDATE(),
-          [Status]='assigned',[UpdatedAt]=GETUTCDATE()
-      WHERE [DispatchOrderId]=@doid AND [Status]='confirmed'
+      UPDATE [dbo].[DispatchOrderPart]
+      SET [AssignedToUserId]=@uid,[AssignedToName]=@un,[AssignedAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+      WHERE [DispatchOrderId]=@doid AND [Part]=@part AND [Active]=1 AND [Confirmed]=1
     `);
-  return res.rowsAffected[0] || 0;
+  if (!res.rowsAffected[0]) { const e = new Error(`Part ${P} is not confirmed/active`); e.code = 'INVALID'; throw e; }
+  const chk = await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId).query(`
+    SELECT SUM(CASE WHEN [Active]=1 AND [AssignedToUserId] IS NOT NULL THEN 1 ELSE 0 END) a,
+           SUM(CASE WHEN [Active]=1 THEN 1 ELSE 0 END) t
+    FROM [dbo].[DispatchOrderPart] WHERE [DispatchOrderId]=@doid`);
+  const a = Number(chk.recordset[0]?.a || 0), t = Number(chk.recordset[0]?.t || 0);
+  if (t > 0 && a >= t) {
+    await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
+      .query(`UPDATE [dbo].[DispatchOrder] SET [Status]='assigned',[UpdatedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid AND [Status]='confirmed'`);
+  }
+  return { assignedParts: a, activeParts: t, fullyAssigned: t > 0 && a >= t };
 }
 
 // ── Assembly (packer / assembler) ────────────────────────────────────────────
@@ -470,43 +498,52 @@ export async function listReturnReasons(company = 'FCL') {
  * Assembly worklist. If userId is given, only that assembler's orders; if null
  * (elevated viewer with no selection) all assigned/assembling orders.
  */
+/** Assembly worklist: orders with active parts assigned to `userId` (or any, when
+ *  null for an elevated viewer) that still have unassembled parts. */
 export async function listForAssembly(userId) {
   const pool = await appPool();
   const r = pool.request();
-  let filter = '';
-  if (userId) { r.input('uid', sql.NVarChar(100), String(userId)); filter = 'AND o.[AssignedToUserId]=@uid'; }
+  const mine = userId ? 'AND p.[AssignedToUserId]=@uid' : 'AND p.[AssignedToUserId] IS NOT NULL';
+  if (userId) r.input('uid', sql.NVarChar(100), String(userId));
   const res = await r.query(`
-    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],
-           o.[Status],o.[AssignedToUserId],o.[AssignedToName],o.[AssignedAt],
-           (SELECT COUNT(*) FROM [dbo].[DispatchOrderLine] l WHERE l.[DispatchOrderId]=o.[DispatchOrderId]) AS LineCount,
-           SUM(CASE WHEN p.[Assembled]=1 AND p.[Active]=1 THEN 1 ELSE 0 END) AS AssembledParts,
-           SUM(CASE WHEN p.[Active]=1 THEN 1 ELSE 0 END) AS ActiveParts
+    SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],
+           COUNT(*) AS MyParts,
+           SUM(CASE WHEN p.[Assembled]=1 THEN 1 ELSE 0 END) AS MyAssembled
     FROM [dbo].[DispatchOrder] o
-    LEFT JOIN [dbo].[DispatchOrderPart] p ON p.[DispatchOrderId]=o.[DispatchOrderId]
-    WHERE o.[Status] IN ('assigned','assembling') ${filter}
-    GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],
-             o.[Status],o.[AssignedToUserId],o.[AssignedToName],o.[AssignedAt]
-    ORDER BY o.[AssignedAt] DESC
+    JOIN [dbo].[DispatchOrderPart] p ON p.[DispatchOrderId]=o.[DispatchOrderId] AND p.[Active]=1 ${mine}
+    WHERE o.[Status] IN ('confirmed','assigned','assembling')
+    GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],o.[UpdatedAt]
+    HAVING SUM(CASE WHEN p.[Assembled]=0 THEN 1 ELSE 0 END) > 0
+    ORDER BY o.[UpdatedAt] DESC
   `);
   return res.recordset;
 }
 
-/** Assembly detail: header + lines (with assembled qty/weight/reason) + parts. */
-export async function getAssemblyOrder(dispatchOrderId) {
+/**
+ * Assembly detail. When `userId` is given, only that assembler's active parts
+ * (and their lines) are returned so the assembler works on their parts only.
+ */
+export async function getAssemblyOrder(dispatchOrderId, userId) {
   const pool = await appPool();
   const hdr = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
     .query(`SELECT * FROM [dbo].[DispatchOrder] WHERE [DispatchOrderId]=@id`);
   if (!hdr.recordset.length) return null;
-  const lines = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId).query(`
-    SELECT l.*, a.[AssembledQty], a.[AssembledWeight], a.[ReturnReasonCode], a.[ReturnReasonName],
-           a.[AssembledByName]
+  const linesRes = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId).query(`
+    SELECT l.*, a.[AssembledQty], a.[AssembledWeight], a.[ReturnReasonCode], a.[ReturnReasonName], a.[AssembledByName]
     FROM [dbo].[DispatchOrderLine] l
     LEFT JOIN [dbo].[DispatchAssemblyLine] a ON a.[LineId]=l.[LineId]
     WHERE l.[DispatchOrderId]=@id ORDER BY l.[Part], l.[SortOrder]
   `);
-  const parts = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
+  const partsRes = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
     .query(`SELECT * FROM [dbo].[DispatchOrderPart] WHERE [DispatchOrderId]=@id ORDER BY [Part]`);
-  return { ...hdr.recordset[0], lines: lines.recordset, parts: parts.recordset };
+  let parts = partsRes.recordset.filter((p) => p.Active);
+  let lines = linesRes.recordset;
+  if (userId) {
+    parts = parts.filter((p) => String(p.AssignedToUserId || '') === String(userId));
+    const mine = new Set(parts.map((p) => p.Part));
+    lines = lines.filter((l) => mine.has(l.Part));
+  }
+  return { ...hdr.recordset[0], lines, parts };
 }
 
 /** Upsert a line's assembled qty/weight/return-reason. Moves order to 'assembling'. */

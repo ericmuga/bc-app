@@ -22,9 +22,7 @@
           <div class="oc-top"><span class="oc-no">{{ o.DispatchNo }}</span><span class="oc-co">{{ o.Company }}</span></div>
           <div class="oc-cust">{{ o.CustomerName }}</div>
           <div class="oc-meta">
-            <span>{{ o.LineCount }} lines</span>
-            <span class="oc-parts">{{ o.AssembledParts }}/{{ o.ActiveParts }} parts</span>
-            <span class="oc-assignee">{{ o.AssignedToName }}</span>
+            <span class="oc-parts">{{ o.MyAssembled }}/{{ o.MyParts }} of my parts</span>
           </div>
         </button>
       </div>

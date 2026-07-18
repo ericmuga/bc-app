@@ -1114,6 +1114,9 @@ async function migrate(companyId) {
       [DispatchOrderId]   UNIQUEIDENTIFIER NOT NULL,
       [Part]              CHAR(1)          NOT NULL,
       [Active]            BIT              NOT NULL DEFAULT 1,
+      [AssignedToUserId]  NVARCHAR(100)    NULL,
+      [AssignedToName]    NVARCHAR(200)    NULL,
+      [AssignedAt]        DATETIME2        NULL,
       [Confirmed]         BIT              NOT NULL DEFAULT 0,
       [ConfirmedByUserId] NVARCHAR(100)    NULL,
       [ConfirmedByName]   NVARCHAR(200)    NULL,
@@ -1135,6 +1138,16 @@ async function migrate(companyId) {
     IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrderPart]') AND name='Active')
       ALTER TABLE [dbo].[DispatchOrderPart] ADD [Active] BIT NOT NULL DEFAULT 1
   `);
+  for (const [col, def] of [
+    ['AssignedToUserId', 'NVARCHAR(100) NULL'],
+    ['AssignedToName',   'NVARCHAR(200) NULL'],
+    ['AssignedAt',       'DATETIME2     NULL'],
+  ]) {
+    await run(`
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[DispatchOrderPart]') AND name='${col}')
+        ALTER TABLE [dbo].[DispatchOrderPart] ADD [${col}] ${def}
+    `);
+  }
   console.log('  [dbo].[DispatchOrderPart] OK');
 
   // ── [dbo].[DispatchAssemblyLine] (assembled qty per order line) ──────────────

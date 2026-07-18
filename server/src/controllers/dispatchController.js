@@ -83,7 +83,7 @@ export async function confirmPart(req, res) {
 
 // ── Assignment (supervisor → packer) ─────────────────────────────────────────
 export async function listUnassigned(_req, res) {
-  try { ok(res, await Dispatch.listUnassigned()); }
+  try { ok(res, await Dispatch.listForAssignment()); }
   catch (e) { err(res, e); }
 }
 
@@ -92,14 +92,20 @@ export async function listPackers(_req, res) {
   catch (e) { err(res, e); }
 }
 
+/** Assign one or more PARTS to assemblers. Body: { part, userId, name } or
+ *  { assignments: [{ part, userId, name }, ...] }. */
 export async function assign(req, res) {
   try {
-    const { userId, name } = req.body || {};
-    if (!userId) return res.status(400).json({ error: 'userId (packer) is required' });
-    const affected = await Dispatch.assign(req.params.id, { userId, name });
-    if (!affected) return res.status(409).json({ error: 'Order is not in a confirmed/assignable state' });
-    ok(res, { ok: true });
-  } catch (e) { err(res, e, 400); }
+    const body = req.body || {};
+    const items = Array.isArray(body.assignments) && body.assignments.length
+      ? body.assignments : [{ part: body.part, userId: body.userId, name: body.name }];
+    let last = null;
+    for (const it of items) {
+      if (!it.part || !it.userId) return res.status(400).json({ error: 'part and userId are required' });
+      last = await Dispatch.assignPart(req.params.id, it.part, { userId: it.userId, name: it.name });
+    }
+    ok(res, last || { ok: true });
+  } catch (e) { err(res, e, e.code === 'INVALID' ? 409 : 400); }
 }
 
 // ── Assembly ─────────────────────────────────────────────────────────────────
@@ -118,7 +124,7 @@ export async function listAssembly(req, res) {
 
 export async function getAssemblyOrder(req, res) {
   try {
-    const order = await Dispatch.getAssemblyOrder(req.params.id);
+    const order = await Dispatch.getAssemblyOrder(req.params.id, assemblyUser(req));
     if (!order) return res.status(404).json({ error: 'Order not found' });
     ok(res, order);
   } catch (e) { err(res, e); }
