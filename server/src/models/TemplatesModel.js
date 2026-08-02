@@ -10,8 +10,9 @@
  * MSDTC promotion across the linked server — same approach as CostingModel.
  */
 import { db, sql } from '../db/pool.js';
-import { wmsTable } from '../config/wms.js';
+import { wmsTable, useHttpBackend } from '../config/wms.js';
 import { syncTemplateLineToRecipeData, replaceRecipeDataForTemplate } from '../services/costingSync.js';
+import * as wmsApi from '../services/wmsRecipeClient.js';
 
 const HDR = wmsTable('template_header');
 const LIN = wmsTable('template_lines');
@@ -71,6 +72,7 @@ function bindRow(request, row, types) {
  * @param {Object} filter { q, blocked, limit }
  */
 export async function listHeaders(filter = {}) {
+  if (useHttpBackend()) return wmsApi.listHeaders(filter);
   const pool = await db.getPool();
   const r = pool.request();
   const where = [];
@@ -115,6 +117,7 @@ export async function getHeaderByNo(templateNo) {
 
 /** Full template = header + its lines. */
 export async function getTemplate(templateNo) {
+  if (useHttpBackend()) return wmsApi.getTemplate(templateNo).catch((e) => { if (e.status === 404) return null; throw e; });
   const header = await getHeaderByNo(templateNo);
   if (!header) return null;
   const lines = await listLines(templateNo);
@@ -122,6 +125,7 @@ export async function getTemplate(templateNo) {
 }
 
 export async function createHeader(body) {
+  if (useHttpBackend()) return wmsApi.createHeader(body);
   const row = pick(body, HDR_COLS);
   if (!row.template_no) throw new Error('template_no is required');
   if (!row.template_name) throw new Error('template_name is required');
@@ -142,6 +146,7 @@ export async function createHeader(body) {
 }
 
 export async function updateHeader(id, body) {
+  if (useHttpBackend()) return wmsApi.updateHeader(id, body);
   const row = pick(body, HDR_COLS);
   const cols = Object.keys(row);
   if (!cols.length) return 0;
@@ -158,6 +163,7 @@ export async function updateHeader(id, body) {
 
 /** Delete a header and all its lines (by template_no). */
 export async function deleteTemplate(id) {
+  if (useHttpBackend()) return wmsApi.deleteTemplate(id);
   const header = await getHeaderById(id);
   if (!header) return { header: 0, lines: 0 };
   const pool = await db.getPool();
@@ -175,6 +181,7 @@ export async function deleteTemplate(id) {
 
 // ── Lines ────────────────────────────────────────────────────────────────────
 export async function listLines(templateNo) {
+  if (useHttpBackend()) return wmsApi.listLines(templateNo);
   const pool = await db.getPool();
   const r = pool.request();
   r.input('no', STR(50), templateNo);
@@ -187,6 +194,7 @@ export async function listLines(templateNo) {
 }
 
 export async function createLine(body) {
+  if (useHttpBackend()) return wmsApi.createLine(body);
   const row = pick(body, LIN_COLS);
   if (!row.template_no) throw new Error('template_no is required');
   if (!row.item_code) throw new Error('item_code is required');
@@ -213,6 +221,7 @@ async function getLineById(id) {
 }
 
 export async function updateLine(id, body) {
+  if (useHttpBackend()) return wmsApi.updateLine(id, body);
   const row = pick(body, LIN_COLS);
   const cols = Object.keys(row);
   if (!cols.length) return 0;
@@ -233,6 +242,7 @@ export async function updateLine(id, body) {
 }
 
 export async function deleteLine(id) {
+  if (useHttpBackend()) return wmsApi.deleteLine(id);
   const pool = await db.getPool();
   const r = pool.request();
   r.input('id', sql.BigInt, Number(id));
@@ -247,6 +257,7 @@ export async function deleteLine(id) {
  */
 export async function replaceLines(templateNo, rows) {
   if (!templateNo) throw new Error('template_no is required');
+  if (useHttpBackend()) return wmsApi.replaceLines(templateNo, rows);
   const pool = await db.getPool();
 
   const del = pool.request();

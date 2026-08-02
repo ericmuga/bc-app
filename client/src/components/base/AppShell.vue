@@ -22,19 +22,6 @@
         </button>
       </div>
 
-      <!-- Company switcher -->
-      <div class="company-switcher">
-        <label class="section-label">Company</label>
-        <Select
-          :model-value="company.currentCompanyId"
-          :options="companyOptions"
-          option-label="label"
-          option-value="value"
-          class="company-select"
-          @update:model-value="company.switchCompany($event)"
-        />
-      </div>
-
       <!-- Role switcher — global admins only (UI preview / impersonation) -->
       <div v-if="auth.isGlobalAdmin" class="role-switcher">
         <label class="section-label">View as</label>

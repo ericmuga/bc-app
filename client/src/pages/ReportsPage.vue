@@ -228,21 +228,22 @@
       <DataTable :value="drawerRows" :loading="drawerLoading" :dataKey="drawerDocField"
         size="small" row-hover class="drawer-table">
         <template #empty><div class="table-empty">No documents</div></template>
-        <Column :field="drawerDocField" :header="drawerDocField === 'OrderNo' ? 'Order No' : 'Invoice No'" style="width:150px">
+        <Column field="Company" header="Co." style="width:60px" />
+        <Column field="DocNo" header="Document" style="width:140px">
           <template #body="{ data }">
-            <span class="mono link" @click="openScanFromDrawer(data)">{{ data[drawerDocField] }}</span>
+            <span class="mono link" @click="openScanFromDrawer(data)">{{ data.DocNo }}</span>
           </template>
         </Column>
         <Column field="CustomerName" header="Customer" />
         <Column field="OrderDate"    header="Date"   style="width:100px">
           <template #body="{ data }">{{ fmtDay(data.OrderDate) }}</template>
         </Column>
-        <Column field="Status"       header="Status" style="width:110px">
+        <Column field="Status"       header="Type" style="width:110px">
           <template #body="{ data }"><StatusBadge :status="data.Status" /></template>
         </Column>
         <Column header="" style="width:90px">
           <template #body="{ data }">
-            <Button icon="pi pi-list" text size="small" @click="loadLines(data[drawerDocField])" v-tooltip="'View lines'" />
+            <Button icon="pi pi-list" text size="small" @click="loadLines(data)" v-tooltip="'View lines'" />
           </template>
         </Column>
       </DataTable>
@@ -274,9 +275,12 @@ import Skeleton   from 'primevue/skeleton'
 import { useAuthStore } from '@/stores/auth.js'
 import StatusBadge   from '@/components/base/StatusBadge.vue'
 import DocumentLines from '@/components/base/DocumentLines.vue'
-import { ordersApi, invoicesApi } from '@/services/api.js'
+import { bcReportsApi } from '@/services/bcReports.js'
 import { exportCsv, todayStr } from '@/utils/exportCsv.js'
 import { canAccessInvoices, canAccessOrders } from '@/lib/access.js'
+
+// BC reads require a date window — default to the current month.
+function monthStart() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1) }
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -287,8 +291,8 @@ const tab = ref('summary')
 // ── Summary tab state ───────────────────────────────────────────────────────
 const source   = ref('orders')
 const groupBy  = ref('CustomerNo')
-const dateFrom = ref(null)
-const dateTo   = ref(null)
+const dateFrom = ref(monthStart())
+const dateTo   = ref(new Date())
 const rows     = ref([])
 const loading  = ref(false)
 
@@ -303,8 +307,6 @@ const groupOptions = [
 ]
 
 const groupLabel = computed(() => groupOptions.find(o => o.value === groupBy.value)?.label ?? groupBy.value)
-const api        = computed(() => source.value === 'orders' ? ordersApi : invoicesApi)
-const docNoField = computed(() => source.value === 'orders' ? 'OrderNo' : 'InvoiceNo')
 const canViewOrderDocs = computed(() => canAccessOrders(auth.user?.role))
 const canViewInvoiceDocs = computed(() => canAccessInvoices(auth.user?.role))
 const canDrillSource = computed(() => source.value === 'orders' ? canViewOrderDocs.value : canViewInvoiceDocs.value)
@@ -318,13 +320,13 @@ const maxAmount    = computed(() => Math.max(...rows.value.map(r => +r.TotalLine
 async function load(refresh = false) {
   loading.value = true
   try {
-    const params = {
-      groupBy: groupBy.value,
-      refresh: refresh ? 1 : 0,
-      ...(dateFrom.value ? { dateFrom: fmtParam(dateFrom.value) } : {}),
-      ...(dateTo.value   ? { dateTo:   fmtParam(dateTo.value) }   : {}),
-    }
-    const { data } = await api.value.summary(params)
+    const { data } = await bcReportsApi.salesSummary({
+      source:   source.value,
+      groupBy:  groupBy.value,
+      dateFrom: fmtParam(dateFrom.value),
+      dateTo:   fmtParam(dateTo.value),
+      refresh:  refresh ? 1 : 0,
+    })
     rows.value = data
   } catch (err) {
     console.error(err)
@@ -334,14 +336,14 @@ async function load(refresh = false) {
 }
 
 function clearFilters() {
-  dateFrom.value = null
-  dateTo.value   = null
+  dateFrom.value = monthStart()
+  dateTo.value   = new Date()
   rows.value     = []
 }
 
 // ── Analysis tab state ──────────────────────────────────────────────────────
-const analysisFrom     = ref(null)
-const analysisTo       = ref(null)
+const analysisFrom     = ref(monthStart())
+const analysisTo       = ref(new Date())
 const analysisLoading  = ref(false)
 const analysisOrders   = ref([])
 const analysisInvoices = ref([])
@@ -365,15 +367,15 @@ async function loadAnalysis(refresh = false) {
   analysisOrders.value  = []
   analysisInvoices.value = []
   try {
-    const params = {
-      groupBy: analysisGroupBy.value,
-      refresh: refresh ? 1 : 0,
-      ...(analysisFrom.value ? { dateFrom: fmtParam(analysisFrom.value) } : {}),
-      ...(analysisTo.value   ? { dateTo:   fmtParam(analysisTo.value) }   : {}),
+    const base = {
+      groupBy:  analysisGroupBy.value,
+      dateFrom: fmtParam(analysisFrom.value),
+      dateTo:   fmtParam(analysisTo.value),
+      refresh:  refresh ? 1 : 0,
     }
     const [ordersRes, invoicesRes] = await Promise.all([
-      ordersApi.summary(params),
-      invoicesApi.summary(params),
+      bcReportsApi.salesSummary({ ...base, source: 'orders' }),
+      bcReportsApi.salesSummary({ ...base, source: 'invoices' }),
     ])
     analysisOrders.value   = ordersRes.data
     analysisInvoices.value = invoicesRes.data
@@ -385,8 +387,8 @@ async function loadAnalysis(refresh = false) {
 }
 
 function clearAnalysis() {
-  analysisFrom.value     = null
-  analysisTo.value       = null
+  analysisFrom.value     = monthStart()
+  analysisTo.value       = new Date()
   analysisOrders.value   = []
   analysisInvoices.value = []
   loadAnalysis()
@@ -397,81 +399,63 @@ const drawerVisible  = ref(false)
 const drawerRows     = ref([])
 const drawerLoading  = ref(false)
 const selectedGroup  = ref('')
-const drawerDocField = ref('OrderNo')
+const drawerDocField = ref('DocNo')       // BC documents key on DocNo
+const drawerSource   = ref('orders')      // which BC source the drawer is showing
 const currentDrillLabel = ref('')
 const linesDocNo     = ref(null)
 const currentLines   = ref([])
 const linesLoading   = ref(false)
 
-const groupParamMap = {
-  CustomerNo:      'customerNo',
-  CustomerName:    'q',
-  SalespersonCode: 'salesperson',
-  RouteCode:       'route',
-  SectorCode:      'sector',
-  OrderDate:       'dateFrom',
-}
-
 async function drillDown(groupKey) {
   currentDrillLabel.value = groupLabel.value
-  drawerDocField.value    = docNoField.value
-  await openDrawer(groupKey, groupBy.value, api.value, dateFrom.value, dateTo.value)
+  await openDrawer(groupKey, groupBy.value, source.value, dateFrom.value, dateTo.value)
 }
 
 async function drillDownAnalysis(groupKey, sourceType) {
-  const labelMap = { SalespersonCode: 'Salesperson', RouteCode: 'Route', SectorCode: 'Sector' }
+  const labelMap = { SalespersonCode: 'Salesperson', RouteCode: 'Route', SectorCode: 'Sector', PostingGroup: 'Posting Group' }
   currentDrillLabel.value = labelMap[analysisGroupBy.value] ?? analysisGroupBy.value
-  drawerDocField.value    = sourceType === 'orders' ? 'OrderNo' : 'InvoiceNo'
-  const apiSource         = sourceType === 'orders' ? ordersApi : invoicesApi
-  await openDrawer(groupKey, analysisGroupBy.value, apiSource, analysisFrom.value, analysisTo.value)
+  await openDrawer(groupKey, analysisGroupBy.value, sourceType, analysisFrom.value, analysisTo.value)
 }
 
-async function openDrawer(groupKey, dimension, apiSource, from, to) {
-  if ((apiSource === ordersApi && !canViewOrderDocs.value) || (apiSource === invoicesApi && !canViewInvoiceDocs.value)) return
+async function openDrawer(groupKey, dimension, sourceType, from, to) {
+  if ((sourceType === 'orders' && !canViewOrderDocs.value) || (sourceType === 'invoices' && !canViewInvoiceDocs.value)) return
+  drawerSource.value   = sourceType
   selectedGroup.value  = groupKey
   drawerVisible.value  = true
   drawerLoading.value  = true
   linesDocNo.value     = null
   currentLines.value   = []
   try {
-    const paramKey = groupParamMap[dimension] ?? 'q'
-    const params = {
-      [paramKey]: groupKey,
-      status: 'Confirmed',
-      ...(from ? { dateFrom: fmtParam(from) } : {}),
-      ...(to   ? { dateTo:   fmtParam(to) }   : {}),
-    }
-    if (dimension === 'OrderDate') params.dateTo = groupKey
-    const { data } = await apiSource.list(params)
+    const { data } = await bcReportsApi.salesDocuments({
+      source:   sourceType,
+      groupBy:  dimension,
+      groupKey,
+      dateFrom: fmtParam(from),
+      dateTo:   fmtParam(to),
+    })
     drawerRows.value = data
   } finally {
     drawerLoading.value = false
   }
 }
 
-async function loadLines(docNo) {
-  if ((drawerDocField.value === 'OrderNo' && !canViewOrderDocs.value) || (drawerDocField.value !== 'OrderNo' && !canViewInvoiceDocs.value)) return
+async function loadLines(row) {
+  const docNo   = typeof row === 'object' ? row.DocNo : row
+  const company = typeof row === 'object' ? row.Company : undefined
   linesDocNo.value   = docNo
   linesLoading.value = true
   currentLines.value = []
   try {
-    const apiSource  = drawerDocField.value === 'OrderNo' ? ordersApi : invoicesApi
-    const { data }   = await apiSource.get(docNo)
-    currentLines.value = data.lines
+    const { data } = await bcReportsApi.salesLines({ source: drawerSource.value, docNo, company })
+    currentLines.value = data
   } finally {
     linesLoading.value = false
   }
 }
 
+// Drill-down is BC-sourced: clicking a document shows its BC lines inline.
 function openScanFromDrawer(row) {
-  const no = row[drawerDocField.value]
-  if (drawerDocField.value === 'OrderNo') {
-    if (!canViewOrderDocs.value) return
-    router.push({ name: 'OrderScan',   query: { no } })
-  } else {
-    if (!canViewInvoiceDocs.value) return
-    router.push({ name: 'InvoiceScan', query: { no } })
-  }
+  loadLines(row)
 }
 
 // ── Exports ──────────────────────────────────────────────────────────────────

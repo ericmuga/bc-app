@@ -16,6 +16,23 @@ export const WMS_LINKED_SERVER = process.env.WMS_LINKED_SERVER || 'FCL-WMS';
 export const WMS_DB = process.env.WMS_DB || 'calibra';
 
 /**
+ * Recipe/costing backend selector.
+ *   'linked' → issue SQL through the FCL-WMS linked server (original behaviour)
+ *   'http'   → call the standalone WMS Recipe API (runs on the WMS box)
+ *
+ * Default is 'linked' so costing keeps working until the WMS Recipe API is
+ * actually deployed. Flip to 'http' once it is reachable at WMS_API_BASE_URL.
+ */
+export const COSTING_BACKEND =
+  String(process.env.COSTING_BACKEND || 'linked').toLowerCase() === 'http' ? 'http' : 'linked';
+export const useHttpBackend = () => COSTING_BACKEND === 'http';
+
+// Standalone WMS Recipe API (only used when COSTING_BACKEND=http).
+export const WMS_API_BASE_URL =
+  (process.env.WMS_API_BASE_URL || 'http://localhost:4100/api/recipes').replace(/\/+$/, '');
+export const WMS_API_KEY = process.env.WMS_API_KEY || '';
+
+/**
  * Per-company WMS databases on the same linked server.
  *   FCL → calibra      (slaughter / production)
  *   CM  → cml-calibra  (Choice Meats — identical RecipeData schema)

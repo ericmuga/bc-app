@@ -492,6 +492,75 @@ GROUP BY [G_L Account No_]</pre>
         </div>
       </details>
 
+      <!-- ── Sales Report Posting Groups ──────────────────────────────────────── -->
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('salesPg', loadSalesPgConfig, $event)">
+        <summary>
+          <i class="pi pi-sliders-h acc-icon" />
+          <span>Sales Report Posting Groups</span>
+          <span class="acc-count">{{ salesPgConfig.length }} group(s)</span>
+        </summary>
+        <div class="accordion-body">
+          <p class="text-muted text-sm">
+            Controls the <strong>By Posting Group</strong> sales report. Per posting group choose whether it counts toward
+            <strong>Volume</strong> and/or <strong>Value</strong>, and optionally a <strong>Report-under code</strong> to
+            consolidate it under another group (e.g. <code>B-VIENNA</code> &amp; <code>P-VENNA</code> → <code>CONTENT</code>).
+            The group code is the value shown as a report row (BC <code>[Posting Group]</code> after the leading <code>prefix-</code> is stripped).
+          </p>
+
+          <div v-if="editingSalesPg" class="builder-form" style="max-width:640px;margin-bottom:12px">
+            <div style="display:grid;grid-template-columns:1.2fr 1.2fr 70px;gap:8px;align-items:center">
+              <InputText v-model="salesPgForm.groupCode" placeholder="Group code (e.g. PETROL/DSL)" />
+              <InputText v-model="salesPgForm.globalCode" placeholder="Report under (blank = itself)" />
+              <InputNumber v-model="salesPgForm.sortOrder" :min="0" show-buttons fluid placeholder="Sort" />
+            </div>
+            <div style="display:flex;gap:20px;margin-top:10px">
+              <label style="display:flex;align-items:center;gap:6px">
+                <Checkbox v-model="salesPgForm.includeVolume" :binary="true" /> Include in Volume
+              </label>
+              <label style="display:flex;align-items:center;gap:6px">
+                <Checkbox v-model="salesPgForm.includeValue" :binary="true" /> Include in Value
+              </label>
+            </div>
+            <div class="schedule-actions" style="margin-top:8px">
+              <Button label="Save" icon="pi pi-save" size="small" @click="saveSalesPg" :loading="savingSalesPg" />
+              <Button label="Cancel" icon="pi pi-times" text size="small" @click="cancelSalesPg" />
+            </div>
+          </div>
+
+          <div class="builder-panel-head" style="margin-bottom:6px">
+            <span class="text-muted text-sm">{{ salesPgConfig.length }} group(s) configured</span>
+            <Button icon="pi pi-plus" text size="small" v-tooltip="'New group'" @click="newSalesPg" />
+          </div>
+
+          <DataTable :value="salesPgConfig" dataKey="ConfigId" size="small" responsive-layout="scroll">
+            <Column field="GroupCode"  header="Group Code"   style="min-width:150px" />
+            <Column field="GlobalCode" header="Report Under" style="min-width:140px">
+              <template #body="{ data }">{{ data.GlobalCode || '—' }}</template>
+            </Column>
+            <Column header="Volume" style="width:80px">
+              <template #body="{ data }">
+                <i :class="data.IncludeVolume ? 'pi pi-check text-green-500' : 'pi pi-times text-red-400'" />
+              </template>
+            </Column>
+            <Column header="Value" style="width:80px">
+              <template #body="{ data }">
+                <i :class="data.IncludeValue ? 'pi pi-check text-green-500' : 'pi pi-times text-red-400'" />
+              </template>
+            </Column>
+            <Column field="SortOrder" header="Sort" style="width:60px" />
+            <Column header="" style="width:80px">
+              <template #body="{ data }">
+                <div class="row-actions">
+                  <Button icon="pi pi-pencil" text size="small" @click="editSalesPg(data)" />
+                  <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deleteSalesPg(data)" />
+                </div>
+              </template>
+            </Column>
+          </DataTable>
+        </div>
+      </details>
+
       <!-- ── POS Setup ───────────────────────────────────────────────────────── -->
       <details class="admin-accordion"
                @toggle="onAccordionToggle('posSetup', loadPosSetup, $event)">
@@ -1498,6 +1567,39 @@ async function deleteCustPgMap(row) {
   catch (err) { error.value = err.response?.data?.error || err.message }
 }
 
+// ── Sales Posting Group Config state ──────────────────────────────────────────
+const salesPgConfig  = ref([])
+const editingSalesPg = ref(false)
+const savingSalesPg  = ref(false)
+function blankSalesPg() {
+  return { configId: null, groupCode: '', globalCode: '', includeVolume: true, includeValue: true, sortOrder: 0 }
+}
+const salesPgForm = ref(blankSalesPg())
+function newSalesPg()     { salesPgForm.value = blankSalesPg(); editingSalesPg.value = true }
+function cancelSalesPg()  { editingSalesPg.value = false }
+function editSalesPg(row) {
+  salesPgForm.value = {
+    configId: row.ConfigId, groupCode: row.GroupCode, globalCode: row.GlobalCode || '',
+    includeVolume: !!row.IncludeVolume, includeValue: !!row.IncludeValue, sortOrder: row.SortOrder,
+  }
+  editingSalesPg.value = true
+}
+async function loadSalesPgConfig() {
+  try { salesPgConfig.value = (await bcReportsApi.listSalesPgConfig()).data }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function saveSalesPg() {
+  savingSalesPg.value = true; error.value = ''
+  try { await bcReportsApi.saveSalesPgConfig(salesPgForm.value); await loadSalesPgConfig(); cancelSalesPg() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { savingSalesPg.value = false }
+}
+async function deleteSalesPg(row) {
+  error.value = ''
+  try { await bcReportsApi.deleteSalesPgConfig(row.ConfigId); await loadSalesPgConfig() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+
 // ── Templates state ───────────────────────────────────────────────────────────
 const templates        = ref([])
 const selectedTemplate = ref(null)
@@ -2424,6 +2526,7 @@ const LOADERS = {
   smtp:          loadSmtpData,
   templates:     loadTemplates,
   custPg:        loadCustPgMappings,
+  salesPg:       loadSalesPgConfig,
   posSetup:      loadPosSetup,
 }
 

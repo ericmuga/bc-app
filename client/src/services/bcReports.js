@@ -46,6 +46,17 @@ export const bcReportsApi = {
     : api.post('/bc-reports/cust-pg-mappings', data),
   deleteCustPgMapping: (mapId)   => api.delete(`/bc-reports/cust-pg-mappings/${mapId}`),
 
+  // /reports page — live BC (orders = Sales Orders, invoices = posted inv+cr.memo)
+  salesSummary:   (params) => api.get('/bc-reports/sales/summary',   { params }),
+  salesDocuments: (params) => api.get('/bc-reports/sales/documents', { params }),
+  salesLines:     (params) => api.get('/bc-reports/sales/lines',     { params }),
+
+  listSalesPgConfig:   ()        => api.get('/bc-reports/sales-pg-config'),
+  saveSalesPgConfig:   (data)    => data.configId
+    ? api.patch(`/bc-reports/sales-pg-config/${data.configId}`, data)
+    : api.post('/bc-reports/sales-pg-config', data),
+  deleteSalesPgConfig: (configId) => api.delete(`/bc-reports/sales-pg-config/${configId}`),
+
   blankRouteLines: (f) => api.get('/bc-reports/blank-route-lines', {
     params: {
       dateFrom:         f.dateFrom,

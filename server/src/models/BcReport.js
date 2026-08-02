@@ -564,6 +564,67 @@ function buildPaymentFilters(filters) {
   return clauses.join('\n        ');
 }
 
+/**
+ * Load the sales posting-group config into a Map keyed by UPPER(GroupCode).
+ * Each value: { globalCode, includeVolume, includeValue }.
+ */
+async function loadSalesPgConfig() {
+  const map = new Map();
+  try {
+    const appPool = await appDb.getPool();
+    const res = await appPool.request().query(`
+      SELECT [GroupCode], [GlobalCode], [IncludeVolume], [IncludeValue]
+      FROM [dbo].[SalesPostingGroupConfig]
+    `);
+    for (const r of res.recordset) {
+      map.set(String(r.GroupCode).trim().toUpperCase(), {
+        globalCode: r.GlobalCode ? String(r.GlobalCode).trim() : null,
+        includeVolume: r.IncludeVolume !== false && r.IncludeVolume !== 0,
+        includeValue: r.IncludeValue !== false && r.IncludeValue !== 0,
+      });
+    }
+  } catch (e) {
+    // Table not migrated yet on this deployment → apply no config (report still
+    // works). Run `node src/db/migrate.js <company…>` to enable it.
+    logger.warn('SalesPostingGroupConfig unavailable — posting-group config not applied', { error: e.message });
+  }
+  return map;
+}
+
+/**
+ * Apply the sales posting-group config to the posting-group matrix rows:
+ *   - remap GroupKey → GlobalCode (consolidates e.g. B-VIENNA & P-VENNA → CONTENT)
+ *   - zero Qty when IncludeVolume=0, zero Amount when IncludeValue=0
+ *   - drop rows that end up fully zeroed, then re-aggregate on the new key.
+ * Rows whose GroupKey has no config entry pass through unchanged.
+ */
+function applySalesPgConfig(rows, cfg) {
+  if (!cfg || !cfg.size) return rows;
+  const agg = new Map();
+  for (const row of rows) {
+    const key = String(row.GroupKey ?? '').trim().toUpperCase();
+    const c = cfg.get(key);
+    const groupKey = c?.globalCode || row.GroupKey;
+    const qty    = c && !c.includeVolume ? 0 : Number(row.Qty) || 0;
+    const amount = c && !c.includeValue  ? 0 : Number(row.Amount) || 0;
+    if (qty === 0 && amount === 0) continue;
+    const k = `${row.Company}${groupKey}${row.DocType}${row.NativePostingGroup ?? ''}`;
+    const cur = agg.get(k);
+    if (cur) {
+      cur.DocCount += Number(row.DocCount) || 0;
+      cur.Qty += qty;
+      cur.Amount += amount;
+    } else {
+      agg.set(k, {
+        Company: row.Company, GroupKey: groupKey, DocType: row.DocType,
+        NativePostingGroup: row.NativePostingGroup,
+        DocCount: Number(row.DocCount) || 0, Qty: qty, Amount: amount,
+      });
+    }
+  }
+  return Array.from(agg.values());
+}
+
 async function runBaseMatrixReport(reportType, filters) {
   const companies = resolveCompanies(filters.companies);
   const docTypes = filters.docTypes?.length
@@ -608,6 +669,12 @@ async function runBaseMatrixReport(reportType, filters) {
     companies,
     docTypes,
   });
+  // The posting-group report honours the configurable volume/value inclusion
+  // and "report-under" global-code remap (dbo.SalesPostingGroupConfig).
+  if (reportType === 'postingGroup') {
+    const cfg = await loadSalesPgConfig();
+    return applySalesPgConfig(result.recordset, cfg);
+  }
   return result.recordset;
 }
 
@@ -2027,6 +2094,58 @@ export async function deleteCustPgMapping(mapId) {
   await appPool.request()
     .input('mapId', sql.UniqueIdentifier, mapId)
     .query(`DELETE FROM [dbo].[CustPostingGroupMap] WHERE [MapId] = @mapId`);
+}
+
+// ── Sales Posting Group Config CRUD (app DB) ──────────────────────────────────
+// Drives the "By Posting Group" report's volume/value inclusion + global-code
+// consolidation. Keyed by the display GroupCode (the report row value).
+
+export async function listSalesPgConfig() {
+  const appPool = await appDb.getPool();
+  const result = await appPool.request().query(`
+    SELECT [ConfigId], [GroupCode], [GlobalCode], [IncludeVolume], [IncludeValue], [SortOrder]
+    FROM [dbo].[SalesPostingGroupConfig]
+    ORDER BY [SortOrder], [GroupCode]
+  `);
+  return result.recordset;
+}
+
+export async function saveSalesPgConfig({ configId, groupCode, globalCode, includeVolume, includeValue, sortOrder }) {
+  const appPool = await appDb.getPool();
+  const code = String(groupCode || '').trim().toUpperCase();
+  if (!code) throw new Error('groupCode is required');
+  const req = appPool.request()
+    .input('groupCode',     sql.NVarChar(100), code)
+    .input('globalCode',    sql.NVarChar(100), globalCode ? String(globalCode).trim() : null)
+    .input('includeVolume', sql.Bit,           includeVolume ? 1 : 0)
+    .input('includeValue',  sql.Bit,           includeValue ? 1 : 0)
+    .input('sortOrder',     sql.Int,           Number(sortOrder) || 0);
+
+  if (configId) {
+    req.input('configId', sql.UniqueIdentifier, configId);
+    await req.query(`
+      UPDATE [dbo].[SalesPostingGroupConfig]
+      SET [GroupCode]=@groupCode, [GlobalCode]=@globalCode,
+          [IncludeVolume]=@includeVolume, [IncludeValue]=@includeValue,
+          [SortOrder]=@sortOrder, [UpdatedAt]=GETUTCDATE()
+      WHERE [ConfigId]=@configId
+    `);
+    return { configId };
+  }
+  const r = await req.query(`
+    INSERT INTO [dbo].[SalesPostingGroupConfig]
+      ([GroupCode], [GlobalCode], [IncludeVolume], [IncludeValue], [SortOrder])
+    OUTPUT INSERTED.[ConfigId]
+    VALUES (@groupCode, @globalCode, @includeVolume, @includeValue, @sortOrder)
+  `);
+  return { configId: r.recordset[0].ConfigId };
+}
+
+export async function deleteSalesPgConfig(configId) {
+  const appPool = await appDb.getPool();
+  await appPool.request()
+    .input('configId', sql.UniqueIdentifier, configId)
+    .query(`DELETE FROM [dbo].[SalesPostingGroupConfig] WHERE [ConfigId]=@configId`);
 }
 
 // ── Customer Aging Report ─────────────────────────────────────────────────────

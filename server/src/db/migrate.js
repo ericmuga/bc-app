@@ -1025,6 +1025,44 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[CustPostingGroupMap] OK');
 
+  // ── [dbo].[SalesPostingGroupConfig] ─────────────────────────────────────────
+  // Drives the "By Posting Group" sales report (BcReport.js). One row per
+  // display posting group (the value shown as a report row, i.e. BC line
+  // [Posting Group] after the leading "prefix-" is stripped). Per group:
+  //   - IncludeVolume / IncludeValue  → zero that measure when 0
+  //   - GlobalCode                    → report the group UNDER this code
+  //     (e.g. B-VIENNA & P-VENNA → CONTENT); NULL/'' = report under itself.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='SalesPostingGroupConfig' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[SalesPostingGroupConfig] (
+      [ConfigId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [GroupCode]     NVARCHAR(100)    NOT NULL UNIQUE,
+      [GlobalCode]    NVARCHAR(100)    NULL,
+      [IncludeVolume] BIT              NOT NULL DEFAULT 1,
+      [IncludeValue]  BIT              NOT NULL DEFAULT 1,
+      [SortOrder]     INT              NOT NULL DEFAULT 0,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  // Seed the current settings (idempotent — only inserts a code that is absent).
+  await run(`
+    INSERT INTO [dbo].[SalesPostingGroupConfig] ([GroupCode],[GlobalCode],[IncludeVolume],[IncludeValue],[SortOrder])
+    SELECT v.GroupCode, v.GlobalCode, v.IncludeVolume, v.IncludeValue, v.SortOrder
+    FROM (VALUES
+      ('PETROL/DSL', NULL,      0, 0, 10),
+      ('PACKGNG',    NULL,      0, 1, 20),
+      ('PACKGN',     NULL,      0, 1, 21),
+      ('MISCPRK',    NULL,      0, 0, 30),
+      ('B-VIENNA',   'CONTENT', 1, 1, 40),
+      ('P-VENNA',    'CONTENT', 1, 1, 41)
+    ) v(GroupCode, GlobalCode, IncludeVolume, IncludeValue, SortOrder)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM [dbo].[SalesPostingGroupConfig] c WHERE c.[GroupCode] = v.GroupCode
+    )
+  `);
+  console.log('  [dbo].[SalesPostingGroupConfig] OK');
+
   // ══ Dispatch / Pick-and-Pack module ([dbo], global like Pos*) ═══════════════
   // Fulfilment pipeline off a paid POS order:
   //   pending → confirmed (4 parts) → assigned → assembled → packed → loaded.

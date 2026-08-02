@@ -12,8 +12,9 @@
  * linked server.
  */
 import { db, sql } from '../db/pool.js';
-import { wmsTable, resolveWmsDb } from '../config/wms.js';
+import { wmsTable, resolveWmsDb, useHttpBackend } from '../config/wms.js';
 import { syncRecipeDataToTemplateLine, replaceTemplateLinesForRecipe } from '../services/costingSync.js';
+import * as wmsApi from '../services/wmsRecipeClient.js';
 
 // Table name is resolved per-call so the same CRUD serves multiple WMS
 // company databases (FCL → calibra, CM → cml-calibra).
@@ -90,6 +91,7 @@ function bindRow(request, row) {
  * @param {number} [filter.limit]        default 2000
  */
 export async function listRows(filter = {}) {
+  if (useHttpBackend()) return wmsApi.listRows(filter);
   const company = filter.company;
   const pool = await db.getPool();
   const r = pool.request();
@@ -135,6 +137,7 @@ export async function listRows(filter = {}) {
 
 /** GET /api/costing/recipes — distinct recipe list (for filter dropdown / grouping). */
 export async function listRecipeCodes(company) {
+  if (useHttpBackend()) return wmsApi.listRecipeCodes(company);
   const pool = await db.getPool();
   const result = await pool.request().query(`
     SELECT recipe,
@@ -151,6 +154,7 @@ export async function listRecipeCodes(company) {
 
 /** GET /api/costing/processes — distinct process list. */
 export async function listProcesses(company) {
+  if (useHttpBackend()) return wmsApi.listProcesses(company);
   const pool = await db.getPool();
   const result = await pool.request().query(`
     SELECT DISTINCT Process FROM ${tbl(company)} WHERE Process IS NOT NULL ORDER BY Process
@@ -159,6 +163,7 @@ export async function listProcesses(company) {
 }
 
 export async function getById(id, company) {
+  if (useHttpBackend()) return wmsApi.getById(id, company);
   const pool = await db.getPool();
   const r = pool.request();
   r.input('id', sql.Int, Number(id));
@@ -172,6 +177,7 @@ export async function getById(id, company) {
  * across a linked server can be unreliable).
  */
 export async function insertRow(body, company) {
+  if (useHttpBackend()) return wmsApi.insertRow(body, company);
   const row = pick(body);
   // Required NOT NULL fields per the table DDL.
   for (const k of ['Process', 'output_item', 'output_item_uom', 'batch_size',
@@ -213,6 +219,7 @@ export async function insertRow(body, company) {
 
 /** Update one row by id. */
 export async function updateRow(id, body, company) {
+  if (useHttpBackend()) return wmsApi.updateRow(id, body, company);
   const row = pick(body);
   const cols = Object.keys(row);
   if (!cols.length) return 0;
@@ -240,6 +247,7 @@ export async function updateRow(id, body, company) {
 
 /** Delete one row by id. */
 export async function deleteRow(id, company) {
+  if (useHttpBackend()) return wmsApi.deleteRow(id, company);
   const pool = await db.getPool();
   const r = pool.request();
   r.input('id', sql.Int, Number(id));
@@ -249,6 +257,7 @@ export async function deleteRow(id, company) {
 
 /** Delete every input line of a recipe (group delete). */
 export async function deleteRecipe(recipe, company) {
+  if (useHttpBackend()) return wmsApi.deleteRecipe(recipe, company);
   const pool = await db.getPool();
   const r = pool.request();
   r.input('recipe', sql.NVarChar(255), recipe);
@@ -269,6 +278,7 @@ export async function bulkUpsert(rows, company) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { inserted: 0, updated: 0, errors: [] };
   }
+  if (useHttpBackend()) return wmsApi.bulkUpsert(rows, company);
   const pool = await db.getPool();
   let inserted = 0;
   let updated  = 0;
@@ -346,6 +356,7 @@ export async function replaceRecipes(rows, company) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { recipesReplaced: 0, deleted: 0, inserted: 0, errors: [] };
   }
+  if (useHttpBackend()) return wmsApi.replaceRecipes(rows, company);
   const pool = await db.getPool();
   const errors = [];
 

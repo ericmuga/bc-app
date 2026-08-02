@@ -88,12 +88,19 @@ router.get('/bc-reports/blank-route-lines',  ...canReport, reportCtrl.blankRoute
 router.get('/bc-reports/customer-aging',     ...canReport, reportCtrl.customerAging);
 router.get('/bc-reports/salesman-statement', ...canReport, reportCtrl.salesmanStatement);
 router.get('/bc-reports/cust-pg-mappings',   ...canReport, reportCtrl.listCustPgMappings);
+router.get('/bc-reports/sales-pg-config',    ...canReport, reportCtrl.listSalesPgConfig);
+router.get('/bc-reports/sales/summary',      ...canReport, reportCtrl.salesSummary);
+router.get('/bc-reports/sales/documents',    ...canReport, reportCtrl.salesDocuments);
+router.get('/bc-reports/sales/lines',        ...canReport, reportCtrl.salesLines);
 router.post('/bc-reports/cache/clear',       ...canReport, reportCtrl.clearCache);
 
 const adminOnly = [authMiddleware, requireRole(...ADMIN_ROLES)];
 router.post('/bc-reports/cust-pg-mappings',          ...adminOnly, reportCtrl.saveCustPgMapping);
 router.patch('/bc-reports/cust-pg-mappings/:mapId',  ...adminOnly, reportCtrl.saveCustPgMapping);
 router.delete('/bc-reports/cust-pg-mappings/:mapId', ...adminOnly, reportCtrl.deleteCustPgMapping);
+router.post('/bc-reports/sales-pg-config',            ...adminOnly, reportCtrl.saveSalesPgConfig);
+router.patch('/bc-reports/sales-pg-config/:configId', ...adminOnly, reportCtrl.saveSalesPgConfig);
+router.delete('/bc-reports/sales-pg-config/:configId', ...adminOnly, reportCtrl.deleteSalesPgConfig);
 router.get('/admin/users',                   ...adminOnly, adminCtrl.listUsers);
 router.patch('/admin/users/:userId',         ...adminOnly, adminCtrl.updateUser);
 router.get('/admin/settings/smtp',           ...adminOnly, adminCtrl.getSmtpSettings);

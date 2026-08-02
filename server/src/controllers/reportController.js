@@ -4,6 +4,7 @@
  * All routes require admin or analyst role (enforced in routes/index.js).
  */
 import * as BcReport from '../models/BcReport.js';
+import * as SalesBc from '../models/SalesReportBc.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 import { getOrSet, clearNamespace } from '../services/reportCache.js';
@@ -235,6 +236,99 @@ export async function deleteCustPgMapping(req, res) {
     return res.json({ message: 'Mapping deleted' });
   } catch (err) {
     logger.error('bc-reports/cust-pg-mappings DELETE error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Sales Posting Group Config (drives the By Posting Group report) ───────────
+/** GET /api/bc-reports/sales-pg-config */
+export async function listSalesPgConfig(_req, res) {
+  try {
+    return res.json(await BcReport.listSalesPgConfig());
+  } catch (err) {
+    logger.error('bc-reports/sales-pg-config GET error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** POST / PATCH /api/bc-reports/sales-pg-config[/:configId] */
+export async function saveSalesPgConfig(req, res) {
+  try {
+    const data = {
+      configId:      req.params.configId || null,
+      groupCode:     String(req.body.groupCode || '').trim().toUpperCase(),
+      globalCode:    req.body.globalCode != null ? String(req.body.globalCode).trim() : null,
+      includeVolume: req.body.includeVolume !== false && req.body.includeVolume !== 0,
+      includeValue:  req.body.includeValue !== false && req.body.includeValue !== 0,
+      sortOrder:     Number(req.body.sortOrder) || 0,
+    };
+    if (!data.groupCode) return res.status(400).json({ error: 'groupCode is required' });
+    const result = await BcReport.saveSalesPgConfig(data);
+    clearNamespace('bc-report-run');
+    return res.status(data.configId ? 200 : 201).json(result);
+  } catch (err) {
+    logger.error('bc-reports/sales-pg-config SAVE error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** DELETE /api/bc-reports/sales-pg-config/:configId */
+export async function deleteSalesPgConfig(req, res) {
+  try {
+    await BcReport.deleteSalesPgConfig(req.params.configId);
+    clearNamespace('bc-report-run');
+    return res.json({ message: 'Config deleted' });
+  } catch (err) {
+    logger.error('bc-reports/sales-pg-config DELETE error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── /reports page (live BC: orders = Sales Orders, invoices = posted inv+cr.memo) ─
+const VALID_SALES_SOURCES = ['orders', 'invoices'];
+const VALID_SALES_GROUPBY = ['CustomerNo', 'CustomerName', 'SalespersonCode', 'RouteCode', 'SectorCode', 'PostingGroup', 'OrderDate'];
+const splitCos = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : undefined);
+
+/** GET /api/bc-reports/sales/summary */
+export async function salesSummary(req, res) {
+  try {
+    const source = VALID_SALES_SOURCES.includes(req.query.source) ? req.query.source : 'orders';
+    const groupBy = VALID_SALES_GROUPBY.includes(req.query.groupBy) ? req.query.groupBy : 'CustomerNo';
+    const { dateFrom, dateTo } = req.query;
+    if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom and dateTo are required' });
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const key = { source, groupBy, dateFrom, dateTo, companies: splitCos(req.query.companies) };
+    const { value } = await getOrSet('bc-report-sales', key,
+      () => SalesBc.summary(key), { ttlMs: 15 * 60_000, refresh });
+    return res.json(value);
+  } catch (err) {
+    logger.error('bc-reports/sales/summary error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/bc-reports/sales/documents */
+export async function salesDocuments(req, res) {
+  try {
+    const source = VALID_SALES_SOURCES.includes(req.query.source) ? req.query.source : 'orders';
+    const groupBy = VALID_SALES_GROUPBY.includes(req.query.groupBy) ? req.query.groupBy : 'CustomerNo';
+    const { dateFrom, dateTo, groupKey } = req.query;
+    if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom and dateTo are required' });
+    return res.json(await SalesBc.documents({ source, groupBy, groupKey, dateFrom, dateTo, companies: splitCos(req.query.companies) }));
+  } catch (err) {
+    logger.error('bc-reports/sales/documents error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/bc-reports/sales/lines */
+export async function salesLines(req, res) {
+  try {
+    const source = VALID_SALES_SOURCES.includes(req.query.source) ? req.query.source : 'orders';
+    if (!req.query.docNo) return res.status(400).json({ error: 'docNo is required' });
+    return res.json(await SalesBc.lines({ source, docNo: req.query.docNo, company: req.query.company }));
+  } catch (err) {
+    logger.error('bc-reports/sales/lines error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 }
