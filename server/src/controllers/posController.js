@@ -1055,8 +1055,8 @@ export async function deleteCategory(req, res) {
 
 export async function listSetupItems(req, res) {
   try {
-    const { page, pageSize, q } = req.query;
-    ok(res, await Pos.listPosItems({ page, pageSize, q }));
+    const { page, pageSize, q, sortField, sortDir } = req.query;
+    ok(res, await Pos.listPosItems({ page, pageSize, q, sortField, sortDir }));
   } catch (e) { err(res, e); }
 }
 

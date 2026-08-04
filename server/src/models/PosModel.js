@@ -109,16 +109,25 @@ export async function listPosItems(opts = {}) {
     req.input('q', sql.NVarChar(200), `%${opts.q}%`);
     where = `WHERE [ItemNo] LIKE @q OR [Description] LIKE @q OR [Barcode] LIKE @q`;
   }
+  // Whitelisted server-side sort (defaults to SortOrder, Description).
+  const SORTABLE = {
+    ItemNo: '[ItemNo]', Description: '[Description]', CategoryCode: '[CategoryCode]',
+    UnitPrice: '[UnitPrice]', SortOrder: '[SortOrder]', IsActive: '[IsActive]',
+    UnitOfMeasure: '[UnitOfMeasure]', VatPostingGroup: '[VatPostingGroup]', TaxType: '[TaxType]',
+  };
+  const orderBy = SORTABLE[opts.sortField]
+    ? `${SORTABLE[opts.sortField]} ${String(opts.sortDir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}, [ItemNo]`
+    : `[SortOrder],[Description]`;
   const pg = pageArgs(opts);
   if (!pg) {
-    const r = await req.query(`SELECT ${cols} FROM [dbo].[PosItem] ${where} ORDER BY [SortOrder],[Description]`);
+    const r = await req.query(`SELECT ${cols} FROM [dbo].[PosItem] ${where} ORDER BY ${orderBy}`);
     return r.recordset;
   }
   const cnt = await req.query(`SELECT COUNT(*) AS n FROM [dbo].[PosItem] ${where}`);
   req.input('off', sql.Int, pg.offset).input('lim', sql.Int, pg.pageSize);
   const r = await req.query(`
     SELECT ${cols} FROM [dbo].[PosItem] ${where}
-    ORDER BY [SortOrder],[Description]
+    ORDER BY ${orderBy}
     OFFSET @off ROWS FETCH NEXT @lim ROWS ONLY`);
   return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }

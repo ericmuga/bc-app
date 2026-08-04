@@ -611,19 +611,22 @@ GROUP BY [G_L Account No_]</pre>
           </div>
 
           <div class="builder-panel-head" style="margin-bottom:6px">
-            <span class="text-muted text-sm">{{ boms.length }} recipe(s)</span>
+            <div class="list-search" style="flex:1">
+              <InputText v-model="bomSearch" placeholder="Filter by finished item or notes…" style="max-width:280px" />
+              <span class="text-muted text-sm">{{ filteredBoms.length }} of {{ boms.length }} recipe(s)</span>
+            </div>
             <Button icon="pi pi-plus" text size="small" v-tooltip="'New recipe'" @click="newBom" />
           </div>
 
-          <DataTable :value="boms" dataKey="BomId" size="small" responsive-layout="scroll">
-            <Column field="ItemNo" header="Finished Item" style="min-width:150px" />
-            <Column field="ComponentCount" header="Components" style="width:110px" />
-            <Column header="Active" style="width:80px">
+          <DataTable :value="filteredBoms" dataKey="BomId" size="small" responsive-layout="scroll" removableSort>
+            <Column field="ItemNo" header="Finished Item" sortable style="min-width:150px" />
+            <Column field="ComponentCount" header="Components" sortable style="width:110px" />
+            <Column field="IsActive" header="Active" sortable style="width:80px">
               <template #body="{ data }">
                 <i :class="data.IsActive ? 'pi pi-check text-green-500' : 'pi pi-times text-red-400'" />
               </template>
             </Column>
-            <Column field="Notes" header="Notes" style="min-width:160px">
+            <Column field="Notes" header="Notes" sortable style="min-width:160px">
               <template #body="{ data }">{{ data.Notes || '—' }}</template>
             </Column>
             <Column header="" style="width:80px">
@@ -771,14 +774,14 @@ GROUP BY [G_L Account No_]</pre>
                 <span class="text-muted text-sm">{{ thirdParties.length }} third party(ies)</span>
                 <Button icon="pi pi-plus" text size="small" v-tooltip="'New third party'" @click="newTp" />
               </div>
-              <DataTable :value="thirdParties" dataKey="ThirdPartyId" size="small" responsive-layout="scroll">
-                <Column field="Code"     header="Code"   style="width:100px" />
-                <Column field="Name"     header="Name"   style="min-width:180px" />
-                <Column field="ShopCode" header="Linked Shop" style="width:130px">
+              <DataTable :value="thirdParties" dataKey="ThirdPartyId" size="small" responsive-layout="scroll" removableSort>
+                <Column field="Code"     header="Code"   sortable style="width:100px" />
+                <Column field="Name"     header="Name"   sortable style="min-width:180px" />
+                <Column field="ShopCode" header="Linked Shop" sortable style="width:130px">
                   <template #body="{ data }">{{ data.ShopCode || '—' }}</template>
                 </Column>
-                <Column field="Notes"    header="Notes"  style="min-width:160px" />
-                <Column header="Active" style="width:65px">
+                <Column field="Notes"    header="Notes"  sortable style="min-width:160px" />
+                <Column field="IsActive" header="Active" sortable style="width:65px">
                   <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
                 </Column>
                 <Column header="" style="width:80px">
@@ -971,11 +974,11 @@ GROUP BY [G_L Account No_]</pre>
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosCategory=false" />
               </div>
             </div>
-            <DataTable :value="posCategories" dataKey="CategoryId" size="small">
-              <Column field="Code" header="Code" style="width:110px" />
-              <Column field="Name" header="Name" style="min-width:140px" />
-              <Column field="SortOrder" header="Sort" style="width:60px" />
-              <Column header="Active" style="width:70px">
+            <DataTable :value="posCategories" dataKey="CategoryId" size="small" removableSort>
+              <Column field="Code" header="Code" sortable style="width:110px" />
+              <Column field="Name" header="Name" sortable style="min-width:140px" />
+              <Column field="SortOrder" header="Sort" sortable style="width:60px" />
+              <Column field="IsActive" header="Active" sortable style="width:70px">
                 <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
               </Column>
               <Column header="" style="width:80px">
@@ -991,7 +994,7 @@ GROUP BY [G_L Account No_]</pre>
           </details>
 
           <!-- Items -->
-          <details class="pos-sub-accordion">
+          <details class="pos-sub-accordion" @toggle="onAccordionToggle('posItemsList', () => loadItems(1), $event)">
             <summary><i class="pi pi-box" /> POS Items <span class="acc-count-sm">{{ posItemsTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
@@ -1034,23 +1037,25 @@ GROUP BY [G_L Account No_]</pre>
               </div>
             </div>
             <div class="list-search">
-              <InputText v-model="posItemsQ" placeholder="Search no / description / barcode…" @keyup.enter="searchItems" />
+              <InputText v-model="posItemsQ" placeholder="Search no / description / barcode…"
+                @keyup.enter="searchItems" @input="onItemsSearchInput" />
               <Button icon="pi pi-search" size="small" text @click="searchItems" />
               <span class="text-muted text-sm">{{ posItemsTotal }} item(s)</span>
             </div>
             <DataTable :value="posItems" dataKey="ItemId" size="small" responsive-layout="scroll"
               :lazy="true" paginator :rows="POS_PAGE_SIZE" :totalRecords="posItemsTotal"
-              :first="(posItemsPage-1)*POS_PAGE_SIZE" :loading="posItemsLoading" @page="onItemsPage">
+              :first="(posItemsPage-1)*POS_PAGE_SIZE" :loading="posItemsLoading" @page="onItemsPage"
+              :sortField="posItemsSortField" :sortOrder="posItemsSortOrder" @sort="onItemsSort" removableSort>
               <Column header="" style="width:50px">
                 <template #body="{ data }">
                   <img v-if="data.ImageUrl" :src="data.ImageUrl" class="item-thumb-sm" alt="" />
                   <i v-else class="pi pi-image text-muted" />
                 </template>
               </Column>
-              <Column field="ItemNo"      header="No"          style="width:90px" />
-              <Column field="Description" header="Description" style="min-width:180px" />
-              <Column field="CategoryCode" header="Category"   style="width:110px" />
-              <Column field="UnitPrice"   header="Price"       style="width:100px;text-align:right">
+              <Column field="ItemNo"      header="No"          sortable style="width:90px" />
+              <Column field="Description" header="Description" sortable style="min-width:180px" />
+              <Column field="CategoryCode" header="Category"   sortable style="width:110px" />
+              <Column field="UnitPrice"   header="Price"       sortable style="width:100px;text-align:right">
                 <template #body="{ data }">{{ Number(data.UnitPrice||0).toFixed(2) }}</template>
               </Column>
               <Column field="EtimsItemCode"      header="eTIMS Code"  style="width:110px">
@@ -1059,20 +1064,20 @@ GROUP BY [G_L Account No_]</pre>
               <Column field="EtimsItemClassCode" header="eTIMS Class" style="width:120px">
                 <template #body="{ data }">{{ data.EtimsItemClassCode || '—' }}</template>
               </Column>
-              <Column field="TaxType"            header="Tax Type"    style="width:80px">
+              <Column field="TaxType"            header="Tax Type"    sortable style="width:80px">
                 <template #body="{ data }">{{ data.TaxType || '—' }}</template>
               </Column>
-              <Column field="UnitOfMeasure"      header="UoM"         style="width:75px">
+              <Column field="UnitOfMeasure"      header="UoM"         sortable style="width:75px">
                 <template #body="{ data }">{{ data.UnitOfMeasure || '—' }}</template>
               </Column>
-              <Column field="VatPostingGroup"    header="VAT Group"   style="width:100px">
+              <Column field="VatPostingGroup"    header="VAT Group"   sortable style="width:100px">
                 <template #body="{ data }">{{ data.VatPostingGroup || '—' }}</template>
               </Column>
               <Column field="VatPercent"         header="VAT %"       style="width:70px;text-align:right">
                 <template #body="{ data }">{{ Number(data.VatPercent||0).toFixed(0) }}%</template>
               </Column>
-              <Column field="SortOrder"   header="Sort"        style="width:55px" />
-              <Column header="Active" style="width:70px">
+              <Column field="SortOrder"   header="Sort"        sortable style="width:55px" />
+              <Column field="IsActive" header="Active" sortable style="width:70px">
                 <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
               </Column>
               <Column header="" style="width:80px">
@@ -1088,7 +1093,7 @@ GROUP BY [G_L Account No_]</pre>
           </details>
 
           <!-- Special Prices (date-bound offers) -->
-          <details class="pos-sub-accordion">
+          <details class="pos-sub-accordion" @toggle="onAccordionToggle('posSpecialPrices', () => loadSpecialPricesPaged(1), $event)">
             <summary><i class="pi pi-percentage" /> Special Prices (Offers) <span class="acc-count-sm">{{ spTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
@@ -1262,13 +1267,13 @@ GROUP BY [G_L Account No_]</pre>
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosPayType=false" />
               </div>
             </div>
-            <DataTable :value="posPaymentTypes" dataKey="TypeId" size="small">
-              <Column field="Code"         header="Code"  style="width:100px" />
-              <Column field="Name"         header="Name"  style="min-width:160px" />
-              <Column field="ShopCode"     header="Shop"  style="width:90px" />
-              <Column field="PaymentClass" header="Class" style="width:110px" />
-              <Column field="SortOrder"    header="Sort"  style="width:55px" />
-              <Column header="Active" style="width:70px">
+            <DataTable :value="posPaymentTypes" dataKey="TypeId" size="small" removableSort>
+              <Column field="Code"         header="Code"  sortable style="width:100px" />
+              <Column field="Name"         header="Name"  sortable style="min-width:160px" />
+              <Column field="ShopCode"     header="Shop"  sortable style="width:90px" />
+              <Column field="PaymentClass" header="Class" sortable style="width:110px" />
+              <Column field="SortOrder"    header="Sort"  sortable style="width:55px" />
+              <Column field="IsActive" header="Active" sortable style="width:70px">
                 <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
               </Column>
               <Column header="" style="width:80px">
@@ -1284,7 +1289,7 @@ GROUP BY [G_L Account No_]</pre>
           </details>
 
           <!-- Contacts -->
-          <details class="pos-sub-accordion">
+          <details class="pos-sub-accordion" @toggle="onAccordionToggle('posContactsList', () => loadContactsPaged(1), $event)">
             <summary><i class="pi pi-users" /> Walk-in Contacts <span class="acc-count-sm">{{ contactsTotal }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
@@ -1447,6 +1452,8 @@ import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
 import { posSetupApi, yieldApi, posApi } from '@/services/pos.js'
+import { useToast } from 'primevue/usetoast'
+const toast = useToast()
 import { dispatchApi } from '@/services/dispatch.js'
 import Dialog from 'primevue/dialog'
 import { useAuthStore } from '@/stores/auth.js'
@@ -1679,6 +1686,14 @@ async function deleteSalesPg(row) {
 
 // ── POS make-to-order BOMs state ──────────────────────────────────────────────
 const boms        = ref([])
+const bomSearch   = ref('')
+const filteredBoms = computed(() => {
+  const q = bomSearch.value.trim().toLowerCase()
+  if (!q) return boms.value
+  return boms.value.filter(b =>
+    String(b.ItemNo || '').toLowerCase().includes(q) ||
+    String(b.Notes || '').toLowerCase().includes(q))
+})
 const editingBom  = ref(false)
 const savingBom   = ref(false)
 // Full POS item catalogue for the BOM dropdowns (finished + components).
@@ -1738,14 +1753,28 @@ async function loadBoms() {
 }
 async function saveBom() {
   savingBom.value = true; error.value = ''
-  try { await posApi.saveBom(bomForm.value); await loadBoms(); cancelBom() }
-  catch (err) { error.value = err.response?.data?.error || err.message }
+  try {
+    await posApi.saveBom(bomForm.value); await loadBoms(); cancelBom()
+    toast.add({ severity: 'success', summary: 'Recipe saved', life: 2500 })
+  }
+  catch (err) {
+    error.value = err.response?.data?.error || err.message
+    toast.add({ severity: 'error', summary: 'Save failed', detail: error.value, life: 5000 })
+  }
   finally { savingBom.value = false }
 }
 async function deleteBom(row) {
+  if (!window.confirm(`Delete the recipe for ${row.ItemNo}? This cannot be undone.`)) return
   error.value = ''
-  try { await posApi.deleteBom(row.ItemNo); await loadBoms() }
-  catch (err) { error.value = err.response?.data?.error || err.message }
+  try {
+    const { data } = await posApi.deleteBom(row.ItemNo)
+    await loadBoms()
+    toast.add({ severity: 'success', summary: 'Recipe deleted', detail: `${row.ItemNo} (${data?.deleted ?? 0} removed)`, life: 2500 })
+  }
+  catch (err) {
+    error.value = err.response?.data?.error || err.message
+    toast.add({ severity: 'error', summary: 'Delete failed', detail: error.value, life: 5000 })
+  }
 }
 
 // ── Templates state ───────────────────────────────────────────────────────────
@@ -2097,16 +2126,32 @@ const posPaymentTypes    = ref([])
 // ── Server-side pagination for the heavy POS-setup lists (items / prices / contacts) ──
 const POS_PAGE_SIZE = 50
 const posItemsTotal = ref(0), posItemsPage = ref(1), posItemsQ = ref(''), posItemsLoading = ref(false)
+const posItemsSortField = ref(null), posItemsSortOrder = ref(1)  // 1 asc, -1 desc
 async function loadItems(page = posItemsPage.value) {
   posItemsLoading.value = true
   try {
-    const { data } = await posSetupApi.listItems({ page, pageSize: POS_PAGE_SIZE, q: posItemsQ.value || undefined })
+    const { data } = await posSetupApi.listItems({
+      page, pageSize: POS_PAGE_SIZE, q: posItemsQ.value || undefined,
+      sortField: posItemsSortField.value || undefined,
+      sortDir: posItemsSortField.value ? (posItemsSortOrder.value === -1 ? 'desc' : 'asc') : undefined,
+    })
     posItems.value = data.rows; posItemsTotal.value = data.total; posItemsPage.value = data.page
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { posItemsLoading.value = false }
 }
 function onItemsPage(e) { loadItems(Math.floor(e.first / POS_PAGE_SIZE) + 1) }
+function onItemsSort(e) {
+  posItemsSortField.value = e.sortField || null
+  posItemsSortOrder.value = e.sortOrder || 1
+  loadItems(1)
+}
 function searchItems() { loadItems(1) }
+// Debounced search-as-you-type (server-side filter).
+let itemSearchTimer = null
+function onItemsSearchInput() {
+  clearTimeout(itemSearchTimer)
+  itemSearchTimer = setTimeout(() => loadItems(1), 350)
+}
 
 // categories
 const editingPosCategory = ref(false)
@@ -2661,7 +2706,9 @@ async function loadPosSetup() {
     posShops.value        = shops.data
     posCategories.value   = cats.data
     posPaymentTypes.value = pts.data
-    await Promise.all([loadItems(1), loadSpecialPricesPaged(1), loadContactsPaged(1)])
+    // Heavy lists (items / special prices / contacts) are NOT loaded here — each
+    // loads on demand when its sub-section is expanded (see @toggle below), so the
+    // POS Setup panel opens instantly.
     // Print config + installed printers + eTIMS config + third parties (parallel)
     Promise.all([loadPrintCfg(), loadPrinters(), loadEtimsCfg(), loadThirdParties(), loadInvCfg()]).catch(() => {})
   } catch (e) { error.value = e.response?.data?.error || e.message }
