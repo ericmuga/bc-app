@@ -546,7 +546,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import DataTable from 'primevue/datatable'
@@ -562,6 +562,7 @@ import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
 const router = useRouter()
+const route  = useRoute()
 const toast  = useToast()
 const auth   = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
@@ -908,6 +909,28 @@ async function pdfPreviewConfirm() {
   finally { pdfPreview.value.confirming = false }
 }
 
+// After a payment is confirmed, show the receipt/tax-invoice PDF in the preview
+// modal (same modal as the print-confirmation flow). Closing it starts a fresh sale.
+const receiptMode = ref(false)
+function showReceiptPreview(oid, orderNoLabel) {
+  receiptMode.value = true
+  openPdfPreview({
+    header: `Receipt / Tax Invoice${orderNoLabel ? ' — ' + orderNoLabel : ''}`,
+    fetcher: () => posApi.fetchPdf(oid),
+    primaryLabel: 'Print',
+    primaryIcon:  'pi pi-print',
+    primarySeverity: 'success',
+    onConfirm: async () => {
+      try { await posApi.reprintOrder(oid); toast.add({ severity: 'success', summary: 'Sent to printer', life: 2000 }) }
+      catch (e) { toast.add({ severity: 'error', summary: 'Print failed', detail: e.response?.data?.error ?? e.message, life: 4000 }) }
+    },
+  })
+}
+// When the receipt modal closes, reset for the next sale.
+watch(() => pdfPreview.value.visible, (v) => {
+  if (!v && receiptMode.value) { receiptMode.value = false; newOrderAfterSuccess() }
+})
+
 async function printConfirmation() {
   if (!lines.value.length) return
   printingConfirm.value = true
@@ -970,9 +993,34 @@ function downloadPriceList() {
   })
 }
 
+// Load a parked/open order back into the cart (from POS Orders → resume).
+async function loadResumedOrder(oid) {
+  try {
+    const { data } = await posApi.getOrder(oid)
+    orderId.value = data.orderId || data.OrderId
+    orderNo.value = data.orderNo || data.OrderNo || ''
+    lines.value = (data.lines || []).map(l => ({
+      itemNo:     l.itemNo || l.ItemNo,
+      description: l.description || l.Description,
+      quantity:   Number(l.quantity ?? l.Quantity) || 0,
+      unitPrice:  Number(l.unitPrice ?? l.UnitPrice) || 0,
+      lineAmount: Number(l.lineAmount ?? l.LineAmount ?? ((l.quantity || 0) * (l.unitPrice || 0))) || 0,
+    }))
+    const cName = data.contactName || data.ContactName
+    if (cName) contactDraft.value = { name: cName, phone: data.contactPhone || '', pin: data.contactPin || '' }
+    toast.add({ severity: 'success', summary: 'Cart resumed', detail: `${orderNo.value} — add items and check out`, life: 2500 })
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not resume order', detail: e.response?.data?.error ?? e.message, life: 5000 })
+  }
+}
+
 onMounted(async () => {
   await loadShopsForAdmin()
   await loadCatalogue()
+  if (route.query.resume) {
+    await loadResumedOrder(route.query.resume)
+    router.replace({ path: '/pos' })   // clear the query so a refresh doesn't re-resume
+  }
 })
 
 // ── Order logic ───────────────────────────────────────────────────
@@ -1339,7 +1387,7 @@ async function payWithTenders() {
     successEtims.value     = data?.etims  ?? null
     successPrinted.value   = data?.printed === true
     splitTenders.value = []
-    successVisible.value   = true
+    showReceiptPreview(oid, orderNo.value)
   } catch (e) {
     payError.value = e.response?.data?.error ?? e.message
     checkoutVisible.value = true
@@ -1385,7 +1433,7 @@ async function doCheckout() {
     completedOrderNo.value = orderNo.value
     successEtims.value     = confirmRes?.etims  ?? null
     successPrinted.value   = confirmRes?.printed === true
-    successVisible.value   = true
+    showReceiptPreview(oid, orderNo.value)
   } catch (e) {
     payError.value = e.response?.data?.error ?? e.message
     checkoutVisible.value = true

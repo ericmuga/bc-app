@@ -329,9 +329,10 @@ async function load() {
 const fetchingPayments = ref(false)
 async function resumeCart(row) {
   try {
-    await posApi.resumeCart(row.OrderId)
-    // Take the cashier to the POS terminal where they can keep editing.
-    window.location.href = '/pos'
+    const oid = row.OrderId || row.orderId
+    await posApi.resumeCart(oid)
+    // Take the cashier to the POS terminal and load this order into the cart.
+    window.location.href = `/pos?resume=${encodeURIComponent(oid)}`
   } catch (e) {
     error.value = e.response?.data?.error ?? e.message
   }
@@ -356,6 +357,8 @@ async function fetchMpesaPayments() {
 
 async function openOrder(e) {
   const row = e.data
+  // Clicking a parked (saved) order takes it straight back to the cart.
+  if (row.Status === 'saved') { resumeCart(row); return }
   try {
     const { data } = await posApi.getOrder(row.OrderId || row.orderId)
     selectedOrder.value = data

@@ -699,6 +699,16 @@ GROUP BY [G_L Account No_]</pre>
             <span v-if="syncResult.errors?.length"> Errors: {{ syncResult.errors.join('; ') }}</span>
           </Message>
 
+          <!-- Sync mode chooser (Wipe / Upsert / Cancel — Cancel aborts) -->
+          <Dialog v-model:visible="syncMode.visible" :header="syncMode.title" :modal="true" :style="{ width: '460px' }">
+            <p class="text-muted text-sm" style="margin-top:0">{{ syncMode.body }}</p>
+            <template #footer>
+              <Button label="Cancel" text @click="syncMode.visible = false" />
+              <Button label="Upsert (keep existing)" icon="pi pi-refresh" severity="secondary" @click="runSyncStep(syncMode.kind, { wipe: false })" />
+              <Button label="Wipe & reimport" icon="pi pi-exclamation-triangle" severity="danger" @click="runSyncStep(syncMode.kind, { wipe: true })" />
+            </template>
+          </Dialog>
+
           <!-- Print configuration -->
           <details class="pos-sub-accordion">
             <summary><i class="pi pi-print" /> Print Configuration (per shop)</summary>
@@ -2692,24 +2702,25 @@ const syncSteps = [
   { kind: 'payment-types', label: 'Payment Methods',icon: 'pi pi-credit-card' },
   { kind: 'shop-prices',   label: 'Shop Prices',    icon: 'pi pi-tag' },
 ]
-async function syncStep(kind) {
-  // Steps that support wipe-then-reimport: ask the user.
-  let opts = {}
-  if (kind === 'items') {
-    const wipe = confirm(
-      'Wipe the current PosItem catalogue and re-import from BC?\n\n' +
-      'OK = wipe + fresh import (also clears favourites & special prices).\n' +
-      'Cancel = upsert (keep existing items, refresh changed ones).'
-    )
-    opts.wipe = !!wipe
-  } else if (kind === 'shops') {
-    const wipe = confirm(
-      'Wipe existing shops/terminals and re-import from BC?\n\n' +
-      'OK = drop everything (also clears user→shop assignments) and re-import fresh.\n' +
-      'Cancel = upsert (keep existing shops; new BC customers added, existing ones updated).'
-    )
-    opts.wipe = !!wipe
+// Steps that support wipe-vs-upsert open a 3-choice dialog (Wipe / Upsert /
+// Cancel) so Cancel truly ABORTS. Other steps get a plain abort-able confirm.
+const syncMode = ref({ visible: false, kind: '', title: '', body: '' })
+function syncStep(kind) {
+  if (kind === 'items' || kind === 'shops') {
+    syncMode.value = {
+      visible: true, kind,
+      title: kind === 'items' ? 'Sync Items from BC' : 'Sync Shops from BC',
+      body: kind === 'items'
+        ? 'Choose how to import PosItems. Wipe clears the catalogue (and favourites & special prices) then re-imports fresh. Upsert keeps existing items and refreshes changed ones.'
+        : 'Choose how to import shops/terminals. Wipe drops everything (and user-to-shop assignments) then re-imports. Upsert keeps existing shops and updates them.',
+    }
+    return   // nothing runs until a dialog button calls runSyncStep()
   }
+  if (!window.confirm(`Sync "${kind}" from BC now?`)) return
+  runSyncStep(kind, {})
+}
+async function runSyncStep(kind, opts) {
+  syncMode.value.visible = false
   syncingStep.value = kind; syncResult.value = null
   try {
     const { data } = await posSetupApi.syncStepFromBc(kind, 'FCL', opts)
@@ -2723,6 +2734,7 @@ async function syncStep(kind) {
 const syncResult    = ref(null)
 
 async function syncFromBc() {
+  if (!window.confirm('Sync ALL master records (payment methods + item prices / eTIMS codes) from BC now?')) return
   syncingFromBc.value = true; syncResult.value = null
   try {
     const { data } = await posSetupApi.syncFromBc('FCL')
