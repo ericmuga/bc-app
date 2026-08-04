@@ -12,7 +12,7 @@ import * as BcSync from '../models/PosBcSyncModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
-         fetchPaymentsFromService, buildPrintPayload } from '../services/posReceiptService.js';
+         fetchPaymentsFromService, buildPrintPayload, generateByConfig } from '../services/posReceiptService.js';
 import { ordersDb, sql as ordersSql } from '../db/ordersPool.js';
 import { pdfPathFor, generateInvoicePdf, generatePriceListPdf } from '../services/posPdfService.js';
 import logger from '../services/logger.js';
@@ -653,7 +653,9 @@ export async function getOrderPdf(req, res) {
         signedAt:       order.signedAt,
       } : null;
       const payload = await buildPrintPayload(order, etimsResult);
-      fileName = await generateInvoicePdf(payload);
+      // Honour the shop's print format (A4 vs 80mm thermal) — not hardcoded A4.
+      const gen = await generateByConfig(payload, order.shopCode);
+      fileName = gen.fileName;
       filePath = pdfPathFor(fileName);
       await Pos.markPrinted(order.orderId, fileName);
     }

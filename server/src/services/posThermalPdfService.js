@@ -43,9 +43,21 @@ export async function generateThermalInvoicePdf(data, { widthMm = 72 } = {}) {
   const fileName = `thermal_${data.invoice_no}_${timestampStr()}.pdf`;
   const filePath = path.join(PRINTED_DIR, fileName);
 
-  const maxHeightMm = 600;
-  const doc = new jsPDF('p', 'mm', [widthMm, maxHeightMm]);
+  // Two-pass so the roll is VARIABLE LENGTH: pass 1 renders on a tall canvas
+  // just to measure the content height, pass 2 renders on a page cut to that
+  // exact height (no trailing whitespace).
+  const measured = await renderThermalInvoice(new jsPDF('p', 'mm', [widthMm, 2000]), data, widthMm);
+  const pageH = Math.max(45, Math.ceil(measured + 3));
+  const doc = new jsPDF('p', 'mm', [widthMm, pageH]);
+  await renderThermalInvoice(doc, data, widthMm);
 
+  doc.save(filePath);
+  logger.info('thermal PDF generated', { fileName, orderNo: data.invoice_no, widthMm, pageH });
+  return fileName;
+}
+
+/** Draw the thermal invoice onto `doc`; returns the final content height (mm). */
+async function renderThermalInvoice(doc, data, widthMm) {
   const margin     = 4;                    // mm side padding (slightly wider for breathing room)
   const innerW     = widthMm - margin * 2;
   const lineGap    = 1.4;                  // extra mm between rows so text never collides
@@ -225,10 +237,7 @@ export async function generateThermalInvoicePdf(data, { widthMm = 72 } = {}) {
     y += 0.6;
     center('** Proforma — not a tax invoice **', 6.5, true);
   }
-  y += 8;  // bottom whitespace for printer cut
+  y += 6;  // small bottom whitespace for the printer cut
 
-  doc.save(filePath);
-
-  logger.info('thermal PDF generated', { fileName, orderNo: data.invoice_no, widthMm });
-  return fileName;
+  return y;
 }

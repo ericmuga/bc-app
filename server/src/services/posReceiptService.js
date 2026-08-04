@@ -87,7 +87,7 @@ function paymentSummary(order) {
       const reference = String(p.reference || '').trim();
       const isCoupon = code === 'COUPON';
       return {
-        mode: isCoupon ? 'Coupon' : (p.paymentTypeName || p.paymentTypeCode || 'Payment'),
+        mode: isCoupon ? 'Coupon' : (p.paymentTypeCode || p.paymentTypeName || 'Payment'),
         amount: Number(p.amount || 0),
         reference,
         mobileNo: p.mobileNo || '',
@@ -391,7 +391,7 @@ export async function buildPrintPayload(order, etimsResult) {
  * Generate a PDF (A4 or thermal) honouring the admin print config.
  * Returns the saved fileName (or null on failure).
  */
-async function generateByConfig(payload, shopCode = null) {
+export async function generateByConfig(payload, shopCode = null) {
   const cfg = await loadPrint(shopCode);
   try {
     if (cfg.format === 'thermal') {
