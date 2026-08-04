@@ -610,6 +610,22 @@ GROUP BY [G_L Account No_]</pre>
             </div>
           </div>
 
+          <!-- Produce to stock — a first-class action, independent of any sale -->
+          <div class="builder-form" style="margin:4px 0 12px;padding:10px;border:1px solid var(--bc-border);border-radius:8px;background:var(--bc-surface-raised, transparent)">
+            <div class="text-sm" style="margin-bottom:6px;font-weight:600"><i class="pi pi-cog" /> Produce to stock — make finished goods from a recipe (knocks off raw materials)</div>
+            <div style="display:grid;grid-template-columns:1.2fr 1.4fr 90px auto auto;gap:8px;align-items:center">
+              <Select v-model="makeShop" :options="posShopOptions" option-label="label" option-value="value" filter placeholder="Shop…" />
+              <Select v-model="makeItem" :options="bomItemOptions" option-label="label" option-value="value" filter placeholder="Recipe item…" />
+              <InputNumber v-model="makeQty" :min="0" :maxFractionDigits="4" fluid placeholder="Qty" />
+              <Button label="Check" size="small" text @click="checkMake" :disabled="!makeShop || !makeItem" />
+              <Button label="Make" size="small" icon="pi pi-cog" @click="doMake" :loading="making" :disabled="!makeShop || !makeItem || !(makeQty > 0)" />
+            </div>
+            <div v-if="makeResult" class="text-sm" style="margin-top:8px"
+                 :style="{ color: makeResult.ok ? 'var(--bc-success, #16a34a)' : 'var(--bc-danger, #dc2626)' }">
+              {{ makeResult.msg }}
+            </div>
+          </div>
+
           <div class="builder-panel-head" style="margin-bottom:6px">
             <div class="list-search" style="flex:1">
               <InputText v-model="bomSearch" placeholder="Filter by finished item or notes…" style="max-width:280px" />
@@ -1724,7 +1740,40 @@ function pickComponent(ln) {
   if (o && !ln.description) ln.description = o.description || ''
 }
 async function loadBomEditorData() {
-  await Promise.all([loadBoms(), loadItemOptions()])
+  await Promise.all([loadBoms(), loadItemOptions(), ensureShopsForMake()])
+}
+async function ensureShopsForMake() {
+  if (posShops.value.length) return
+  try { posShops.value = (await posSetupApi.listShops()).data } catch { /* non-fatal */ }
+}
+
+// ── Standalone "make" tester ──────────────────────────────────────────────────
+const makeShop = ref(null), makeItem = ref(null), makeQty = ref(1)
+const making = ref(false), makeResult = ref(null)
+const bomItemOptions = computed(() => boms.value.map(b => ({ label: b.ItemNo, value: b.ItemNo })))
+async function checkMake() {
+  makeResult.value = null
+  try {
+    const { data } = await posApi.planAt(makeShop.value, [{ itemNo: makeItem.value, quantity: Number(makeQty.value) || 0 }])
+    if (!data.needsProduction) { makeResult.value = { ok: true, msg: 'Enough finished stock — nothing to make.' }; return }
+    const e = data.plan.find(x => x.itemNo === String(makeItem.value).toUpperCase()) || data.plan[0]
+    const comps = (e.components || []).map(c => `${c.itemNo}: need ${c.required}/have ${c.onHand}${c.ok ? '' : ' ✗'}`).join(', ')
+    makeResult.value = {
+      ok: e.canProduce,
+      msg: `On-hand ${e.onHand}, shortfall ${e.shortfall} → ${e.canProduce ? 'CAN make' : 'CANNOT make'}${comps ? ' — components: ' + comps : (e.hasBom ? '' : ' (no recipe)')}`,
+    }
+  } catch (err) { makeResult.value = { ok: false, msg: err.response?.data?.error || err.message } }
+}
+async function doMake() {
+  making.value = true; makeResult.value = null
+  try {
+    await posApi.produceAt(makeShop.value, [{ itemNo: makeItem.value, qty: Number(makeQty.value) || 0 }])
+    makeResult.value = { ok: true, msg: `Produced ${makeQty.value} × ${makeItem.value} at ${makeShop.value} (raw materials knocked off).` }
+    toast.add({ severity: 'success', summary: 'Produced', detail: `${makeQty.value} × ${makeItem.value}`, life: 3000 })
+  } catch (err) {
+    makeResult.value = { ok: false, msg: err.response?.data?.error || err.message }
+    toast.add({ severity: 'error', summary: 'Make failed', detail: makeResult.value.msg, life: 6000 })
+  } finally { making.value = false }
 }
 function blankBom() {
   return { itemNo: '', notes: '', isActive: true, _existing: false,
