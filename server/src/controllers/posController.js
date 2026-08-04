@@ -193,6 +193,21 @@ export async function exportImportedSales(req, res) {
     ok(res, { columns: BcSync.IMPORTED_SALES_COLUMNS, rows });
   } catch (e) { err(res, e); }
 }
+
+/** POST /pos/bc-sync/imported-sales/push — DB-to-DB write of a shop's paid sales into BC. */
+export async function pushImportedSales(req, res) {
+  try {
+    const shopCode = req.body?.shopCode || req.query.shopCode
+      || await resolveShopCode(req.user.userId, req.user.role, req);
+    if (!shopCode) return res.status(400).json({ error: 'shopCode is required' });
+    const result = await BcSync.pushImportedSales({
+      shopCode,
+      dateFrom: req.body?.dateFrom || req.query.dateFrom,
+      dateTo:   req.body?.dateTo   || req.query.dateTo,
+    });
+    ok(res, result);
+  } catch (e) { err(res, e, 400); }
+}
 export async function getBom(req, res) {
   try {
     const bom = await Bom.getBom(req.params.itemNo);

@@ -10,8 +10,33 @@
  * reuse buildImportedSalesRows() once a writable BC connection is confirmed.
  */
 import { db as appDb, sql } from '../db/pool.js';
+import { bcDb, bcSql } from '../db/bcPool.js';
+import { bcTable } from '../services/bcTables.js';
+import logger from '../services/logger.js';
 
 const num = (v) => (isNaN(Number(v)) ? 0 : Number(v));
+
+// Which BC company a shop transacts for, + that company's BC customer no.
+const COMPANY_CUSTOMER_FIELDS = [
+  { company: 'FCL', field: 'FclCustomerNo' },
+  { company: 'CM',  field: 'CmCustomerNo' },
+  { company: 'RMK', field: 'RmkCustomerNo' },
+  { company: 'FLM', field: 'FlmCustomerNo' },
+];
+
+/** Resolve a shop's BC company + customer no (from PosShop's per-company customer fields). */
+export async function resolveShopCompany(shopCode) {
+  const pool = await appDb.getPool();
+  const r = await pool.request()
+    .input('code', sql.NVarChar(50), String(shopCode || '').toUpperCase())
+    .query(`SELECT [Code],[Name],[FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],[WalkInCustomerNo]
+            FROM [dbo].[PosShop] WHERE [Code]=@code`);
+  const s = r.recordset[0];
+  if (!s) throw new Error(`Shop ${shopCode} not found`);
+  const hit = COMPANY_CUSTOMER_FIELDS.find((c) => s[c.field]);
+  if (!hit) throw new Error(`Shop ${shopCode} has no BC customer number set for any company`);
+  return { company: hit.company, customerNo: String(s[hit.field]).trim(), shopName: s.Name };
+}
 
 // The exact BC staging columns (order matters for the export sheet). The
 // system/$ columns are BC-generated and deliberately omitted.
@@ -94,4 +119,74 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
     });
   }
   return rows;
+}
+
+// Columns we write to the BC staging table (system/$ + Executed/Posted/Error use
+// table defaults). Order-of-insert is not important — we name them explicitly.
+const PUSH_COLUMNS = [
+  'ExtDocNo', 'LineNo', 'CustNO', 'Date', 'SPCode', 'ShiptoCOde', 'ItemNo', 'Qty',
+  'Location', 'SUOM', 'UnitPrice', 'ShiptoName', 'TotalHeaderAmount', 'LineAmount',
+  'TotalHeaderQty', 'Type', 'CUInvoiceNo', 'CUNo', 'SigningTime', 'BillTo', 'Expected Line Count',
+];
+const PUSH_TYPES = {
+  ExtDocNo: bcSql.NVarChar(30), LineNo: bcSql.Int, CustNO: bcSql.NVarChar(10),
+  Date: bcSql.DateTime, SPCode: bcSql.NVarChar(10), ShiptoCOde: bcSql.NVarChar(10),
+  ItemNo: bcSql.NVarChar(10), Qty: bcSql.Decimal(38, 4), Location: bcSql.NVarChar(10),
+  SUOM: bcSql.NVarChar(10), UnitPrice: bcSql.Decimal(38, 4), ShiptoName: bcSql.NVarChar(100),
+  TotalHeaderAmount: bcSql.Decimal(38, 4), LineAmount: bcSql.Decimal(38, 4),
+  TotalHeaderQty: bcSql.Decimal(38, 4), Type: bcSql.Int, CUInvoiceNo: bcSql.NVarChar(100),
+  CUNo: bcSql.NVarChar(100), SigningTime: bcSql.NVarChar(100), BillTo: bcSql.NVarChar(10),
+  'Expected Line Count': bcSql.Int,
+};
+
+/**
+ * DB-to-DB push: insert a shop's paid POS invoice lines into BC's per-company
+ * [{prefix}$Imported SalesAL$...] staging table. Idempotent — skips any
+ * (ExtDocNo, LineNo) already present (so re-running won't duplicate or clobber
+ * rows BC has already executed/posted). Blank customer nos fall back to the
+ * shop's BC customer.
+ *
+ * @returns { company, table, candidates, inserted, skipped, orders:[ExtDocNo…] }
+ */
+export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType = 0 } = {}) {
+  if (!shopCode) throw new Error('shopCode is required');
+  const { company, customerNo } = await resolveShopCompany(shopCode);
+  const rows = await buildImportedSalesRows({ shopCode, dateFrom, dateTo, lineType });
+  if (!rows.length) return { company, table: null, candidates: 0, inserted: 0, skipped: 0, orders: [] };
+
+  // Fill the BC customer no where the POS line had none (walk-in sales).
+  for (const r of rows) {
+    if (!r.CustNO) r.CustNO = customerNo.slice(0, 10);
+    if (!r.BillTo) r.BillTo = (r.CustNO || customerNo).slice(0, 10);
+  }
+
+  const table = bcTable(company, 'Imported SalesAL', { ext: true });
+  const pool = await bcDb.getPool();
+
+  // Which (ExtDocNo, LineNo) already exist, so we never overwrite processed rows.
+  const extDocs = [...new Set(rows.map((r) => r.ExtDocNo))];
+  const chk = pool.request();
+  extDocs.forEach((d, i) => chk.input(`d${i}`, bcSql.NVarChar(30), d));
+  const existing = await chk.query(
+    `SELECT [ExtDocNo],[LineNo] FROM ${table} WHERE [ExtDocNo] IN (${extDocs.map((_, i) => `@d${i}`).join(',')})`
+  );
+  const seen = new Set(existing.recordset.map((r) => `${r.ExtDocNo}|${r.LineNo}`));
+
+  let inserted = 0, skipped = 0;
+  for (const r of rows) {
+    if (seen.has(`${r.ExtDocNo}|${r.LineNo}`)) { skipped++; continue; }
+    const req = pool.request();
+    for (const c of PUSH_COLUMNS) {
+      let v = r[c];
+      if (PUSH_TYPES[c] === bcSql.DateTime) v = v ? new Date(v) : new Date();
+      req.input(`c_${c.replace(/\W/g, '')}`, PUSH_TYPES[c], v ?? (typeof v === 'number' ? 0 : ''));
+    }
+    const cols = PUSH_COLUMNS.map((c) => `[${c}]`).join(', ');
+    const vals = PUSH_COLUMNS.map((c) => `@c_${c.replace(/\W/g, '')}`).join(', ');
+    await req.query(`INSERT INTO ${table} (${cols}) VALUES (${vals})`);
+    inserted++;
+  }
+
+  logger.info('pushImportedSales', { shopCode, company, inserted, skipped, candidates: rows.length });
+  return { company, table, candidates: rows.length, inserted, skipped, orders: extDocs };
 }

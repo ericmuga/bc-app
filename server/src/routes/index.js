@@ -210,6 +210,7 @@ router.post( '/pos/boms',                                      ...canManage, pos
 router.delete('/pos/boms/:itemNo',                             ...canManage, posCtrl.deleteBom);
 router.get(  '/pos/makeable-items',                            ...canPos, posCtrl.listMakeable);
 router.get(  '/pos/bc-sync/imported-sales',                    ...canManage, posCtrl.exportImportedSales);
+router.post( '/pos/bc-sync/imported-sales/push',               ...canManage, posCtrl.pushImportedSales);
 router.post( '/pos/production-plan',                           ...canPos, posCtrl.productionPlan);
 router.post( '/pos/produce',                                   ...canPos, posCtrl.produce);
 

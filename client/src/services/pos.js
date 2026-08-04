@@ -33,6 +33,7 @@ export const posReportsApi = {
   stockSnapshot:    (params) => api.get('/pos/stock/snapshot',           { params }),
   uploadStock:      (rows)   => api.post('/pos/stock/upload',            { rows }),
   importedSalesExport: (params) => api.get('/pos/bc-sync/imported-sales', { params }),
+  importedSalesPush:   (body)   => api.post('/pos/bc-sync/imported-sales/push', body),
   salesByItem:      (params) => api.get('/pos/reports/sales-by-item',     { params }),
   salesByContact:   (params) => api.get('/pos/reports/sales-by-contact',  { params }),
   shopComparison:   (params) => api.get('/pos/reports/shop-comparison',   { params }),

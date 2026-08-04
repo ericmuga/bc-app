@@ -40,6 +40,8 @@
                   :disabled="!rows.length" @click="downloadPdf" />
           <Button label="BC Sales export" icon="pi pi-database" severity="secondary" :loading="stkBusy"
                   @click="exportBcSales" v-tooltip="'Export paid POS invoice lines in BC Imported-SalesAL schema'" />
+          <Button label="Push to BC" icon="pi pi-cloud-upload" severity="secondary" :loading="stkBusy"
+                  @click="pushBcSales" v-tooltip="'Write a shop\'s paid sales into BC Imported SalesAL (DB-to-DB)'" />
           <template v-if="tab === 'stockPosition'">
             <span class="stk-sep" />
             <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />
@@ -335,6 +337,22 @@ async function exportBcSales() {
     XLSX.writeFile(wb, `imported-sales-${dateFrom}_${dateTo}.xlsx`)
   } catch (e) { toast.add({ severity: 'error', summary: 'Export failed', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
   finally { stkBusy.value = false }
+}
+
+// Push a shop's paid sales into BC's Imported SalesAL (DB-to-DB write).
+async function pushBcSales() {
+  const shopCode = String(window.prompt('Shop code to push to BC (Imported SalesAL):') || '').trim()
+  if (!shopCode) return
+  const { dateFrom, dateTo } = commonParams()
+  if (!window.confirm(`Write paid sales for shop ${shopCode} (${dateFrom} → ${dateTo}) into Business Central? Already-sent lines are skipped.`)) return
+  stkBusy.value = true
+  try {
+    const { data } = await posReportsApi.importedSalesPush({ shopCode, dateFrom, dateTo })
+    const msg = `Company ${data.company}: inserted ${data.inserted}, skipped ${data.skipped} of ${data.candidates} line(s).`
+    toast.add({ severity: data.inserted ? 'success' : 'info', summary: 'Pushed to BC', detail: msg, life: 8000 })
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Push failed', detail: e.response?.data?.error ?? e.message, life: 7000 })
+  } finally { stkBusy.value = false }
 }
 
 // ── Stock take: export template / import / print sheet ────────────────────────
