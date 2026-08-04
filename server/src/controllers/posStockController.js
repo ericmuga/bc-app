@@ -29,6 +29,26 @@ async function userShopCode(req) {
   return Pos.getUserShopCode(req.user.userId);
 }
 
+/** GET /pos/stock/snapshot — fast current on-hand per item (for at-a-glance + export). */
+export async function stockSnapshot(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop selected' });
+    ok(res, await Stock.stockSnapshot({ shopCode, includeZero: req.query.includeZero === '1' }));
+  } catch (e) { err(res, e); }
+}
+
+/** POST /pos/stock/upload — bulk set on-hand from an uploaded sheet. Body: { rows:[{itemNo, qty}] }. */
+export async function uploadStock(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop selected' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows) return res.status(400).json({ error: 'rows[] required' });
+    ok(res, await Stock.applyStockUpload({ shopCode, rows, userId: req.user.userId }));
+  } catch (e) { err(res, e, 400); }
+}
+
 // Elevation: managers (admin / shop-admin) pass straight through; anyone else
 // must supply a valid admin/shop-admin username + password in the request body.
 async function ensureManager(req) {

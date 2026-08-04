@@ -38,6 +38,14 @@
                   :disabled="!rows.length" :loading="exporting" @click="downloadCsv" />
           <Button label="PDF" icon="pi pi-file-pdf" severity="secondary"
                   :disabled="!rows.length" @click="downloadPdf" />
+          <template v-if="tab === 'stockPosition'">
+            <span class="stk-sep" />
+            <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />
+            <Button label="Import stock" icon="pi pi-upload" severity="secondary" :loading="stkBusy" @click="stkFile?.click()" v-tooltip="'Upload a filled sheet to set on-hand'" />
+            <input ref="stkFile" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="onStockFile" />
+            <Button label="Sheet A4" icon="pi pi-print" text :loading="stkBusy" @click="printStockSheet('a4')" />
+            <Button label="Sheet 80mm" icon="pi pi-print" text :loading="stkBusy" @click="printStockSheet('thermal')" />
+          </template>
         </div>
 
         <!-- Bar chart (top-N inline SVG, no extra deps) -->
@@ -91,8 +99,14 @@ import InputText    from 'primevue/inputtext'
 import Message      from 'primevue/message'
 import { posReportsApi } from '@/services/pos.js'
 import { useAuthStore }  from '@/stores/auth.js'
+import { useToast }      from 'primevue/usetoast'
 import { jsPDF }         from 'jspdf'
 import 'jspdf-autotable'
+import * as XLSX         from 'xlsx'
+
+const toast = useToast()
+const stkFile = ref(null)
+const stkBusy = ref(false)
 
 const auth   = useAuthStore()
 const isMgr  = computed(() => ['admin', 'shop-admin'].includes(auth.user?.role))
@@ -300,6 +314,79 @@ function downloadPdf() {
   ))
   pdf.autoTable({ head, body, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
   pdf.save(`${slug.toLowerCase().replace(/\s+/g, '-')}-${commonParams().dateFrom}_${commonParams().dateTo}.pdf`)
+}
+
+// ── Stock take: export template / import / print sheet ────────────────────────
+async function exportStockTemplate() {
+  stkBusy.value = true
+  try {
+    const { data } = await posReportsApi.stockSnapshot({ includeZero: 1 })
+    const aoa = [['ItemNo', 'Description', 'UoM', 'SystemQty', 'CountQty']]
+    data.forEach(r => aoa.push([r.itemNo, r.description, r.uom, r.onHand, '']))
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 16 }, { wch: 42 }, { wch: 8 }, { wch: 12 }, { wch: 12 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock')
+    XLSX.writeFile(wb, `stock-template-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  } catch (e) { toast.add({ severity: 'error', summary: 'Export failed', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
+  finally { stkBusy.value = false }
+}
+
+async function onStockFile(e) {
+  const file = e.target.files?.[0]; e.target.value = ''
+  if (!file) return
+  stkBusy.value = true
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+    const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+    // Set on-hand to CountQty when supplied, else SystemQty (round-trip).
+    const rows = json.map(r => ({
+      itemNo: String(r.ItemNo ?? r.itemNo ?? r['Item No'] ?? '').trim(),
+      qty: Number((r.CountQty !== '' && r.CountQty != null) ? r.CountQty : (r.SystemQty ?? r.Qty ?? r.qty)),
+    })).filter(r => r.itemNo && isFinite(r.qty))
+    if (!rows.length) { toast.add({ severity: 'warn', summary: 'No rows', detail: 'No valid ItemNo/quantity rows found.', life: 5000 }); return }
+    if (!window.confirm(`Set on-hand for ${rows.length} item(s) to the sheet values? This posts stock adjustments.`)) return
+    const { data } = await posReportsApi.uploadStock(rows)
+    const msg = `Updated ${data.updated}, created ${data.created}, unchanged ${data.unchanged}` + (data.errors?.length ? `, ${data.errors.length} error(s)` : '')
+    toast.add({ severity: data.errors?.length ? 'warn' : 'success', summary: 'Stock upload done', detail: msg, life: 8000 })
+    if (data.errors?.length) console.warn('stock upload errors', data.errors)
+    if (tab.value === 'stockPosition') run()
+  } catch (e) { toast.add({ severity: 'error', summary: 'Import failed', detail: e.response?.data?.error ?? e.message, life: 6000 }) }
+  finally { stkBusy.value = false }
+}
+
+async function printStockSheet(format) {
+  stkBusy.value = true
+  try {
+    const { data } = await posReportsApi.stockSnapshot({ includeZero: 1 })
+    const dateStr = new Date().toISOString().slice(0, 10)
+    if (format === 'thermal') {
+      const rowH = 9, top = 20
+      const pdf = new jsPDF({ unit: 'mm', format: [80, Math.max(90, top + data.length * rowH + 16)] })
+      pdf.setFontSize(11); pdf.text('STOCK TAKE', 40, 8, { align: 'center' })
+      pdf.setFontSize(8);  pdf.text(dateStr, 40, 13, { align: 'center' })
+      pdf.autoTable({
+        head: [['Item', 'Sys', 'Count']],
+        body: data.map(r => [`${r.itemNo}\n${(r.description || '').slice(0, 22)}`, r.onHand.toFixed(2), '']),
+        startY: 16, margin: { left: 3, right: 3 }, styles: { fontSize: 7, cellPadding: 1 },
+        columnStyles: { 0: { cellWidth: 48 }, 1: { cellWidth: 12, halign: 'right' }, 2: { cellWidth: 12 } },
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+      pdf.save(`stock-take-thermal-${dateStr}.pdf`)
+    } else {
+      const pdf = new jsPDF('p', 'mm', 'a4')
+      pdf.setFontSize(14); pdf.text('Physical Stock Take Sheet', 14, 16)
+      pdf.setFontSize(10); pdf.text(`Date: ${dateStr}     Shop: _____________     Counted by: _____________`, 14, 23)
+      pdf.autoTable({
+        head: [['#', 'Item No', 'Description', 'UoM', 'System Qty', 'Physical Count', 'Variance']],
+        body: data.map((r, i) => [i + 1, r.itemNo, r.description, r.uom, r.onHand.toFixed(2), '', '']),
+        startY: 28, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] },
+        columnStyles: { 0: { cellWidth: 8 }, 4: { halign: 'right' }, 5: { cellWidth: 28 }, 6: { cellWidth: 24 } },
+      })
+      pdf.save(`stock-take-a4-${dateStr}.pdf`)
+    }
+  } catch (e) { toast.add({ severity: 'error', summary: 'Print failed', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
+  finally { stkBusy.value = false }
 }
 
 onMounted(run)

@@ -220,6 +220,10 @@ router.post( '/pos/stock/load-from-bc',                        ...canPos, posSto
 
 router.get(  '/pos/stock/daily-movements',                     ...canPos, posStockCtrl.dailyReport);
 
+// Local stock snapshot (at-a-glance) + bulk stock upload (physical stock-take)
+router.get(  '/pos/stock/snapshot',                            ...canPos,    posStockCtrl.stockSnapshot);
+router.post( '/pos/stock/upload',                              ...canManage, posStockCtrl.uploadStock);
+
 // ── POS Reports hub (admin / shop-admin shop-comparison; others scope to own shop) ──
 router.get(  '/pos/reports/stock-position',                    ...canPos,    posStockCtrl.reportStockPosition);
 router.get(  '/pos/reports/sales-by-item',                     ...canPos,    posStockCtrl.reportSalesByItem);

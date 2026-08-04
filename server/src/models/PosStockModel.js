@@ -242,6 +242,106 @@ export async function assertOrderHasStock({ shopCode, lines }) {
   }
 }
 
+/**
+ * Fast "stock at a glance" snapshot: current on-hand per item at the shop's
+ * location (single GROUP BY over the local ledger — no BC, no window funcs).
+ * Returns [{ itemNo, description, uom, onHand }] for items that have ever moved
+ * (or, when includeZero, every catalogue item). Ordered by description.
+ */
+export async function stockSnapshot({ shopCode, includeZero = false } = {}) {
+  const pool = await appPool();
+  const loc = await locationForShop(pool, shopCode);
+  const req = pool.request();
+  let scopeJoin = '', scopeWhere = '';
+  if (loc) {
+    req.input('loc', sql.NVarChar(20), loc.toUpperCase());
+    scopeJoin  = 'JOIN [dbo].[PosShop] s ON s.[Code] = m.[ShopCode]';
+    scopeWhere = 'WHERE s.[LocationCode] = @loc';
+  } else if (shopCode) {
+    req.input('shop', sql.NVarChar(50), shopCode.toUpperCase());
+    scopeWhere = 'WHERE m.[ShopCode] = @shop';
+  }
+  // Aggregate the local ledger, then join the catalogue for description/UoM.
+  const r = await req.query(`
+    WITH OnHand AS (
+      SELECT m.[ItemNo], SUM(m.[Quantity]) AS Qty
+      FROM   [dbo].[PosStockMovement] m ${scopeJoin}
+      ${scopeWhere}
+      GROUP BY m.[ItemNo]
+    )
+    SELECT ${includeZero ? 'i.[ItemNo]' : 'COALESCE(oh.[ItemNo], i.[ItemNo])'} AS ItemNo,
+           i.[Description] AS Description,
+           i.[UnitOfMeasure] AS Uom,
+           ISNULL(oh.Qty, 0) AS OnHand
+    FROM ${includeZero ? '[dbo].[PosItem] i LEFT JOIN OnHand oh ON oh.[ItemNo] = i.[ItemNo]'
+                       : 'OnHand oh LEFT JOIN [dbo].[PosItem] i ON i.[ItemNo] = oh.[ItemNo]'}
+    ${includeZero ? 'WHERE i.[IsActive] = 1' : ''}
+    ORDER BY i.[Description], ItemNo
+  `);
+  return r.recordset.map((row) => ({
+    itemNo:      row.ItemNo,
+    description: row.Description || row.ItemNo,
+    uom:         row.Uom || '',
+    onHand:      Number(row.OnHand || 0),
+  }));
+}
+
+/**
+ * Bulk stock upload (physical stock-take): set each item's on-hand to the sheet
+ * quantity by posting an adjustment for the delta. Items must exist in the POS
+ * item master; items with no prior movement are created (delta from 0). Rows are
+ * validated first — a bad item aborts nothing, it's reported per-row.
+ *
+ * @param {object} p { shopCode, rows:[{itemNo, qty}], userId }
+ * @returns { updated, created, unchanged, errors:[{ itemNo, error }] }
+ */
+export async function applyStockUpload({ shopCode, rows, userId = null }) {
+  if (!shopCode) throw new Error('shopCode is required');
+  const list = (Array.isArray(rows) ? rows : [])
+    .map((r) => ({ itemNo: str(r.itemNo ?? r.ItemNo, 30).toUpperCase(), qty: Number(r.qty ?? r.Qty ?? r.count ?? r.CountQty) }))
+    .filter((r) => r.itemNo);
+  if (!list.length) return { updated: 0, created: 0, unchanged: 0, errors: [] };
+
+  const pool = await appPool();
+  // Validate every item against the master in one query.
+  const uniq = [...new Set(list.map((r) => r.itemNo))];
+  const vreq = pool.request();
+  uniq.forEach((n, i) => vreq.input(`v${i}`, sql.NVarChar(30), n));
+  const found = await vreq.query(
+    `SELECT [ItemNo],[Description] FROM [dbo].[PosItem] WHERE UPPER([ItemNo]) IN (${uniq.map((_, i) => `@v${i}`).join(',')})`
+  );
+  const master = new Map(found.recordset.map((r) => [String(r.ItemNo).toUpperCase(), r.Description]));
+  const have = await onHandMany(shopCode, uniq);
+
+  let updated = 0, created = 0, unchanged = 0;
+  const errors = [];
+  for (const r of list) {
+    if (!master.has(r.itemNo)) { errors.push({ itemNo: r.itemNo, error: 'not in POS item master' }); continue; }
+    if (!isFinite(r.qty) || r.qty < 0) { errors.push({ itemNo: r.itemNo, error: 'invalid quantity' }); continue; }
+    const current = have.get(r.itemNo) || 0;
+    const delta = Math.round((r.qty - current) * 10000) / 10000;
+    if (delta === 0) { unchanged++; continue; }
+    try {
+      await postMovement({
+        shopCode,
+        itemNo:       r.itemNo,
+        description:  master.get(r.itemNo),
+        movementType: delta > 0 ? 'positive-adj' : 'negative-adj',
+        quantity:     delta,
+        referenceType: 'stock-upload',
+        referenceNo:  'STK-UPLOAD',
+        notes:        `Stock upload: set on-hand to ${r.qty} (was ${current})`,
+        createdBy:    userId,
+      });
+      if (current === 0) created++; else updated++;
+    } catch (e) {
+      errors.push({ itemNo: r.itemNo, error: e.message });
+    }
+  }
+  logger.info('stock upload applied', { shopCode, updated, created, unchanged, errors: errors.length });
+  return { updated, created, unchanged, errors };
+}
+
 export async function onHand(shopCode, itemNo) {
   const pool = await appPool();
   const r = await pool.request()
