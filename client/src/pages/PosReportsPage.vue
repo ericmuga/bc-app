@@ -56,13 +56,17 @@
           </svg>
         </div>
 
-        <DataTable :value="rows" size="small" :loading="loading" responsive-layout="scroll" :paginator="true" :rows="50">
+        <DataTable :value="rows" size="small" :loading="loading" responsive-layout="scroll" :paginator="true" :rows="50"
+                   v-model:filters="colFilters" filterDisplay="row" :globalFilterFields="columns.map(c => c.field)" removableSort>
           <Column v-for="c in columns" :key="c.field" :field="c.field" :header="c.header"
-                  :style="c.style || ''">
+                  :style="c.style || ''" sortable :showFilterMenu="false">
             <template #body="{ data }">
               <span v-if="c.format === 'num'">{{ Number(data[c.field] || 0).toFixed(2) }}</span>
               <strong v-else-if="c.format === 'numStrong'">{{ Number(data[c.field] || 0).toFixed(2) }}</strong>
               <span v-else>{{ data[c.field] }}</span>
+            </template>
+            <template #filter="{ filterModel, filterCallback }">
+              <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Filter" style="width:100%;min-width:70px" />
             </template>
           </Column>
           <template #footer>
@@ -78,7 +82,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Button       from 'primevue/button'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
@@ -125,7 +129,9 @@ const columns = computed(() => {
         { field: 'transferIn',  header: 'Transfer In',  style: 'width:110px;text-align:right', format: 'num' },
         { field: 'positiveAdj', header: '+ Adj',        style: 'width:90px;text-align:right',  format: 'num' },
         { field: 'portionIn',   header: 'Portion In',   style: 'width:100px;text-align:right', format: 'num' },
+        { field: 'produceIn',   header: 'Produced',     style: 'width:100px;text-align:right', format: 'num' },
         { field: 'sales',       header: 'Sales',        style: 'width:100px;text-align:right', format: 'num' },
+        { field: 'consumeOut',  header: 'Consumed',     style: 'width:100px;text-align:right', format: 'num' },
         { field: 'writeOff',    header: 'Write-off',    style: 'width:100px;text-align:right', format: 'num' },
         { field: 'portionOut',  header: 'Portion Out',  style: 'width:100px;text-align:right', format: 'num' },
         { field: 'negativeAdj', header: '− Adj',        style: 'width:90px;text-align:right',  format: 'num' },
@@ -169,6 +175,14 @@ const columns = computed(() => {
   }
   return []
 })
+
+// Per-column filters — rebuilt whenever the visible columns change (per tab).
+const colFilters = ref({})
+watch(columns, (cols) => {
+  const f = {}
+  for (const c of cols) f[c.field] = { value: null, matchMode: 'contains' }
+  colFilters.value = f
+}, { immediate: true })
 
 const totals = computed(() => {
   if (!rows.value.length) return []

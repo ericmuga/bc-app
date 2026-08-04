@@ -294,7 +294,9 @@ export async function dailyMovementsReport({ shopCode, dateFrom, dateTo, itemNo 
       SELECT m.[ItemNo], m.[MovementDate],
              SUM(CASE WHEN m.[MovementType]='transfer-in'  THEN m.[Quantity] ELSE 0 END) AS TransferIn,
              SUM(CASE WHEN m.[MovementType]='positive-adj' THEN m.[Quantity] ELSE 0 END) AS PositiveAdj,
+             SUM(CASE WHEN m.[MovementType]='produce-in'   THEN m.[Quantity] ELSE 0 END) AS ProduceIn,
              SUM(CASE WHEN m.[MovementType]='sale'         THEN m.[Quantity] ELSE 0 END) AS Sales,
+             SUM(CASE WHEN m.[MovementType]='consume-out'  THEN m.[Quantity] ELSE 0 END) AS ConsumeOut,
              SUM(CASE WHEN m.[MovementType]='negative-adj' THEN m.[Quantity] ELSE 0 END) AS NegativeAdj,
              SUM(m.[Quantity]) AS NetChange
       FROM   [dbo].[PosStockMovement] m
@@ -315,7 +317,9 @@ export async function dailyMovementsReport({ shopCode, dateFrom, dateTo, itemNo 
           ), 0) AS OpeningStock,
       d.TransferIn,
       d.PositiveAdj,
+      d.ProduceIn,
       d.Sales,
+      d.ConsumeOut,
       d.NegativeAdj,
       ISNULL(o.OpeningQty, 0)
         + ISNULL(SUM(d.NetChange) OVER (
@@ -336,7 +340,9 @@ export async function dailyMovementsReport({ shopCode, dateFrom, dateTo, itemNo 
     opening:      Number(row.OpeningStock || 0),
     transferIn:   Number(row.TransferIn   || 0),
     positiveAdj:  Number(row.PositiveAdj  || 0),
+    produceIn:    Number(row.ProduceIn    || 0),
     sales:        Math.abs(Number(row.Sales || 0)),       // shown as positive magnitude
+    consumeOut:   Math.abs(Number(row.ConsumeOut || 0)),  // shown as positive magnitude
     negativeAdj:  Math.abs(Number(row.NegativeAdj || 0)),
     closing:      Number(row.ClosingStock || 0),
   }));
@@ -961,9 +967,11 @@ export async function stockPositionReport({ shopCode = null, dateFrom, dateTo, i
              SUM(CASE WHEN m.[MovementType]='third-party-in' THEN m.[Quantity] ELSE 0 END) AS ThirdPartyIn,
              SUM(CASE WHEN m.[MovementType]='positive-adj'   THEN m.[Quantity] ELSE 0 END) AS PositiveAdj,
              SUM(CASE WHEN m.[MovementType]='portion-in'     THEN m.[Quantity] ELSE 0 END) AS PortionIn,
+             SUM(CASE WHEN m.[MovementType]='produce-in'     THEN m.[Quantity] ELSE 0 END) AS ProduceIn,
              SUM(CASE WHEN m.[MovementType]='sale'           THEN m.[Quantity] ELSE 0 END) AS Sales,
              SUM(CASE WHEN m.[MovementType]='write-off'      THEN m.[Quantity] ELSE 0 END) AS WriteOff,
              SUM(CASE WHEN m.[MovementType]='portion-out'    THEN m.[Quantity] ELSE 0 END) AS PortionOut,
+             SUM(CASE WHEN m.[MovementType]='consume-out'    THEN m.[Quantity] ELSE 0 END) AS ConsumeOut,
              SUM(CASE WHEN m.[MovementType]='negative-adj'   THEN m.[Quantity] ELSE 0 END) AS NegativeAdj,
              SUM(m.[Quantity]) AS NetChange
       FROM   [dbo].[PosStockMovement] m ${scope}
@@ -980,9 +988,11 @@ export async function stockPositionReport({ shopCode = null, dateFrom, dateTo, i
            ISNULL(p.ThirdPartyIn, 0)      AS ThirdPartyIn,
            ISNULL(p.PositiveAdj, 0)       AS PositiveAdj,
            ISNULL(p.PortionIn, 0)         AS PortionIn,
+           ISNULL(p.ProduceIn, 0)         AS ProduceIn,
            ISNULL(ABS(p.Sales), 0)        AS Sales,
            ISNULL(ABS(p.WriteOff), 0)     AS WriteOff,
            ISNULL(ABS(p.PortionOut), 0)   AS PortionOut,
+           ISNULL(ABS(p.ConsumeOut), 0)   AS ConsumeOut,
            ISNULL(ABS(p.NegativeAdj), 0)  AS NegativeAdj,
            ISNULL(o.Qty, 0) + ISNULL(p.NetChange, 0) AS Closing
     FROM   AllItems a
@@ -998,9 +1008,11 @@ export async function stockPositionReport({ shopCode = null, dateFrom, dateTo, i
     transferIn:   Number(row.TransferIn   || 0) + Number(row.ThirdPartyIn || 0),
     positiveAdj:  Number(row.PositiveAdj  || 0),
     portionIn:    Number(row.PortionIn    || 0),
+    produceIn:    Number(row.ProduceIn    || 0),
     sales:        Number(row.Sales        || 0),
     writeOff:     Number(row.WriteOff     || 0),
     portionOut:   Number(row.PortionOut   || 0),
+    consumeOut:   Number(row.ConsumeOut   || 0),
     negativeAdj:  Number(row.NegativeAdj  || 0),
     closing:      Number(row.Closing      || 0),
   }));

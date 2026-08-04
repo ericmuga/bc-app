@@ -175,6 +175,10 @@ export async function confirmPayment(req, res) {
 export async function listBoms(_req, res) {
   try { ok(res, await Bom.listBoms()); } catch (e) { err(res, e); }
 }
+/** GET /pos/makeable-items — cashier-facing list of recipe outputs. */
+export async function listMakeable(_req, res) {
+  try { ok(res, await Bom.listMakeable()); } catch (e) { err(res, e); }
+}
 export async function getBom(req, res) {
   try {
     const bom = await Bom.getBom(req.params.itemNo);

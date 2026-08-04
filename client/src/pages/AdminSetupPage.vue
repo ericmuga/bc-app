@@ -1053,24 +1053,34 @@ GROUP BY [G_L Account No_]</pre>
               </div>
             </div>
             <div class="list-search">
-              <InputText v-model="posItemsQ" placeholder="Search no / description / barcode…"
-                @keyup.enter="searchItems" @input="onItemsSearchInput" />
-              <Button icon="pi pi-search" size="small" text @click="searchItems" />
-              <span class="text-muted text-sm">{{ posItemsTotal }} item(s)</span>
+              <InputText v-model="itemFilters.global.value" placeholder="Search all columns…" />
+              <span class="text-muted text-sm">{{ posItems.length }} item(s)</span>
             </div>
             <DataTable :value="posItems" dataKey="ItemId" size="small" responsive-layout="scroll"
-              :lazy="true" paginator :rows="POS_PAGE_SIZE" :totalRecords="posItemsTotal"
-              :first="(posItemsPage-1)*POS_PAGE_SIZE" :loading="posItemsLoading" @page="onItemsPage"
-              :sortField="posItemsSortField" :sortOrder="posItemsSortOrder" @sort="onItemsSort" removableSort>
+              paginator :rows="POS_PAGE_SIZE" :loading="posItemsLoading" removableSort
+              v-model:filters="itemFilters" filterDisplay="row"
+              :globalFilterFields="['ItemNo','Description','CategoryCode','TaxType','UnitOfMeasure','VatPostingGroup']">
               <Column header="" style="width:50px">
                 <template #body="{ data }">
                   <img v-if="data.ImageUrl" :src="data.ImageUrl" class="item-thumb-sm" alt="" />
                   <i v-else class="pi pi-image text-muted" />
                 </template>
               </Column>
-              <Column field="ItemNo"      header="No"          sortable style="width:90px" />
-              <Column field="Description" header="Description" sortable style="min-width:180px" />
-              <Column field="CategoryCode" header="Category"   sortable style="width:110px" />
+              <Column field="ItemNo"      header="No"          sortable style="width:110px" :showFilterMenu="false">
+                <template #filter="{ filterModel, filterCallback }">
+                  <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="No" style="width:100%" />
+                </template>
+              </Column>
+              <Column field="Description" header="Description" sortable style="min-width:180px" :showFilterMenu="false">
+                <template #filter="{ filterModel, filterCallback }">
+                  <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Description" style="width:100%" />
+                </template>
+              </Column>
+              <Column field="CategoryCode" header="Category"   sortable style="width:130px" :showFilterMenu="false">
+                <template #filter="{ filterModel, filterCallback }">
+                  <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Category" style="width:100%" />
+                </template>
+              </Column>
               <Column field="UnitPrice"   header="Price"       sortable style="width:100px;text-align:right">
                 <template #body="{ data }">{{ Number(data.UnitPrice||0).toFixed(2) }}</template>
               </Column>
@@ -2172,34 +2182,23 @@ const posCategories      = ref([])
 const posItems           = ref([])
 const posPaymentTypes    = ref([])
 
-// ── Server-side pagination for the heavy POS-setup lists (items / prices / contacts) ──
+// ── POS Items list — loaded fully (708 rows) for client-side filter + sort ──
 const POS_PAGE_SIZE = 50
-const posItemsTotal = ref(0), posItemsPage = ref(1), posItemsQ = ref(''), posItemsLoading = ref(false)
-const posItemsSortField = ref(null), posItemsSortOrder = ref(1)  // 1 asc, -1 desc
-async function loadItems(page = posItemsPage.value) {
+const posItemsTotal = ref(0), posItemsLoading = ref(false)
+const itemFilters = ref({
+  global:       { value: null, matchMode: 'contains' },
+  ItemNo:       { value: null, matchMode: 'contains' },
+  Description:  { value: null, matchMode: 'contains' },
+  CategoryCode: { value: null, matchMode: 'contains' },
+})
+async function loadItems() {
   posItemsLoading.value = true
   try {
-    const { data } = await posSetupApi.listItems({
-      page, pageSize: POS_PAGE_SIZE, q: posItemsQ.value || undefined,
-      sortField: posItemsSortField.value || undefined,
-      sortDir: posItemsSortField.value ? (posItemsSortOrder.value === -1 ? 'desc' : 'asc') : undefined,
-    })
-    posItems.value = data.rows; posItemsTotal.value = data.total; posItemsPage.value = data.page
+    const { data } = await posSetupApi.listItems({ page: 1, pageSize: 100000 })
+    posItems.value = Array.isArray(data) ? data : (data.rows || [])
+    posItemsTotal.value = posItems.value.length
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { posItemsLoading.value = false }
-}
-function onItemsPage(e) { loadItems(Math.floor(e.first / POS_PAGE_SIZE) + 1) }
-function onItemsSort(e) {
-  posItemsSortField.value = e.sortField || null
-  posItemsSortOrder.value = e.sortOrder || 1
-  loadItems(1)
-}
-function searchItems() { loadItems(1) }
-// Debounced search-as-you-type (server-side filter).
-let itemSearchTimer = null
-function onItemsSearchInput() {
-  clearTimeout(itemSearchTimer)
-  itemSearchTimer = setTimeout(() => loadItems(1), 350)
 }
 
 // categories

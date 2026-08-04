@@ -47,8 +47,14 @@
       <Column field="positiveAdj" header="+ Adj"       header-style="width:100px;text-align:right" body-style="width:100px;text-align:right">
         <template #body="{ data }"><span class="num pos">{{ n(data.positiveAdj) }}</span></template>
       </Column>
+      <Column field="produceIn"   header="Produced"    header-style="width:100px;text-align:right" body-style="width:100px;text-align:right">
+        <template #body="{ data }"><span class="num pos">{{ n(data.produceIn) }}</span></template>
+      </Column>
       <Column field="sales"       header="Sales"       header-style="width:110px;text-align:right" body-style="width:110px;text-align:right">
         <template #body="{ data }"><span class="num neg">{{ n(data.sales) }}</span></template>
+      </Column>
+      <Column field="consumeOut"  header="Consumed"    header-style="width:100px;text-align:right" body-style="width:100px;text-align:right">
+        <template #body="{ data }"><span class="num neg">{{ n(data.consumeOut) }}</span></template>
       </Column>
       <Column field="negativeAdj" header="− Adj"       header-style="width:100px;text-align:right" body-style="width:100px;text-align:right">
         <template #body="{ data }"><span class="num neg">{{ n(data.negativeAdj) }}</span></template>

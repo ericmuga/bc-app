@@ -31,6 +31,21 @@ export async function listBoms() {
   return r.recordset;
 }
 
+/** Active recipe outputs (finished items that can be made) — cashier-facing. */
+export async function listMakeable() {
+  const p = await pool();
+  const r = await p.request().query(`
+    SELECT b.[ItemNo],
+           ISNULL(i.[Description], b.[ItemNo]) AS Description,
+           (SELECT COUNT(*) FROM [dbo].[PosBomLine] l WHERE l.[BomId] = b.[BomId]) AS ComponentCount
+    FROM [dbo].[PosBom] b
+    LEFT JOIN [dbo].[PosItem] i ON i.[ItemNo] = b.[ItemNo]
+    WHERE b.[IsActive] = 1
+    ORDER BY Description
+  `);
+  return r.recordset;
+}
+
 /** Full BOM (header + lines) for a finished item, or null. */
 export async function getBom(itemNo) {
   const p = await pool();

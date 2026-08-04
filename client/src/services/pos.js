@@ -78,9 +78,10 @@ export const posApi = {
   // Make-to-order (BOM): plan what must be produced for an order, then produce it.
   productionPlan: (orderId)    => api.post('/pos/production-plan', { orderId }),
   produce:        (orderId, items) => api.post('/pos/produce', { orderId, items }),
-  // Standalone (no order): plan/produce directly against a shop — for testing.
+  // Standalone (no order): plan/produce directly against a shop.
   planAt:         (shopCode, lines) => api.post('/pos/production-plan', { shopCode, lines }),
   produceAt:      (shopCode, items) => api.post('/pos/produce', { shopCode, items }),
+  makeableItems:  ()           => api.get('/pos/makeable-items'),
   // BOM admin (manager)
   listBoms:       ()           => api.get('/pos/boms'),
   getBom:         (itemNo)     => api.get(`/pos/boms/${encodeURIComponent(itemNo)}`),

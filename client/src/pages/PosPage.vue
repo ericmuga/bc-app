@@ -70,6 +70,7 @@
           </div>
         </div>
         <span v-if="orderNo" class="order-no">{{ orderNo }}</span>
+        <Button icon="pi pi-cog" text v-tooltip="'Make to stock (from recipe)'" @click="openMake" />
         <Button icon="pi pi-file-pdf" text v-tooltip="'Price list'" @click="downloadPriceList" />
         <Button icon="pi pi-trash" text severity="danger" v-tooltip="'Clear order'" @click="clearOrder" :disabled="!lines.length" />
       </div>
@@ -509,6 +510,38 @@
               :disabled="!newContact.name?.trim()" :loading="creatingContact" @click="saveNewContact" />
     </template>
   </Dialog>
+
+  <!-- ── Make to stock (produce a finished item from its recipe) ──────────── -->
+  <Dialog v-model:visible="makeVisible" header="Make to stock" :modal="true" :style="{ width: '460px' }">
+    <p class="text-muted text-sm" style="margin-top:0">
+      Produce a finished item from its recipe — this consumes the raw-material components and adds the finished stock at
+      <strong>{{ myShop?.Name || currentShopCode() || 'this shop' }}</strong>.
+    </p>
+    <div class="form-row">
+      <label>Recipe item</label>
+      <Select v-model="makeItem" :options="makeableItems" option-label="label" option-value="value" filter
+              placeholder="Select an item to make…" fluid @change="makePlan = null" />
+    </div>
+    <div class="form-row">
+      <label>Quantity to make</label>
+      <InputNumber v-model="makeQty" :min="0" :maxFractionDigits="4" fluid />
+    </div>
+    <Button label="Check availability" text size="small" icon="pi pi-search"
+            :disabled="!makeItem || !(makeQty > 0)" @click="checkMakePlan" />
+    <div v-if="makePlan" class="make-plan" :style="{ color: makePlan.blocked ? '#dc2626' : '#16a34a', marginTop: '8px', fontSize: '13px' }">
+      <div>{{ makePlan.msg }}</div>
+      <ul v-if="makePlan.components?.length" style="margin:6px 0 0;padding-left:18px">
+        <li v-for="c in makePlan.components" :key="c.itemNo" :style="{ color: c.ok ? 'inherit' : '#dc2626' }">
+          {{ c.itemNo }}: need {{ c.required }}, have {{ c.onHand }} {{ c.ok ? '' : '✗' }}
+        </li>
+      </ul>
+    </div>
+    <template #footer>
+      <Button label="Cancel" text @click="makeVisible = false" :disabled="makingNow" />
+      <Button label="Make" icon="pi pi-cog" :loading="makingNow"
+              :disabled="!makeItem || !(makeQty > 0)" @click="doMakeCashier" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
@@ -812,6 +845,51 @@ async function toggleFavourite(item) {
   } catch (e) {
     toast.add({ severity: 'warn', summary: 'Favourite error', detail: e.message, life: 2500 })
   }
+}
+
+// ── Make to stock (produce from recipe) ──────────────────────────────────────
+const makeVisible   = ref(false)
+const makeableItems = ref([])
+const makeItem      = ref(null)
+const makeQty       = ref(1)
+const makePlan      = ref(null)
+const makingNow     = ref(false)
+function currentShopCode() { return myShop.value?.Code || selectedAdminShop.value || null }
+async function openMake() {
+  makePlan.value = null; makeItem.value = null; makeQty.value = 1
+  try {
+    makeableItems.value = (await posApi.makeableItems()).data
+      .map(i => ({ label: `${i.ItemNo} — ${i.Description}`, value: i.ItemNo }))
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not load recipes', detail: e.response?.data?.error ?? e.message, life: 5000 })
+  }
+  makeVisible.value = true
+}
+async function checkMakePlan() {
+  makePlan.value = null
+  try {
+    const { data } = await posApi.planAt(currentShopCode(), [{ itemNo: makeItem.value, quantity: Number(makeQty.value) || 0 }])
+    if (!data.needsProduction) { makePlan.value = { blocked: false, msg: 'Enough finished stock already — nothing to make.', components: [] }; return }
+    const e = data.plan.find(x => x.itemNo === String(makeItem.value).toUpperCase()) || data.plan[0]
+    makePlan.value = {
+      blocked: !e.canProduce,
+      msg: e.canProduce ? `Will make ${e.shortfall} (on-hand ${e.onHand}). Components available.` : 'Cannot make — a component is short:',
+      components: e.components,
+    }
+  } catch (e) { makePlan.value = { blocked: true, msg: e.response?.data?.error ?? e.message, components: [] } }
+}
+async function doMakeCashier() {
+  const shop = currentShopCode()
+  if (!shop) { toast.add({ severity: 'warn', summary: 'No shop', detail: 'Select a shop first.', life: 4000 }); return }
+  makingNow.value = true
+  try {
+    await posApi.produceAt(shop, [{ itemNo: makeItem.value, qty: Number(makeQty.value) || 0 }])
+    toast.add({ severity: 'success', summary: 'Made to stock', detail: `${makeQty.value} × ${makeItem.value}`, life: 3000 })
+    makeVisible.value = false
+    await loadCatalogue()   // refresh on-hand in the menu
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Make failed', detail: e.response?.data?.error ?? e.message, life: 6000 })
+  } finally { makingNow.value = false }
 }
 
 // PDF preview modal state
