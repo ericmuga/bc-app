@@ -38,6 +38,8 @@
                   :disabled="!rows.length" :loading="exporting" @click="downloadCsv" />
           <Button label="PDF" icon="pi pi-file-pdf" severity="secondary"
                   :disabled="!rows.length" @click="downloadPdf" />
+          <Button label="BC Sales export" icon="pi pi-database" severity="secondary" :loading="stkBusy"
+                  @click="exportBcSales" v-tooltip="'Export paid POS invoice lines in BC Imported-SalesAL schema'" />
           <template v-if="tab === 'stockPosition'">
             <span class="stk-sep" />
             <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />
@@ -314,6 +316,25 @@ function downloadPdf() {
   ))
   pdf.autoTable({ head, body, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
   pdf.save(`${slug.toLowerCase().replace(/\s+/g, '-')}-${commonParams().dateFrom}_${commonParams().dateTo}.pdf`)
+}
+
+// ── BC Sales export (paid POS invoice lines → Imported SalesAL schema) ────────
+async function exportBcSales() {
+  stkBusy.value = true
+  try {
+    const { dateFrom, dateTo } = commonParams()
+    const { data } = await posReportsApi.importedSalesExport({ dateFrom, dateTo })
+    if (!data.rows?.length) { toast.add({ severity: 'warn', summary: 'No paid orders', detail: 'No paid POS orders in this date range.', life: 5000 }); return }
+    const aoa = [data.columns, ...data.rows.map(r => data.columns.map(c => {
+      const v = r[c]
+      return (c === 'Date' && v) ? new Date(v) : (v ?? '')
+    }))]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Imported SalesAL')
+    XLSX.writeFile(wb, `imported-sales-${dateFrom}_${dateTo}.xlsx`)
+  } catch (e) { toast.add({ severity: 'error', summary: 'Export failed', detail: e.response?.data?.error ?? e.message, life: 5000 }) }
+  finally { stkBusy.value = false }
 }
 
 // ── Stock take: export template / import / print sheet ────────────────────────

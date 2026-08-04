@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import * as Pos from '../models/PosModel.js';
 import * as Stock from '../models/PosStockModel.js';
 import * as Bom from '../models/PosBomModel.js';
+import * as BcSync from '../models/PosBcSyncModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
@@ -178,6 +179,19 @@ export async function listBoms(_req, res) {
 /** GET /pos/makeable-items — cashier-facing list of recipe outputs. */
 export async function listMakeable(_req, res) {
   try { ok(res, await Bom.listMakeable()); } catch (e) { err(res, e); }
+}
+
+/** GET /pos/bc-sync/imported-sales — POS invoice lines mapped to BC's Imported SalesAL schema. */
+export async function exportImportedSales(req, res) {
+  try {
+    const rows = await BcSync.buildImportedSalesRows({
+      shopCode: req.query.shopCode || null,
+      dateFrom: req.query.dateFrom,
+      dateTo:   req.query.dateTo,
+      lineType: req.query.lineType,
+    });
+    ok(res, { columns: BcSync.IMPORTED_SALES_COLUMNS, rows });
+  } catch (e) { err(res, e); }
 }
 export async function getBom(req, res) {
   try {
