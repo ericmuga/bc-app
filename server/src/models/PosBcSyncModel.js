@@ -62,7 +62,8 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
   if (shopCode) { req.input('shop', sql.NVarChar(50), String(shopCode).toUpperCase()); shopFilter = 'AND o.[ShopCode] = @shop'; }
 
   const r = await req.query(`
-    SELECT o.[OrderNo], o.[ContactNo], o.[ContactName], o.[TotalAmount], o.[CreatedAt],
+    SELECT o.[OrderNo], o.[ContactNo], o.[ContactName], o.[TotalAmount],
+           CONVERT(varchar(10), DATEADD(HOUR, 3, o.[CreatedAt]), 23) AS OrderDate,  -- EAT calendar date, no time
            o.[EtimsInvoiceNo], o.[CuSerialNo], o.[SignedAt], o.[ShopCode],
            s.[SalespersonCode], s.[LocationCode],
            l.[ItemNo], l.[Quantity], l.[UnitPrice], l.[LineAmount], l.[SortOrder], l.[LineId],
@@ -92,13 +93,15 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
       ExtDocNo:            (x.OrderNo || '').slice(0, 30),
       LineNo:              seq * 10000,
       CustNO:              cust,
-      Date:                x.CreatedAt,
+      Date:                x.OrderDate,   // 'YYYY-MM-DD' → BC datetime midnight
       SPCode:              (x.SalespersonCode || '').slice(0, 10),
       ShiptoCOde:          '',
       ItemNo:              (x.ItemNo || '').slice(0, 10),
       Qty:                 num(x.Quantity),
       Location:            (x.LocationCode || '').slice(0, 10),
-      SUOM:                (x.UnitOfMeasure || '').slice(0, 10),
+      // SUOM is PC or KG only — KG for weight units, PC for everything else
+      // (incl. the placeholder 'U' and blanks). TODO: real per-item SUOM later.
+      SUOM:                /^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(x.UnitOfMeasure || '').trim().toUpperCase()) ? 'KG' : 'PC',
       UnitPrice:           num(x.UnitPrice),
       ShiptoName:          (x.ContactName || '').slice(0, 100),
       TotalHeaderAmount:   num(x.TotalAmount),
@@ -130,7 +133,7 @@ const PUSH_COLUMNS = [
 ];
 const PUSH_TYPES = {
   ExtDocNo: bcSql.NVarChar(30), LineNo: bcSql.Int, CustNO: bcSql.NVarChar(10),
-  Date: bcSql.DateTime, SPCode: bcSql.NVarChar(10), ShiptoCOde: bcSql.NVarChar(10),
+  Date: bcSql.NVarChar(10), SPCode: bcSql.NVarChar(10), ShiptoCOde: bcSql.NVarChar(10),  // 'YYYY-MM-DD'; BC widens to datetime midnight
   ItemNo: bcSql.NVarChar(10), Qty: bcSql.Decimal(38, 4), Location: bcSql.NVarChar(10),
   SUOM: bcSql.NVarChar(10), UnitPrice: bcSql.Decimal(38, 4), ShiptoName: bcSql.NVarChar(100),
   TotalHeaderAmount: bcSql.Decimal(38, 4), LineAmount: bcSql.Decimal(38, 4),
@@ -154,11 +157,10 @@ export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType =
   const rows = await buildImportedSalesRows({ shopCode, dateFrom, dateTo, lineType });
   if (!rows.length) return { company, table: null, candidates: 0, inserted: 0, skipped: 0, orders: [] };
 
-  // Fill the BC customer no where the POS line had none (walk-in sales).
-  for (const r of rows) {
-    if (!r.CustNO) r.CustNO = customerNo.slice(0, 10);
-    if (!r.BillTo) r.BillTo = (r.CustNO || customerNo).slice(0, 10);
-  }
+  // CustNO & BillTo are always the shop's BC customer no (ignore the per-order
+  // walk-in contact, e.g. LOCAL-MSEO).
+  const shopCust = customerNo.slice(0, 10);
+  for (const r of rows) { r.CustNO = shopCust; r.BillTo = shopCust; }
 
   const table = bcTable(company, 'Imported SalesAL', { ext: true });
   const pool = await bcDb.getPool();
@@ -178,7 +180,9 @@ export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType =
     const req = pool.request();
     for (const c of PUSH_COLUMNS) {
       let v = r[c];
-      if (PUSH_TYPES[c] === bcSql.DateTime) v = v ? new Date(v) : new Date();
+      // Date → 'YYYYMMDD' (dateformat-independent; a dashed 'YYYY-MM-DD' string
+      // is rejected on this server's dateformat). BC widens it to datetime midnight.
+      if (c === 'Date') v = String(v || '').replace(/-/g, '');
       req.input(`c_${c.replace(/\W/g, '')}`, PUSH_TYPES[c], v ?? (typeof v === 'number' ? 0 : ''));
     }
     const cols = PUSH_COLUMNS.map((c) => `[${c}]`).join(', ');
