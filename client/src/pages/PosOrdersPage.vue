@@ -56,8 +56,14 @@
             />
             <Button
               v-if="data.Status === 'open' || data.Status === 'checkout'"
-              icon="pi pi-credit-card" size="small" severity="info" text rounded
-              v-tooltip.top="'Checkout (select payment method)'"
+              icon="pi pi-shopping-cart" label="Recall" size="small" severity="info" text
+              v-tooltip.top="'Recall cart to the terminal (add items / edit)'"
+              @click.stop="resumeCart(data)"
+            />
+            <Button
+              v-if="data.Status === 'open' || data.Status === 'checkout'"
+              icon="pi pi-credit-card" size="small" severity="secondary" text rounded
+              v-tooltip.top="'Checkout here (select payment method)'"
               @click.stop="openCheckoutFlow(data)"
             />
             <Button
@@ -327,15 +333,13 @@ async function load() {
 }
 
 const fetchingPayments = ref(false)
+// Recall an unposted order (saved / open / checkout) back into the terminal cart.
 async function resumeCart(row) {
-  try {
-    const oid = row.OrderId || row.orderId
-    await posApi.resumeCart(oid)
-    // Take the cashier to the POS terminal and load this order into the cart.
-    window.location.href = `/pos?resume=${encodeURIComponent(oid)}`
-  } catch (e) {
-    error.value = e.response?.data?.error ?? e.message
-  }
+  const oid = row.OrderId || row.orderId
+  // Flip a parked/checkout order back to 'open' so it's editable again; a no-op
+  // for already-open orders, so ignore any error here.
+  try { await posApi.resumeCart(oid) } catch { /* already open — fine */ }
+  window.location.href = `/pos?resume=${encodeURIComponent(oid)}`
 }
 
 async function fetchMpesaPayments() {

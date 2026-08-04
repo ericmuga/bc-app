@@ -59,6 +59,12 @@ async function loadPrint(shopCode = null, force = false) {
 }
 export function invalidatePrintCache() { _printCache.clear(); }
 
+/** The effective print format for a shop ({ format:'a4'|'thermal', thermalWidthMm }). */
+export async function getPrintFormat(shopCode = null) {
+  const cfg = await loadPrint(shopCode);
+  return { format: cfg.format, thermalWidthMm: cfg.thermalWidthMm };
+}
+
 async function getNextEtimsNumber(cfg) {
   if (!cfg.invoiceNumUrl) throw new Error('eTIMS InvoiceNum URL not configured');
   const res = await fetch(cfg.invoiceNumUrl, {

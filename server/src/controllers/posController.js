@@ -12,7 +12,7 @@ import * as BcSync from '../models/PosBcSyncModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
-         fetchPaymentsFromService, buildPrintPayload, generateByConfig } from '../services/posReceiptService.js';
+         fetchPaymentsFromService, buildPrintPayload, generateByConfig, getPrintFormat } from '../services/posReceiptService.js';
 import { ordersDb, sql as ordersSql } from '../db/ordersPool.js';
 import { pdfPathFor, generateInvoicePdf, generatePriceListPdf } from '../services/posPdfService.js';
 import logger from '../services/logger.js';
@@ -644,8 +644,12 @@ export async function getOrderPdf(req, res) {
     let fileName = order.pdfFileName;
     let filePath = fileName ? pdfPathFor(fileName) : null;
 
-    // Regenerate on demand if missing or file deleted
-    if (!fileName || !filePath || !fs.existsSync(filePath)) {
+    // Regenerate if missing OR if the cached file's format no longer matches the
+    // shop's print config (e.g. an old A4 file after switching to thermal).
+    const { format } = await getPrintFormat(order.shopCode);
+    const isThermalFile = !!fileName && /(^|[\\/])thermal_/.test(fileName);
+    const formatMatches = format === 'thermal' ? isThermalFile : (!!fileName && !isThermalFile);
+    if (!fileName || !filePath || !fs.existsSync(filePath) || !formatMatches) {
       const etimsResult = order.etimsInvoiceNo ? {
         etimsInvoiceNo: order.etimsInvoiceNo,
         cuSerialNo:     order.cuSerialNo,
