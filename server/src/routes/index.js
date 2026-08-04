@@ -203,6 +203,14 @@ router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, pos
 router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
 router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
 
+// ── POS make-to-order: BOM (recipes) + production plan/produce ──────────────
+router.get(  '/pos/boms',                                      ...canManage, posCtrl.listBoms);
+router.get(  '/pos/boms/:itemNo',                              ...canManage, posCtrl.getBom);
+router.post( '/pos/boms',                                      ...canManage, posCtrl.saveBom);
+router.delete('/pos/boms/:itemNo',                             ...canManage, posCtrl.deleteBom);
+router.post( '/pos/production-plan',                           ...canPos, posCtrl.productionPlan);
+router.post( '/pos/produce',                                   ...canPos, posCtrl.produce);
+
 // BC stock baseline (reset from BC on-hand) + incremental ledger loads
 router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
 router.post( '/pos/stock/reset-from-bc',                       ...canPos, posStockCtrl.resetStockFromBc);

@@ -250,7 +250,7 @@
   </Dialog>
 
   <!-- ── Checkout dialog ─────────────────────────────────────────── -->
-  <Dialog v-model:visible="checkoutVisible" header="Request Payment" :modal="true" :style="{ width: '440px' }" :closable="!paying">
+  <Dialog v-model:visible="checkoutVisible" header="Request Payment" :modal="true" :style="{ width: '440px' }" :closable="!paying" class="pos-soft-dialog">
     <div class="checkout-form">
       <!-- Total -->
       <div class="checkout-total-display">
@@ -1212,9 +1212,43 @@ async function addTender() {
   mpesaAmount.value = roundKes(splitRemaining.value)
   mpesaSearch.value = { loading: false, error: '', results: [] }
 }
+/**
+ * Make-to-order gate. Before checkout, ask the server what finished goods are
+ * short and can be produced from a BOM. Prompts the cashier to make them (which
+ * knocks off raw materials), then lets checkout proceed. Returns false to abort.
+ */
+async function ensureProduced(oid) {
+  try {
+    const { data } = await posApi.productionPlan(oid)
+    if (!data?.needsProduction) return true
+    const producible = (data.plan || []).filter(e => e.canProduce)
+    const blocked    = (data.plan || []).filter(e => e.hasBom && !e.canProduce)
+    if (blocked.length) {
+      const msg = blocked.map(e => {
+        const short = e.components.filter(c => !c.ok)
+          .map(c => `${c.itemNo} (need ${c.required}, have ${c.onHand})`).join(', ')
+        return `${e.description || e.itemNo}: short of ${short}`
+      }).join('\n')
+      toast.add({ severity: 'error', summary: 'Cannot make to order', detail: msg, life: 8000 })
+      return false
+    }
+    if (producible.length) {
+      const list = producible.map(e => `• Make ${e.shortfall} × ${e.description || e.itemNo}`).join('\n')
+      if (!window.confirm(`Some items are short of finished stock and will be made to order:\n\n${list}\n\nMake now and knock off raw materials?`)) return false
+      await posApi.produce(oid, producible.map(e => ({ itemNo: e.itemNo, qty: e.shortfall })))
+      toast.add({ severity: 'success', summary: 'Made to order', detail: `Produced ${producible.length} item(s)`, life: 3000 })
+    }
+    return true
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Production check failed', detail: e.response?.data?.error ?? e.message, life: 6000 })
+    return false
+  }
+}
+
 async function payWithTenders() {
   paying.value = true; payError.value = ''
   const oid = orderId.value
+  if (!(await ensureProduced(oid))) { paying.value = false; return }
   const matches = splitTenders.value.flatMap(t => t.matches || [])
   try {
     checkoutVisible.value = false
@@ -1239,6 +1273,7 @@ async function payWithTenders() {
 async function doCheckout() {
   paying.value = true
   payError.value = ''
+  if (!(await ensureProduced(orderId.value))) { paying.value = false; return }
   try {
     const code = String(selectedPayType.value.Code || '').toUpperCase()
     const isCoupon = code === 'COUPON'
@@ -1506,8 +1541,34 @@ function remainingClass(qty) {
 .mpesa-lookup > label { font-size: 12px; font-weight: 600; color: #475467; }
 .mpesa-hint { font-size: 11px; color: #98a2b3; }
 .mpesa-msg { font-size: 12px; color: #b45309; }
-.mpesa-table { margin: 4px 0; font-size: 12px; }
-.mpesa-table :deep(.p-datatable-tbody > tr > td) { padding: 5px 8px; }
+.mpesa-table { margin: 4px 0; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; }
+/* Header: solid, readable */
+.mpesa-table :deep(.p-datatable-thead > tr > th) {
+  background: #eef2f7;
+  color: #1f2937;
+  font-weight: 700;
+  border-bottom: 1px solid #cbd5e1;
+  padding: 6px 8px;
+}
+/* Body rows: give every row a solid, legible surface (not only on hover) */
+.mpesa-table :deep(.p-datatable-tbody > tr) {
+  background: #ffffff;
+  color: #1f2937;
+}
+.mpesa-table :deep(.p-datatable-tbody > tr > td) {
+  padding: 5px 8px;
+  color: #1f2937;
+  border-bottom: 1px solid #eef0f3;
+}
+/* Zebra striping so rows are distinguishable at rest */
+.mpesa-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: #f6f8fb; }
+/* Clear hover + selected states */
+.mpesa-table :deep(.p-datatable-tbody > tr:hover) { background: #eef4ff; }
+.mpesa-table :deep(.p-datatable-tbody > tr.p-datatable-row-selected),
+.mpesa-table :deep(.p-datatable-tbody > tr[data-p-selected="true"]) {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
 .mpesa-matched { margin: 6px 0; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px; }
 .mpesa-matched .mm-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
 .mpesa-matched .mm-total { display: flex; justify-content: space-between; border-top: 1px dashed #e4e7ec;
@@ -1813,13 +1874,13 @@ function remainingClass(qty) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #eff6ff;
-  border: 1.5px solid #bfdbfe;
+  background: #eef1f6;
+  border: 1px solid #d3dae6;
   border-radius: 10px;
   padding: 14px 18px;
 }
-.co-label { font-size: 13px; color: #374151; font-weight: 500; }
-.co-amount { font-size: 24px; font-weight: 900; color: #1d4ed8; }
+.co-label { font-size: 13px; color: #475467; font-weight: 500; }
+.co-amount { font-size: 24px; font-weight: 900; color: #1e40af; }
 
 /* Checkout customer summary */
 .checkout-customer {
@@ -1827,11 +1888,11 @@ function remainingClass(qty) {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: #f0fdf4;
-  border: 1.5px solid #86efac;
+  background: #eef4ee;
+  border: 1px solid #c6dbc9;
   border-radius: 8px;
 }
-.co-icon { font-size: 20px; color: #16a34a; }
+.co-icon { font-size: 20px; color: #2f855a; }
 .co-detail { flex: 1; }
 .co-cname { font-size: 14px; font-weight: 700; color: #111827; }
 .co-csub { font-size: 12px; color: #374151; display: flex; gap: 10px; margin-top: 2px; }
@@ -1992,5 +2053,35 @@ function remainingClass(qty) {
 @media (max-width: 640px) {
   .pos-root { flex-direction: column; height: auto; }
   .pos-order-panel { width: 100%; max-height: 48vh; border-left: none; border-top: 2px solid #d0d5dd; }
+}
+</style>
+
+<!-- Unscoped: PrimeVue teleports the Dialog to <body>, so its chrome can't be reached
+     by scoped CSS. Tone the stark-white checkout modal down to a calmer surface. -->
+<style>
+.pos-soft-dialog.p-dialog {
+  background: #f4f6fa;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.28);
+  border: 1px solid #dfe4ec;
+}
+.pos-soft-dialog.p-dialog .p-dialog-header {
+  background: #eaeef4;
+  color: #1f2937;
+  border-bottom: 1px solid #dfe4ec;
+  padding: 14px 20px;
+}
+.pos-soft-dialog.p-dialog .p-dialog-title { font-weight: 700; font-size: 16px; }
+.pos-soft-dialog.p-dialog .p-dialog-content {
+  background: #f4f6fa;
+  padding: 18px 20px 20px;
+}
+.pos-soft-dialog.p-dialog .p-dialog-footer {
+  background: #eaeef4;
+  border-top: 1px solid #dfe4ec;
+}
+/* Soften the modal backdrop so it dims the (dark) shell rather than flashing bright */
+.pos-soft-dialog.p-dialog-mask,
+body > .p-dialog-mask:has(.pos-soft-dialog) {
+  background: rgba(15, 23, 42, 0.55);
 }
 </style>

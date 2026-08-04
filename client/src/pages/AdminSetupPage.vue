@@ -561,6 +561,83 @@ GROUP BY [G_L Account No_]</pre>
         </div>
       </details>
 
+      <!-- ── POS Recipes (Make-to-Order BOMs) ─────────────────────────────────── -->
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('posBom', loadBomEditorData, $event)">
+        <summary>
+          <i class="pi pi-sitemap acc-icon" />
+          <span>POS Recipes (Make-to-Order)</span>
+          <span class="acc-count">{{ boms.length }} recipe(s)</span>
+        </summary>
+        <div class="accordion-body">
+          <p class="text-muted text-sm">
+            Define a finished POS item's recipe (bill of materials). At checkout, if finished stock is short,
+            the cashier is prompted to <strong>make</strong> it — which knocks off the component raw materials and
+            adds the finished good, then sells it. Example: <code>HOTDOG</code> = 1 × <code>BUN</code> + 1 × <code>SAUSAGE</code>.
+            Quantities are <strong>per one finished unit</strong>.
+          </p>
+
+          <div v-if="editingBom" class="builder-form" style="max-width:720px;margin-bottom:12px">
+            <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center">
+              <Select v-model="bomForm.itemNo" :options="itemOptions" option-label="label" option-value="value"
+                filter :disabled="!!bomForm._existing" placeholder="Finished item…"
+                :loading="itemsLoading" />
+              <InputText v-model="bomForm.notes" placeholder="Notes (optional)" />
+              <label style="display:flex;align-items:center;gap:6px;white-space:nowrap">
+                <Checkbox v-model="bomForm.isActive" :binary="true" /> Active
+              </label>
+            </div>
+
+            <div style="margin-top:10px">
+              <div class="builder-panel-head" style="margin-bottom:4px">
+                <span class="text-muted text-sm">Components (per 1 finished unit)</span>
+                <Button icon="pi pi-plus" text size="small" label="Add component" @click="bomForm.lines.push({ componentItemNo:'', description:'', qtyPer:1, uom:'' })" />
+              </div>
+              <div v-for="(ln, i) in bomForm.lines" :key="i"
+                   style="display:grid;grid-template-columns:1fr 1.6fr 90px 80px auto;gap:8px;margin-bottom:6px;align-items:center">
+                <Select v-model="ln.componentItemNo" :options="itemOptions" option-label="label" option-value="value"
+                  filter placeholder="Component…" :loading="itemsLoading" @change="pickComponent(ln)" />
+                <InputText v-model="ln.description" placeholder="Description" />
+                <InputNumber v-model="ln.qtyPer" :min="0" :minFractionDigits="0" :maxFractionDigits="4" fluid placeholder="Qty/unit" />
+                <InputText v-model="ln.uom" placeholder="UoM" />
+                <Button icon="pi pi-trash" text severity="danger" size="small" @click="bomForm.lines.splice(i,1)" />
+              </div>
+            </div>
+
+            <div class="schedule-actions" style="margin-top:8px">
+              <Button label="Save recipe" icon="pi pi-save" size="small" @click="saveBom" :loading="savingBom" />
+              <Button label="Cancel" icon="pi pi-times" text size="small" @click="cancelBom" />
+            </div>
+          </div>
+
+          <div class="builder-panel-head" style="margin-bottom:6px">
+            <span class="text-muted text-sm">{{ boms.length }} recipe(s)</span>
+            <Button icon="pi pi-plus" text size="small" v-tooltip="'New recipe'" @click="newBom" />
+          </div>
+
+          <DataTable :value="boms" dataKey="BomId" size="small" responsive-layout="scroll">
+            <Column field="ItemNo" header="Finished Item" style="min-width:150px" />
+            <Column field="ComponentCount" header="Components" style="width:110px" />
+            <Column header="Active" style="width:80px">
+              <template #body="{ data }">
+                <i :class="data.IsActive ? 'pi pi-check text-green-500' : 'pi pi-times text-red-400'" />
+              </template>
+            </Column>
+            <Column field="Notes" header="Notes" style="min-width:160px">
+              <template #body="{ data }">{{ data.Notes || '—' }}</template>
+            </Column>
+            <Column header="" style="width:80px">
+              <template #body="{ data }">
+                <div class="row-actions">
+                  <Button icon="pi pi-pencil" text size="small" @click="editBom(data)" />
+                  <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deleteBom(data)" />
+                </div>
+              </template>
+            </Column>
+          </DataTable>
+        </div>
+      </details>
+
       <!-- ── POS Setup ───────────────────────────────────────────────────────── -->
       <details class="admin-accordion"
                @toggle="onAccordionToggle('posSetup', loadPosSetup, $event)">
@@ -1369,7 +1446,7 @@ import { adminApi }          from '@/services/api.js'
 import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
-import { posSetupApi, yieldApi } from '@/services/pos.js'
+import { posSetupApi, yieldApi, posApi } from '@/services/pos.js'
 import { dispatchApi } from '@/services/dispatch.js'
 import Dialog from 'primevue/dialog'
 import { useAuthStore } from '@/stores/auth.js'
@@ -1597,6 +1674,77 @@ async function saveSalesPg() {
 async function deleteSalesPg(row) {
   error.value = ''
   try { await bcReportsApi.deleteSalesPgConfig(row.ConfigId); await loadSalesPgConfig() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+
+// ── POS make-to-order BOMs state ──────────────────────────────────────────────
+const boms        = ref([])
+const editingBom  = ref(false)
+const savingBom   = ref(false)
+// Full POS item catalogue for the BOM dropdowns (finished + components).
+const itemOptions = ref([])
+const itemsLoading = ref(false)
+async function loadItemOptions() {
+  if (itemOptions.value.length) return
+  itemsLoading.value = true
+  try {
+    const all = []; let page = 1; let total = Infinity
+    while (all.length < total && page <= 200) {
+      const { data } = await posSetupApi.listItems({ page, pageSize: 500 })
+      total = data.total ?? all.length + (data.rows?.length || 0)
+      if (!data.rows?.length) break
+      all.push(...data.rows)
+      page++
+    }
+    itemOptions.value = all.map(i => ({
+      label: `${i.ItemNo} — ${i.Description || ''}`.trim().replace(/—\s*$/, '').trim(),
+      value: i.ItemNo,
+      description: i.Description || '',
+    }))
+  } catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { itemsLoading.value = false }
+}
+function pickComponent(ln) {
+  const o = itemOptions.value.find(x => x.value === ln.componentItemNo)
+  if (o && !ln.description) ln.description = o.description || ''
+}
+async function loadBomEditorData() {
+  await Promise.all([loadBoms(), loadItemOptions()])
+}
+function blankBom() {
+  return { itemNo: '', notes: '', isActive: true, _existing: false,
+    lines: [{ componentItemNo: '', description: '', qtyPer: 1, uom: '' }] }
+}
+const bomForm = ref(blankBom())
+function newBom()    { bomForm.value = blankBom(); editingBom.value = true }
+function cancelBom() { editingBom.value = false }
+async function editBom(row) {
+  try {
+    const { data } = await posApi.getBom(row.ItemNo)
+    bomForm.value = {
+      itemNo: data.ItemNo, notes: data.Notes || '', isActive: !!data.IsActive, _existing: true,
+      lines: (data.lines || []).map(l => ({
+        componentItemNo: l.ComponentItemNo, description: l.Description || '',
+        qtyPer: Number(l.QtyPer), uom: l.Uom || '',
+      })),
+    }
+    if (!bomForm.value.lines.length) bomForm.value.lines = [{ componentItemNo: '', description: '', qtyPer: 1, uom: '' }]
+    editingBom.value = true
+  } catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function loadBoms() {
+  try { boms.value = (await posApi.listBoms()).data }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function saveBom() {
+  savingBom.value = true; error.value = ''
+  try { await posApi.saveBom(bomForm.value); await loadBoms(); cancelBom() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { savingBom.value = false }
+}
+async function deleteBom(row) {
+  error.value = ''
+  try { await posApi.deleteBom(row.ItemNo); await loadBoms() }
   catch (err) { error.value = err.response?.data?.error || err.message }
 }
 
@@ -2527,6 +2675,7 @@ const LOADERS = {
   templates:     loadTemplates,
   custPg:        loadCustPgMappings,
   salesPg:       loadSalesPgConfig,
+  posBom:        loadBomEditorData,
   posSetup:      loadPosSetup,
 }
 

@@ -75,6 +75,14 @@ export const posApi = {
   setLines:       (id, lines)  => api.put(`/pos/orders/${id}/lines`, { lines }),
   checkout:       (id, payload)=> api.post(`/pos/orders/${id}/checkout`, payload),
   checkoutMulti:  (id, body)   => api.post(`/pos/orders/${id}/checkout-multi`, body),
+  // Make-to-order (BOM): plan what must be produced for an order, then produce it.
+  productionPlan: (orderId)    => api.post('/pos/production-plan', { orderId }),
+  produce:        (orderId, items) => api.post('/pos/produce', { orderId, items }),
+  // BOM admin (manager)
+  listBoms:       ()           => api.get('/pos/boms'),
+  getBom:         (itemNo)     => api.get(`/pos/boms/${encodeURIComponent(itemNo)}`),
+  saveBom:        (body)       => api.post('/pos/boms', body),
+  deleteBom:      (itemNo)     => api.delete(`/pos/boms/${encodeURIComponent(itemNo)}`),
   completeOrder:  (id)         => api.post(`/pos/orders/${id}/complete`),
   cancelOrder:    (id)         => api.post(`/pos/orders/${id}/cancel`),
   saveCart:       (id, label)  => api.post(`/pos/orders/${id}/save`,   { label }),

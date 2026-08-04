@@ -1010,6 +1010,39 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[PosWriteOff] OK');
 
+  // ── [dbo].[PosBom] / [dbo].[PosBomLine] (make-to-order recipes) ─────────────
+  // A finished POS item's bill of materials: which raw components (and how much
+  // per finished unit) are consumed to produce one unit. Drives the checkout
+  // make-to-order flow (produce shortfall → knock off components → sell).
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosBom' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosBom] (
+      [BomId]     UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ItemNo]    NVARCHAR(30)     NOT NULL UNIQUE,   -- finished good (POS item no.)
+      [IsActive]  BIT              NOT NULL DEFAULT 1,
+      [Notes]     NVARCHAR(255)    NULL,
+      [CreatedAt] DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt] DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosBom] OK');
+
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosBomLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosBomLine] (
+      [BomLineId]       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [BomId]           UNIQUEIDENTIFIER NOT NULL,
+      [ComponentItemNo] NVARCHAR(30)     NOT NULL,   -- raw material (POS item no.)
+      [Description]     NVARCHAR(200)    NULL,
+      [QtyPer]          DECIMAL(18,4)    NOT NULL DEFAULT 0,  -- qty consumed per 1 finished unit
+      [Uom]             NVARCHAR(20)     NULL,
+      [SortOrder]       INT              NOT NULL DEFAULT 0,
+      CONSTRAINT [FK_PosBomLine] FOREIGN KEY ([BomId])
+        REFERENCES [dbo].[PosBom]([BomId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosBomLine] OK');
+
   // ── [dbo].[CustPostingGroupMap] ─────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='CustPostingGroupMap' AND schema_id=SCHEMA_ID('dbo'))

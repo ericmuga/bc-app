@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as Pos from '../models/PosModel.js';
 import * as Stock from '../models/PosStockModel.js';
+import * as Bom from '../models/PosBomModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
@@ -167,6 +168,54 @@ export async function confirmPayment(req, res) {
       printed: printOk,
     });
   } catch (e) { err(res, e, e.message.includes('not found') ? 404 : 400); }
+}
+
+// ── Make-to-order: BOM CRUD + production plan + produce ───────────────────────
+
+export async function listBoms(_req, res) {
+  try { ok(res, await Bom.listBoms()); } catch (e) { err(res, e); }
+}
+export async function getBom(req, res) {
+  try {
+    const bom = await Bom.getBom(req.params.itemNo);
+    if (!bom) return res.status(404).json({ error: 'No BOM for this item' });
+    ok(res, bom);
+  } catch (e) { err(res, e); }
+}
+export async function saveBom(req, res) {
+  try { ok(res, await Bom.saveBom(req.body)); } catch (e) { err(res, e, 400); }
+}
+export async function deleteBom(req, res) {
+  try { ok(res, await Bom.deleteBom(req.params.itemNo)); } catch (e) { err(res, e, 400); }
+}
+
+/** Resolve the order's shop + lines from an orderId, or take them from the body. */
+async function resolveShopAndLines(req) {
+  if (req.body?.orderId) {
+    const order = await Pos.getOrder(req.body.orderId);
+    if (!order) throw new Error('Order not found');
+    return { shopCode: order.shopCode, lines: order.lines, orderId: order.orderId, orderNo: order.orderNo };
+  }
+  const shopCode = req.body?.shopCode || await resolveShopCode(req.user.userId, req.user.role, req);
+  return { shopCode, lines: req.body?.lines || [] };
+}
+
+/** POST /pos/production-plan — what must be made for this order + component availability. */
+export async function productionPlan(req, res) {
+  try {
+    const { shopCode, lines } = await resolveShopAndLines(req);
+    ok(res, await Bom.computeProductionPlan({ shopCode, lines }));
+  } catch (e) { err(res, e, 400); }
+}
+
+/** POST /pos/produce — make finished goods from BOM (knock off components). */
+export async function produce(req, res) {
+  try {
+    const { shopCode, orderId, orderNo } = await resolveShopAndLines(req);
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: 'items[] required' });
+    ok(res, await Bom.produceItems({ shopCode, items, orderId, referenceNo: orderNo, userId: req.user.userId }));
+  } catch (e) { err(res, e, e.code === 'NO_BOM' ? 404 : 400); }
 }
 
 export async function printConfirmation(req, res) {
