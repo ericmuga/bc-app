@@ -71,7 +71,7 @@
         </div>
         <span v-if="orderNo" class="order-no">{{ orderNo }}</span>
         <Button icon="pi pi-cog" text v-tooltip="'Make to stock (from recipe)'" @click="openMake" />
-        <Button icon="pi pi-file-pdf" text v-tooltip="'Price list'" @click="downloadPriceList" />
+        <Button icon="pi pi-list" text v-tooltip="'Price list'" @click="priceListVisible = true" />
         <Button icon="pi pi-trash" text severity="danger" v-tooltip="'Clear order'" @click="clearOrder" :disabled="!lines.length" />
       </div>
 
@@ -542,6 +542,37 @@
               :disabled="!makeItem || !(makeQty > 0)" @click="doMakeCashier" />
     </template>
   </Dialog>
+
+  <!-- ── Price list (searchable / filterable) ─────────────────────────────── -->
+  <Dialog v-model:visible="priceListVisible" header="Price List" :modal="true"
+          :style="{ width: '760px' }" :contentStyle="{ paddingTop: '0' }">
+    <div style="display:flex;gap:8px;align-items:center;margin:4px 0 10px">
+      <InputText v-model="priceListFilters.global.value" placeholder="Search item no / description…" style="flex:1" autofocus />
+      <span class="text-muted text-sm">{{ priceListItems.length }} item(s)</span>
+      <Button icon="pi pi-file-pdf" label="PDF" text size="small" @click="downloadPriceList" />
+    </div>
+    <DataTable :value="priceListItems" dataKey="itemNo" size="small" paginator :rows="15"
+               v-model:filters="priceListFilters" filterDisplay="row" removableSort
+               :globalFilterFields="['itemNo','description']" scrollable scrollHeight="52vh">
+      <Column field="itemNo" header="Item No" sortable style="width:130px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="No" style="width:100%" />
+        </template>
+      </Column>
+      <Column field="description" header="Description" sortable style="min-width:240px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Description" style="width:100%" />
+        </template>
+      </Column>
+      <Column field="unitOfMeasure" header="UoM" sortable style="width:80px" />
+      <Column field="unitPrice" header="Price" sortable style="width:120px;text-align:right" header-style="text-align:right">
+        <template #body="{ data }"><span class="mono">{{ Number(data.unitPrice || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</span></template>
+      </Column>
+    </DataTable>
+    <template #footer>
+      <Button label="Close" text @click="priceListVisible = false" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
@@ -984,6 +1015,24 @@ async function doStkPush() {
     sendingStk.value = false
   }
 }
+
+// ── Price list modal (searchable / filterable) ───────────────────────────────
+const priceListVisible = ref(false)
+const priceListFilters = ref({
+  global:      { value: null, matchMode: 'contains' },
+  itemNo:      { value: null, matchMode: 'contains' },
+  description: { value: null, matchMode: 'contains' },
+})
+// Flatten the catalogue, de-duplicated by item no (items also appear under ★ Favourites).
+const priceListItems = computed(() => {
+  const seen = new Set(); const out = []
+  for (const c of categories.value) for (const it of (c.items || [])) {
+    if (seen.has(it.itemNo)) continue
+    seen.add(it.itemNo)
+    out.push({ itemNo: it.itemNo, description: it.description, unitPrice: it.unitPrice, unitOfMeasure: it.unitOfMeasure || '' })
+  }
+  return out.sort((a, b) => String(a.description || '').localeCompare(String(b.description || '')))
+})
 
 function downloadPriceList() {
   openPdfPreview({
