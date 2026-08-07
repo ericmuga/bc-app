@@ -15,6 +15,11 @@
 
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
+    <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center">
+      <InputText v-model="orderFilters.global.value" placeholder="Search all columns…" style="max-width:320px" />
+      <span class="text-muted text-sm">{{ orders.length }} order(s)</span>
+    </div>
+
     <DataTable
       :value="orders"
       dataKey="OrderId"
@@ -23,20 +28,38 @@
       responsive-layout="scroll"
       @row-click="openOrder"
       selection-mode="single"
+      paginator :rows="25"
+      v-model:filters="orderFilters" filterDisplay="row" removableSort
+      :globalFilterFields="['OrderNo','ShopCode','CashierName','Status','Label']"
     >
-      <Column field="OrderNo"     header="Order No"  style="width:140px" />
-      <Column field="ShopCode"    header="Shop"      style="width:90px" />
-      <Column field="CashierName" header="Cashier"   style="min-width:130px" />
-      <Column field="LineCount"   header="Lines"     style="width:65px;text-align:right" />
-      <Column field="TotalAmount" header="Total"     style="width:120px;text-align:right">
+      <Column field="OrderNo"     header="Order No"  sortable style="width:150px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="No" style="width:100%" />
+        </template>
+      </Column>
+      <Column field="ShopCode"    header="Shop"      sortable style="width:90px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Shop" style="width:100%" />
+        </template>
+      </Column>
+      <Column field="CashierName" header="Cashier"   sortable style="min-width:130px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Cashier" style="width:100%" />
+        </template>
+      </Column>
+      <Column field="LineCount"   header="Lines"     sortable style="width:65px;text-align:right" />
+      <Column field="TotalAmount" header="Total"     sortable style="width:120px;text-align:right">
         <template #body="{ data }">{{ fmt(data.TotalAmount) }}</template>
       </Column>
-      <Column field="Status" header="Status" style="width:100px">
+      <Column field="Status" header="Status" sortable style="width:110px" :showFilterMenu="false">
         <template #body="{ data }">
           <Tag :value="data.Status" :severity="statusSeverity(data.Status)" />
         </template>
+        <template #filter="{ filterModel, filterCallback }">
+          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Status" style="width:100%" />
+        </template>
       </Column>
-      <Column field="CreatedAt" header="Created" style="min-width:130px">
+      <Column field="CreatedAt" header="Created" sortable style="min-width:130px">
         <template #body="{ data }">{{ fmtTime(data.CreatedAt) }}</template>
       </Column>
       <Column header="Label" style="min-width:130px">
@@ -303,6 +326,13 @@ import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
 const orders        = ref([])
+const orderFilters  = ref({
+  global:      { value: null, matchMode: 'contains' },
+  OrderNo:     { value: null, matchMode: 'contains' },
+  ShopCode:    { value: null, matchMode: 'contains' },
+  CashierName: { value: null, matchMode: 'contains' },
+  Status:      { value: null, matchMode: 'contains' },
+})
 const loading       = ref(false)
 const error         = ref('')
 const detailVisible = ref(false)
@@ -563,7 +593,7 @@ function fmtTime(v) {
 </script>
 
 <style scoped>
-.pos-orders-page { padding: 16px 20px; max-width: 960px; }
+.pos-orders-page { padding: 16px 20px; }
 .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
 .page-title { font-size:20px; font-weight:700; margin:0 0 2px; }
 .mt-2 { margin-top: 8px; }
