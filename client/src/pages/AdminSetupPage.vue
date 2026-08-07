@@ -22,24 +22,49 @@
         </summary>
         <div class="accordion-body">
           <p class="text-muted text-sm">Admin sees everything. Sales/Analyst see reports. Finance sees finance reports. Dispatch sees orders. Security sees invoices.</p>
-          <DataTable :value="users" dataKey="userId" size="small" responsive-layout="scroll">
-            <Column field="displayName" header="Name" style="min-width:180px">
+          <div class="list-search">
+            <InputText v-model="userFilters.global.value" placeholder="Search all columns…" />
+            <span class="text-muted text-sm">{{ users.length }} user(s)</span>
+          </div>
+          <DataTable :value="users" dataKey="userId" size="small" responsive-layout="scroll"
+            paginator :rows="POS_PAGE_SIZE" removableSort
+            v-model:filters="userFilters" filterDisplay="row"
+            :globalFilterFields="['displayName','username','email','role','shopCode']">
+            <Column field="displayName" header="Name" sortable style="min-width:180px" :showFilterMenu="false">
               <template #body="{ data }"><InputText v-model="data.displayName" fluid /></template>
+              <template #filter="{ filterModel, filterCallback }">
+                <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Name" style="width:100%" />
+              </template>
             </Column>
-            <Column field="username" header="Username" style="min-width:140px" />
-            <Column field="email" header="Email" style="min-width:180px">
+            <Column field="username" header="Username" sortable style="min-width:140px" :showFilterMenu="false">
+              <template #filter="{ filterModel, filterCallback }">
+                <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Username" style="width:100%" />
+              </template>
+            </Column>
+            <Column field="email" header="Email" sortable style="min-width:180px" :showFilterMenu="false">
               <template #body="{ data }"><InputText v-model="data.email" fluid /></template>
+              <template #filter="{ filterModel, filterCallback }">
+                <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Email" style="width:100%" />
+              </template>
             </Column>
-            <Column field="role" header="Role" style="min-width:140px">
+            <Column field="role" header="Role" sortable style="min-width:140px" :showFilterMenu="false">
               <template #body="{ data }">
                 <Select v-model="data.role" :options="roleOptions" option-label="label" option-value="value" fluid />
               </template>
+              <template #filter="{ filterModel, filterCallback }">
+                <Select v-model="filterModel.value" :options="roleOptions" option-label="label" option-value="value"
+                  placeholder="Role" show-clear @change="filterCallback()" style="width:100%" />
+              </template>
             </Column>
-            <Column field="shopCode" header="Shop" style="min-width:120px">
+            <Column field="shopCode" header="Shop" sortable style="min-width:120px" :showFilterMenu="false">
               <template #body="{ data }">
                 <Select v-model="data.shopCode" :options="posShopOptions" option-label="label" option-value="value"
                   placeholder="— none —" show-clear fluid
                   :disabled="!['shop','admin'].includes(data.role)" />
+              </template>
+              <template #filter="{ filterModel, filterCallback }">
+                <Select v-model="filterModel.value" :options="posShopOptions" option-label="label" option-value="value"
+                  placeholder="Shop" show-clear @change="filterCallback()" style="width:100%" />
               </template>
             </Column>
             <Column header="Active" style="width:90px">
@@ -742,6 +767,15 @@ GROUP BY [G_L Account No_]</pre>
                   <InputNumber v-model="printCfg.copies" :min="1" :max="5" show-buttons fluid />
                 </div>
               </div>
+              <div class="builder-checks" style="margin-top:10px">
+                <Checkbox v-model="printCfg.usePrintService" binary input-id="use-print-svc" />
+                <label for="use-print-svc">Use server-side print service</label>
+              </div>
+              <p class="text-muted text-sm" style="margin-top:2px">
+                When ON, the POS sends receipts straight to the selected printer and offers a
+                "Send to Printer" button. When OFF, checkout and reprint just show the receipt in a
+                preview modal — cashiers print from the browser (Open in new tab → Ctrl+P).
+              </p>
               <div class="schedule-actions" style="margin-top:8px">
                 <Button label="Save Print Config" icon="pi pi-save" size="small" @click="savePrintCfg" :loading="savingPrintCfg" />
                 <span v-if="installedPrinters.length" class="text-muted text-sm" style="margin-left:8px">
@@ -750,6 +784,45 @@ GROUP BY [G_L Account No_]</pre>
               </div>
             </div>
           </div>
+          </details>
+
+          <!-- Receipt branding: logo, slogan, MPESA header, company details -->
+          <details class="pos-sub-accordion" @toggle="onBrandingToggle($event)">
+            <summary><i class="pi pi-id-card" /> Receipt Branding (logo, slogan, MPESA)</summary>
+            <div class="pos-setup-section">
+              <h4>Receipt Branding</h4>
+              <p class="text-muted text-sm">
+                These appear at the TOP of every confirmation receipt and tax invoice (thermal &amp; A4).
+                The MPESA details show prominently near the top so customers can pay to the till.
+              </p>
+              <div class="builder-form" style="max-width:720px">
+                <div class="item-photo-row" style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+                  <img v-if="branding.logoDataUrl" :src="branding.logoDataUrl" class="item-thumb" alt="logo" />
+                  <div v-else class="item-thumb item-thumb-empty"><i class="pi pi-image" /></div>
+                  <input ref="brandLogoInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                         style="display:none" @change="onBrandingLogo" />
+                  <Button :label="branding.logoDataUrl ? 'Change logo' : 'Upload logo'" icon="pi pi-camera"
+                          size="small" text @click="brandLogoInput?.click()" />
+                  <Button v-if="branding.logoDataUrl" label="Remove" icon="pi pi-times" text severity="danger"
+                          size="small" @click="branding.logoDataUrl=''" />
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                  <div class="cf-field"><label>Company Name</label><InputText v-model="branding.companyName" fluid placeholder="e.g. Farmer's Choice Ltd" /></div>
+                  <div class="cf-field"><label>Slogan</label><InputText v-model="branding.slogan" fluid placeholder="e.g. Quality you can trust" /></div>
+                  <div class="cf-field"><label>Company Address</label><InputText v-model="branding.companyAddress" fluid placeholder="P.O. Box …, Nairobi" /></div>
+                  <div class="cf-field"><label>Company Email</label><InputText v-model="branding.companyEmail" fluid placeholder="sales@…" /></div>
+                  <div class="cf-field"><label>Company PIN</label><InputText v-model="branding.companyPin" fluid placeholder="KRA PIN (blank = use eTIMS PIN)" /></div>
+                </div>
+                <div class="cf-field" style="margin-top:8px">
+                  <label>MPESA Details (shown at top of receipt)</label>
+                  <Textarea v-model="branding.mpesaDetails" rows="2" auto-resize fluid
+                            placeholder="e.g. LIPA NA MPESA — Till 123456  (Farmer's Choice)" />
+                </div>
+                <div class="schedule-actions" style="margin-top:10px">
+                  <Button label="Save Branding" icon="pi pi-save" size="small" :loading="savingBranding" @click="saveBranding" />
+                </div>
+              </div>
+            </div>
           </details>
 
           <!-- Inventory display on the POS terminal item cards -->
@@ -1582,6 +1655,14 @@ const selectionModeOptions = [
 
 // ── Core state ────────────────────────────────────────────────────────────────
 const users    = ref([])
+const userFilters = ref({
+  global:      { value: null, matchMode: 'contains' },
+  displayName: { value: null, matchMode: 'contains' },
+  username:    { value: null, matchMode: 'contains' },
+  email:       { value: null, matchMode: 'contains' },
+  role:        { value: null, matchMode: 'contains' },
+  shopCode:    { value: null, matchMode: 'contains' },
+})
 const schedules = ref([])
 const loading  = ref(false)
 const error    = ref('')
@@ -2638,7 +2719,7 @@ async function loadEtimsBcDefaults() {
 
 // Print config (per shop)
 const printShop         = ref('')
-const printCfg          = ref({ format: 'a4', invoicePrinter: '', thermalWidthMm: 72, copies: 1 })
+const printCfg          = ref({ format: 'a4', invoicePrinter: '', thermalWidthMm: 72, copies: 1, usePrintService: true })
 const installedPrinters = ref([])
 const loadingPrinters   = ref(false)
 const savingPrintCfg    = ref(false)
@@ -2677,6 +2758,33 @@ async function saveInvCfg() {
     })).data
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally   { savingInvCfg.value = false }
+}
+
+// ── Receipt branding (logo, slogan, MPESA header) ───────────────────────────
+const branding      = ref({ companyName:'', companyAddress:'', companyEmail:'', companyPin:'', slogan:'', mpesaDetails:'', logoDataUrl:'' })
+const savingBranding = ref(false)
+const brandLogoInput = ref(null)
+let   brandingLoaded = false
+async function onBrandingToggle(ev) {
+  if (!ev.target.open || brandingLoaded) return
+  try { branding.value = { ...branding.value, ...(await posSetupApi.getBranding()).data }; brandingLoaded = true }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+function onBrandingLogo(ev) {
+  const file = ev.target.files?.[0]; if (!file) return
+  if (file.size > 500 * 1024) { error.value = 'Logo must be under 500KB (it is embedded in every receipt).'; ev.target.value=''; return }
+  const reader = new FileReader()
+  reader.onload = () => { branding.value.logoDataUrl = String(reader.result || '') }
+  reader.readAsDataURL(file)
+  ev.target.value = ''
+}
+async function saveBranding() {
+  savingBranding.value = true
+  try {
+    branding.value = (await posSetupApi.saveBranding({ ...branding.value })).data
+    brandingLoaded = true
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingBranding.value = false }
 }
 
 async function savePrintCfg() {

@@ -291,4 +291,8 @@ export const posSetupApi = {
   // Inventory display config (POS terminal item cards)
   getInventoryConfig:  ()      => api.get('/pos/setup/inventory-config'),
   saveInventoryConfig: (body)  => api.post('/pos/setup/inventory-config', body),
+
+  // Receipt branding (logo, slogan, MPESA details, company header)
+  getBranding:  ()      => api.get('/pos/setup/branding'),
+  saveBranding: (body)  => api.put('/pos/setup/branding', body),
 }

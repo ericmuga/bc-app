@@ -590,7 +590,7 @@ import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import { useToast } from 'primevue/usetoast'
 import Select from 'primevue/select'
-import { posApi, setAdminShopCode, getAdminShopCode } from '@/services/pos.js'
+import { posApi, posSetupApi, setAdminShopCode, getAdminShopCode } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
@@ -955,16 +955,17 @@ async function pdfPreviewConfirm() {
 const receiptMode = ref(false)
 function showReceiptPreview(oid, orderNoLabel) {
   receiptMode.value = true
+  const useSvc = usePrintService.value !== false
   openPdfPreview({
     header: `Receipt / Tax Invoice${orderNoLabel ? ' — ' + orderNoLabel : ''}`,
     fetcher: () => posApi.fetchPdf(oid),
-    primaryLabel: 'Print',
+    primaryLabel: useSvc ? 'Print' : '',
     primaryIcon:  'pi pi-print',
     primarySeverity: 'success',
-    onConfirm: async () => {
+    onConfirm: useSvc ? async () => {
       try { await posApi.reprintOrder(oid); toast.add({ severity: 'success', summary: 'Sent to printer', life: 2000 }) }
       catch (e) { toast.add({ severity: 'error', summary: 'Print failed', detail: e.response?.data?.error ?? e.message, life: 4000 }) }
-    },
+    } : null,
   })
 }
 // When the receipt modal closes, reset for the next sale.
@@ -1073,9 +1074,16 @@ async function loadResumedOrder(oid) {
   }
 }
 
+const usePrintService = ref(true)
+async function loadPrintSvcCfg() {
+  try { usePrintService.value = (await posSetupApi.getPrintConfig('')).data?.usePrintService !== false }
+  catch { usePrintService.value = true }
+}
+
 onMounted(async () => {
   await loadShopsForAdmin()
   await loadCatalogue()
+  loadPrintSvcCfg()
   if (route.query.resume) {
     await loadResumedOrder(route.query.resume)
     router.replace({ path: '/pos' })   // clear the query so a refresh doesn't re-resume

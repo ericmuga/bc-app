@@ -957,6 +957,38 @@ export async function saveInventoryConfig({ hideOutOfStock }) {
   return getInventoryConfig();
 }
 
+// ── Receipt branding (company-wide): logo, slogan, MPESA details, header info ─
+const BRANDING_KEY = 'pos.receiptBranding';
+const BRANDING_FIELDS = ['companyName', 'companyAddress', 'companyEmail', 'companyPin', 'slogan', 'mpesaDetails', 'logoDataUrl'];
+
+export async function getReceiptBranding() {
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('k', sql.NVarChar(100), BRANDING_KEY)
+    .query(`SELECT [SettingValue] FROM [dbo].[AppSettings] WHERE [SettingKey]=@k`);
+  let stored = {};
+  try { stored = JSON.parse(r.recordset[0]?.SettingValue || '{}'); } catch { stored = {}; }
+  const out = {};
+  for (const f of BRANDING_FIELDS) out[f] = stored[f] || '';
+  return out;
+}
+
+export async function saveReceiptBranding(body = {}) {
+  const clean = {};
+  for (const f of BRANDING_FIELDS) clean[f] = body[f] != null ? String(body[f]) : '';
+  const pool = await appPool();
+  await pool.request()
+    .input('k', sql.NVarChar(100), BRANDING_KEY)
+    .input('v', sql.NVarChar(sql.MAX), JSON.stringify(clean))
+    .query(`
+      MERGE [dbo].[AppSettings] AS t
+      USING (SELECT @k AS K) AS s ON t.[SettingKey] = s.K
+      WHEN MATCHED THEN UPDATE SET [SettingValue]=@v,[UpdatedAt]=GETUTCDATE()
+      WHEN NOT MATCHED THEN INSERT([SettingKey],[SettingValue]) VALUES(@k,@v);
+    `);
+  return getReceiptBranding();
+}
+
 export async function saveEtimsConfig(shopCode, cfg) {
   const pool = await appPool();
   for (const f of ETIMS_FIELDS) {
@@ -1050,6 +1082,9 @@ export async function getPrintConfig(shopCode = null) {
     invoicePrinter:  map[`${prefix}invoicePrinter`] || '',
     thermalWidthMm: Number(map[`${prefix}thermalWidthMm`] || 72),
     copies:         Math.max(1, Number(map[`${prefix}copies`] || 1)),
+    // When false, the POS shows the receipt PDF in a modal instead of sending it
+    // to the server-side printer service. Default true (legacy behaviour).
+    usePrintService: (map[`${prefix}usePrintService`] ?? '1') !== '0',
   };
 }
 
@@ -1060,6 +1095,7 @@ export async function savePrintConfig(shopCode, cfg) {
     [printKey(shopCode, 'invoicePrinter'),  cfg.invoicePrinter || ''],
     [printKey(shopCode, 'thermalWidthMm'), String(cfg.thermalWidthMm || 72)],
     [printKey(shopCode, 'copies'),         String(cfg.copies || 1)],
+    [printKey(shopCode, 'usePrintService'), cfg.usePrintService === false ? '0' : '1'],
   ];
   for (const [k, v] of entries) {
     await pool.request()

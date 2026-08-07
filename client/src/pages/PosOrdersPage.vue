@@ -138,6 +138,11 @@
       v-model:visible="pdfPreview.visible"
       :header="pdfPreview.header"
       :fetcher="pdfPreview.fetcher"
+      :primary-label="pdfPreview.primaryLabel"
+      :primary-icon="pdfPreview.primaryIcon"
+      :primary-severity="pdfPreview.primarySeverity"
+      :primary-loading="pdfPreview.primaryLoading"
+      @confirm="onPdfConfirm"
     />
 
     <!-- Checkout flow (payment method selection) -->
@@ -319,7 +324,7 @@ import Tag from 'primevue/tag'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import InputText from 'primevue/inputtext'
-import { posApi } from '@/services/pos.js'
+import { posApi, posSetupApi } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
@@ -400,17 +405,29 @@ async function openOrder(e) {
   } catch {}
 }
 
-async function reprint(row) {
-  const id = row.OrderId || row.orderId
-  reprinting[id] = true; error.value = ''
-  try {
-    await posApi.reprintOrder(id)
-  } catch (e) {
-    error.value = e.response?.data?.error ?? e.message
-  } finally {
-    reprinting[id] = false
+// Show the receipt/tax-invoice for an order in the PDF modal (same look as the
+// checkout confirmation). If the print service is enabled, the modal also offers
+// a "Send to Printer" button; otherwise the cashier prints from the browser
+// (Open in new tab → Ctrl+P).
+function showReceipt(id, orderNoLabel) {
+  const useSvc = printSvcCfg.value.usePrintService !== false
+  pdfPreview.value = {
+    visible: true,
+    header:  `Receipt / Tax Invoice${orderNoLabel ? ' — ' + orderNoLabel : ''}`,
+    fetcher: () => posApi.fetchPdf(id),
+    primaryLabel:    useSvc ? 'Send to Printer' : '',
+    primaryIcon:     'pi pi-print',
+    primarySeverity: 'success',
+    primaryLoading:  false,
+    onConfirm: useSvc ? async () => {
+      reprinting[id] = true; error.value = ''
+      try { await posApi.reprintOrder(id) }
+      catch (e) { error.value = e.response?.data?.error ?? e.message }
+      finally   { reprinting[id] = false }
+    } : null,
   }
 }
+function reprint(row) { showReceipt(row.OrderId || row.orderId, row.OrderNo || '') }
 
 async function signOrder(row) {
   const id = row.OrderId || row.orderId
@@ -455,7 +472,21 @@ async function submitCreditMemo() {
   }
 }
 
-const pdfPreview = ref({ visible: false, header: '', fetcher: null })
+const pdfPreview = ref({ visible: false, header: '', fetcher: null,
+  primaryLabel: '', primaryIcon: '', primarySeverity: '', primaryLoading: false, onConfirm: null })
+// Effective print-service setting (global). When false, reprint just shows the
+// PDF modal (print via the browser) instead of the server-side printer service.
+const printSvcCfg = ref({ usePrintService: true })
+async function loadPrintSvcCfg() {
+  try { printSvcCfg.value = (await posSetupApi.getPrintConfig('')).data || { usePrintService: true } }
+  catch { printSvcCfg.value = { usePrintService: true } }
+}
+async function onPdfConfirm() {
+  if (typeof pdfPreview.value.onConfirm !== 'function') return
+  pdfPreview.value.primaryLoading = true
+  try { await pdfPreview.value.onConfirm() }
+  finally { pdfPreview.value.primaryLoading = false }
+}
 const etimsPrev  = ref({ visible: false, loading: false, orderNo: '', data: null, error: '' })
 
 async function showEtimsPreview(row) {
@@ -547,8 +578,11 @@ async function confirmCheckout() {
       mobileNo:        checkoutFlow.mobileNo.trim() || null,
     })
     await posApi.confirmPayment(co.paymentId)
+    const oid = checkoutFlow.order.orderId
+    const onum = checkoutFlow.order.orderNo
     checkoutFlow.visible = false
     await load()
+    showReceipt(oid, onum)
   } catch (e) {
     checkoutFlow.error = e.response?.data?.error ?? e.message
   } finally {
@@ -578,7 +612,7 @@ async function quickComplete(rowOrOrder, fromDialog = false) {
   }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadPrintSvcCfg() })
 
 function statusSeverity(s) {
   return { open: 'info', checkout: 'warn', paid: 'success', cancelled: 'secondary' }[s] ?? 'secondary'

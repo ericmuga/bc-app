@@ -327,6 +327,15 @@ export async function generateQrCodeFromSigningService(qrUrl, shopCode = null) {
 export async function buildPrintPayload(order, etimsResult) {
   const cfg = await loadEtims(order?.shopCode);
   const payments = paymentSummary(order);
+  // Receipt branding (logo, slogan, MPESA header) + shop name. Dynamic import
+  // keeps this service free of a hard PosModel dependency at load time.
+  let branding = {}, shopName = order?.shopCode || '';
+  try {
+    const PM = await import('../models/PosModel.js');
+    branding = await PM.getReceiptBranding();
+    const shops = await PM.listShops();
+    shopName = shops.find(s => s.Code === order?.shopCode)?.Name || shopName;
+  } catch { /* branding optional */ }
   // Compute VAT split per line. POS prices are stored VAT-inclusive (PriceIncludesVat=1).
   //   inclusive: vat = amount - amount/(1+rate/100)
   //   exclusive: vat = amount * rate/100
@@ -361,7 +370,14 @@ export async function buildPrintPayload(order, etimsResult) {
     payment_terms:     payments.lines.map(p => p.mode).join(', '),
     sales_person_name: order.cashierName || '',
     shipment_method:   '',
-    company_pin:       cfg.companyPin,
+    company_pin:       branding.companyPin || cfg.companyPin,
+    shop_name:         shopName,
+    company_name:      branding.companyName || '',
+    company_address:   branding.companyAddress || '',
+    company_email:     branding.companyEmail || '',
+    slogan:            branding.slogan || '',
+    logo_data_url:     branding.logoDataUrl || '',
+    mpesa_details:     branding.mpesaDetails || '',
     external_doc_no:   '',
     ship_to:           order.shopCode || '',
     total_ex_vat:      totalExNum.toFixed(2),

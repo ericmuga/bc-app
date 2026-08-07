@@ -74,6 +74,20 @@ export async function generateInvoicePdf(data) {
     doc.text(`Printed At: ${printTime}`, headerX, 22);
   };
 
+  // ── Company / receipt branding band (top-center) ──────────────────────────
+  let brandY = 9;
+  if (data.logo_data_url) {
+    try {
+      const fmt = (/^data:image\/(\w+)/.exec(data.logo_data_url)?.[1] || 'png').toUpperCase();
+      doc.addImage(data.logo_data_url, fmt === 'JPG' ? 'JPEG' : fmt, 95, brandY, 20, 12);
+      brandY += 14;
+    } catch { /* skip logo */ }
+  }
+  if (data.company_name)  { doc.setFontSize(11); doc.setFont('helvetica', 'bold');   doc.text(String(data.company_name), 105, brandY, { align: 'center' }); brandY += 5; }
+  if (data.slogan)        { doc.setFontSize(8);  doc.setFont('helvetica', 'italic'); doc.text(String(data.slogan),       105, brandY, { align: 'center' }); brandY += 4; }
+  if (data.mpesa_details) { doc.setFontSize(8);  doc.setFont('helvetica', 'bold');
+    for (const seg of String(data.mpesa_details).split('\n')) { doc.text(seg, 105, brandY, { align: 'center' }); brandY += 4; } }
+
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.text(String(data.customer_name || ''), 15, 15);

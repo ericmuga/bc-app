@@ -211,6 +211,8 @@ router.get(  '/pos/boms/:itemNo',                              ...canManage, pos
 router.post( '/pos/boms',                                      ...canManage, posCtrl.saveBom);
 router.delete('/pos/boms/:itemNo',                             ...canManage, posCtrl.deleteBom);
 router.get(  '/pos/makeable-items',                            ...canPos, posCtrl.listMakeable);
+router.get(  '/pos/setup/branding',                            ...canManage, posCtrl.getBranding);
+router.put(  '/pos/setup/branding',                            ...canManage, posCtrl.saveBranding);
 router.get(  '/pos/bc-sync/imported-sales',                    ...canManage, posCtrl.exportImportedSales);
 router.post( '/pos/bc-sync/imported-sales/push',               ...canManage, posCtrl.pushImportedSales);
 router.post( '/pos/production-plan',                           ...canPos, posCtrl.productionPlan);

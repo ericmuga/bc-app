@@ -181,6 +181,15 @@ export async function listMakeable(_req, res) {
   try { ok(res, await Bom.listMakeable()); } catch (e) { err(res, e); }
 }
 
+/** GET /pos/setup/branding — receipt branding (logo, slogan, MPESA, company header). */
+export async function getBranding(_req, res) {
+  try { ok(res, await Pos.getReceiptBranding()); } catch (e) { err(res, e); }
+}
+/** PUT /pos/setup/branding */
+export async function saveBranding(req, res) {
+  try { invalidatePrintCache(); ok(res, await Pos.saveReceiptBranding(req.body)); } catch (e) { err(res, e, 400); }
+}
+
 /** GET /pos/bc-sync/imported-sales — POS invoice lines mapped to BC's Imported SalesAL schema. */
 export async function exportImportedSales(req, res) {
   try {

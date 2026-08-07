@@ -126,13 +126,27 @@ async function renderThermalInvoice(doc, data, widthMm) {
   const fmtMoney = (v) => Number(v ?? 0).toFixed(2);
 
   // ── Header ────────────────────────────────────────────────────────────────
+  if (data.logo_data_url) {
+    try {
+      const logoW = 34, logoH = 18;
+      const fmt = (/^data:image\/(\w+)/.exec(data.logo_data_url)?.[1] || 'png').toUpperCase();
+      doc.addImage(data.logo_data_url, fmt === 'JPG' ? 'JPEG' : fmt, (widthMm - logoW) / 2, y, logoW, logoH);
+      y += logoH + 2;
+    } catch { /* skip logo */ }
+  }
   if (data.shop_name)        center(data.shop_name, 10, true);
   if (data.company_name)     center(data.company_name, 8, true);
+  if (data.slogan)           center(data.slogan, 6.5);
   if (data.company_address)  center(data.company_address, 6.5);
   if (data.company_pin)      center('PIN: ' + data.company_pin, 6.5);
   if (data.company_email)    center(data.company_email, 6.5);
   y += 1;
   hr();
+  // MPESA payment details — prominent, at the top of the receipt.
+  if (data.mpesa_details) {
+    for (const seg of String(data.mpesa_details).split('\n')) center(seg, 7.5, true);
+    hr('dashed');
+  }
 
   const isProforma = data.no_printed === 0 && !data.kra_invoice;
   center(isProforma ? 'CONFIRMATION RECEIPT' : 'TAX INVOICE', 9, true);
