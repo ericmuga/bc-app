@@ -476,7 +476,7 @@ export async function sendStkPush({ order, paymentType, mobileNo, amount }) {
       customer_no: order.contactNo || '',
       phone, amount: amt,
       currency:    'KES',
-      store_name:  order.shopCode || '',
+      store_name:  order.shopName || order.shopCode || '',
       till_number: paymentType.ShortCode || paymentType.BalanceAcctNo || '',
     };
     try {

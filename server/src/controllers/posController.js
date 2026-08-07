@@ -274,6 +274,11 @@ export async function stkPush(req, res) {
     const types = await Pos.listPaymentTypes({ activeOnly: true, shopCode: order.shopCode });
     const pt = types.find(t => t.Code === String(paymentTypeCode).toUpperCase());
     if (!pt) return res.status(400).json({ error: `Unknown payment type ${paymentTypeCode}` });
+    // Resolve the human-readable shop name for the wrapper's store_name (BC used SP.Name).
+    try {
+      const shops = await Pos.listShops();
+      order.shopName = shops.find(s => s.Code === order.shopCode)?.Name || order.shopCode;
+    } catch { order.shopName = order.shopCode; }
     // STK requires either full Daraja credentials OR a custom proxy endpoint.
     const hasDaraja = pt.ConsumerKey && pt.ConsumerSecret && pt.ShortCode && pt.Passkey;
     if (!hasDaraja && !pt.ApiEndpoint) {
