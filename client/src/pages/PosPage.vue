@@ -2259,4 +2259,10 @@ function remainingClass(qty) {
 body > .p-dialog-mask:has(.pos-soft-dialog) {
   background: rgba(15, 23, 42, 0.55);
 }
+/* The M-Pesa lookup table inside this (light) dialog inherits the dark shell's
+   white text → invisible on white. Force a light, readable table. */
+.pos-soft-dialog.p-dialog .p-datatable-thead > tr > th { background:#eaeef4 !important; color:#1f2937 !important; border-color:#dfe4ec !important; }
+.pos-soft-dialog.p-dialog .p-datatable-tbody > tr > td { background:#fff !important; color:#1f2937 !important; border-color:#e5e7eb !important; }
+.pos-soft-dialog.p-dialog .p-datatable-tbody > tr:hover > td { background:#eef2ff !important; }
+.pos-soft-dialog.p-dialog .p-datatable-tbody > tr.p-datatable-row-selected > td { background:#dbeafe !important; color:#0f172a !important; }
 </style>
