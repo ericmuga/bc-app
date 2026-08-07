@@ -158,6 +158,9 @@ export async function confirmPayment(req, res) {
       const printRes = await printPosOrder(fresh, etimsResult);
       printOk = printRes.ok;
       if (printRes.fileName) await Pos.markPrinted(orderId, printRes.fileName);
+      // Push this sale to BC's Imported Sales immediately, fire-and-forget: a busy
+      // BC never blocks or fails the sale. Idempotent; bulk push stays available.
+      if (fresh?.shopCode) BcSync.pushImportedSalesBg({ shopCode: fresh.shopCode, orderNo: fresh.orderNo });
     } catch (e) {
       logger.error('post-payment sign/print error', { error: e.message });
     }
@@ -431,6 +434,8 @@ export async function checkoutMulti(req, res) {
       const printRes = await printPosOrder(fresh, etimsResult);
       printOk = printRes.ok;
       if (printRes.fileName) await Pos.markPrinted(req.params.orderId, printRes.fileName);
+      // Immediate, fire-and-forget push to BC Imported Sales (idempotent).
+      if (fresh?.shopCode) BcSync.pushImportedSalesBg({ shopCode: fresh.shopCode, orderNo: fresh.orderNo });
     } catch (sideErr) {
       logger.warn('post-checkout side-effects failed', { error: sideErr.message });
     }

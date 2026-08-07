@@ -189,12 +189,11 @@ export async function submitRequest(req, res) {
 export async function approveRequest(req, res) {
   try {
     await Stock.approveStockRequest(req.params.requestId, req.user.userName);
-    // On confirmation, push the request to BC's Imported Orders (PDA) for BC to
-    // action. Idempotent + non-fatal — approval never fails on a BC hiccup.
-    let bc = null;
-    try { bc = await BcSync.pushImportedOrder({ requestId: req.params.requestId }); }
-    catch (e) { logger.error('pushImportedOrder failed', { error: e.message }); bc = { error: e.message }; }
-    ok(res, { ok: true, bc });
+    // On confirmation, push the request to BC's Imported Orders (PDA) — but
+    // fire-and-forget so a busy/slow BC never delays or fails the approval. The
+    // push is idempotent; use the /push-bc endpoint to retry if BC was down.
+    BcSync.pushImportedOrderBg({ requestId: req.params.requestId });
+    ok(res, { ok: true, bc: 'queued' });
   } catch (e) { err(res, e, 400); }
 }
 

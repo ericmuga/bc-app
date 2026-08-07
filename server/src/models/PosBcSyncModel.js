@@ -63,13 +63,17 @@ export const IMPORTED_SALES_COLUMNS = [
  *   lineType → the BC [Type] value to stamp (default 0; item lines).
  * @returns {Array<object>} one object per order line, keyed by IMPORTED_SALES_COLUMNS.
  */
-export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo, lineType = 0 } = {}) {
+export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo, lineType = 0, orderNo = null } = {}) {
   const pool = await appDb.getPool();
   const req = pool.request();
   req.input('from', sql.DateTime2, dateFrom ? new Date(dateFrom) : new Date('2000-01-01'));
   req.input('to',   sql.DateTime2, dateTo ? new Date(dateTo + 'T23:59:59') : new Date());
   let shopFilter = '';
   if (shopCode) { req.input('shop', sql.NVarChar(50), String(shopCode).toUpperCase()); shopFilter = 'AND o.[ShopCode] = @shop'; }
+  // Single-order targeting (used by the immediate per-sale push). When given, the
+  // wide default date range still matches the order regardless of when it posted.
+  let orderFilter = '';
+  if (orderNo) { req.input('orderNo', sql.NVarChar(30), String(orderNo)); orderFilter = 'AND o.[OrderNo] = @orderNo'; }
 
   const r = await req.query(`
     SELECT o.[OrderNo], o.[ContactNo], o.[ContactName], o.[TotalAmount],
@@ -90,6 +94,7 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
     WHERE o.[Status] NOT IN ('open', 'cancelled')
       AND o.[CreatedAt] BETWEEN @from AND @to
       ${shopFilter}
+      ${orderFilter}
     ORDER BY o.[OrderNo], l.[SortOrder], l.[LineId]
   `);
 
@@ -161,10 +166,10 @@ const PUSH_TYPES = {
  *
  * @returns { company, table, candidates, inserted, skipped, orders:[ExtDocNo…] }
  */
-export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType = 0 } = {}) {
+export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType = 0, orderNo = null } = {}) {
   if (!shopCode) throw new Error('shopCode is required');
   const { company, customerNo } = await resolveShopCompany(shopCode);
-  const rows = await buildImportedSalesRows({ shopCode, dateFrom, dateTo, lineType });
+  const rows = await buildImportedSalesRows({ shopCode, dateFrom, dateTo, lineType, orderNo });
   if (!rows.length) return { company, table: null, candidates: 0, inserted: 0, skipped: 0, orders: [] };
 
   // CustNO & BillTo are always the shop's BC customer no (ignore the per-order
@@ -279,4 +284,22 @@ export async function pushImportedOrder({ requestId }) {
   }
   logger.info('pushImportedOrder', { requestNo: extDoc, company, inserted, skipped, lines: lines.length });
   return { company, table, candidates: lines.length, inserted, skipped };
+}
+
+// ── Fire-and-forget variants ─────────────────────────────────────────────────
+// Kick off the BC push but NEVER throw and NEVER block the caller. If BC is busy
+// or unreachable the sale / approval still completes; the awaited functions above
+// remain available (idempotent) for a manual retry or the bulk push. Call these
+// WITHOUT await so the HTTP response returns immediately.
+export function pushImportedSalesBg(args = {}) {
+  return Promise.resolve()
+    .then(() => pushImportedSales(args))
+    .then((r) => logger.info('pushImportedSales(bg)', { shopCode: args.shopCode, orderNo: args.orderNo, inserted: r.inserted, skipped: r.skipped }))
+    .catch((e) => logger.error('pushImportedSales(bg) failed', { error: e.message, shopCode: args.shopCode, orderNo: args.orderNo }));
+}
+export function pushImportedOrderBg(args = {}) {
+  return Promise.resolve()
+    .then(() => pushImportedOrder(args))
+    .then((r) => logger.info('pushImportedOrder(bg)', { requestId: args.requestId, inserted: r.inserted, skipped: r.skipped }))
+    .catch((e) => logger.error('pushImportedOrder(bg) failed', { error: e.message, requestId: args.requestId }));
 }
