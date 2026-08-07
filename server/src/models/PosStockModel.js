@@ -454,7 +454,9 @@ export async function listStockRequests({ shopCode = null, role = 'shop' } = {})
   const pool = await appPool();
   const req = pool.request();
   let where = '';
-  if (role !== 'admin' && shopCode) {
+  // Filter to the current shop whenever one is resolved (attendant's shop, or an
+  // admin's selected shop via X-Shop-Code). Admins with no shop selected see all.
+  if (shopCode) {
     req.input('shopCode', sql.NVarChar(50), shopCode);
     where = 'WHERE [ShopCode]=@shopCode';
   }

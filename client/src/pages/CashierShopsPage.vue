@@ -44,7 +44,7 @@
 
     <!-- Assign dialog -->
     <Dialog v-model:visible="edit.visible" :header="edit.user ? `Assign shops — ${edit.user.DisplayName}` : ''"
-            :modal="true" :style="{ width: '640px' }">
+            :modal="true" :style="{ width: '640px' }" class="cs-assign-dialog">
       <div v-if="edit.user">
         <p class="text-muted text-sm" style="margin-bottom:8px">
           Pick the shops this cashier can serve. Mark exactly one as <strong>primary</strong> — that's the default shop loaded on the POS terminal.
@@ -192,4 +192,15 @@ onMounted(load)
 .cs-page :deep(.p-inputtext) { background:var(--bc-surface-card) !important; color:var(--bc-text) !important; border-color:var(--bc-border) !important; }
 .cs-page :deep(.p-datatable-thead > tr > th) { background:var(--bc-surface-raised) !important; color:var(--bc-text) !important; }
 .cs-page :deep(.p-datatable-tbody > tr > td) { background:transparent !important; color:var(--bc-text) !important; }
+</style>
+
+<!-- Unscoped: the Dialog teleports to <body>, so scoped .cs-page rules don't reach
+     it. These give the assign-shops dialog readable, high-contrast content. -->
+<style>
+.cs-assign-dialog .p-dialog-header,
+.cs-assign-dialog .p-dialog-content { background:#111827 !important; color:#e5e7eb !important; }
+.cs-assign-dialog .p-datatable-thead > tr > th { background:#1f2937 !important; color:#f3f4f6 !important; border-color:#374151 !important; }
+.cs-assign-dialog .p-datatable-tbody > tr > td { background:#1f2937 !important; color:#e5e7eb !important; border-color:#374151 !important; }
+.cs-assign-dialog .p-datatable-tbody > tr:hover > td { background:#374151 !important; }
+.cs-assign-dialog .text-muted { color:#9ca3af !important; }
 </style>
