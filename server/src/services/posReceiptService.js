@@ -53,6 +53,10 @@ async function loadPrint(shopCode = null, force = false) {
     invoicePrinter: shopCfg?.invoicePrinter || globalCfg.invoicePrinter || '',
     thermalWidthMm: shopCfg?.thermalWidthMm || globalCfg.thermalWidthMm || 72,
     copies:         shopCfg?.copies         || globalCfg.copies         || 1,
+    // Print via the server printer service only when BOTH global and shop allow it.
+    // When off, the POS still generates the PDF (for the preview modal) but does
+    // not send it to a physical printer.
+    usePrintService: (shopCfg ? shopCfg.usePrintService !== false : true) && (globalCfg.usePrintService !== false),
   };
   _printCache.set(key, { cfg: merged, at: now });
   return merged;
@@ -435,7 +439,7 @@ export async function printConfirmationReceipt(order, { previewOnly = false } = 
   const payload = await buildPrintPayload(order, null);
   payload.no_printed = 0;
   const { fileName, cfg } = await generateByConfig(payload, order?.shopCode);
-  if (fileName && !previewOnly) {
+  if (fileName && !previewOnly && cfg.usePrintService !== false) {
     const paperSize    = cfg.format === 'thermal' ? `${cfg.thermalWidthMm}mm` : 'A4';
     const filePath     = pdfPathFor(fileName);
     for (let i = 0; i < cfg.copies; i++) {
@@ -681,12 +685,14 @@ export async function fetchPaymentsFromService({ paymentType, params = {} }) {
 export async function printPosOrder(order, etimsResult = null) {
   const payload = await buildPrintPayload(order, etimsResult);
   const { fileName, cfg } = await generateByConfig(payload, order?.shopCode);
-  if (fileName) {
+  if (fileName && cfg.usePrintService !== false) {
     const paperSize = cfg.format === 'thermal' ? `${cfg.thermalWidthMm}mm` : 'A4';
     const filePath  = pdfPathFor(fileName);
     for (let i = 0; i < cfg.copies; i++) {
       await printPdfToPrinter(filePath, cfg.invoicePrinter, paperSize);
     }
   }
-  return { ok: !!fileName, fileName };
+  // ok = actually sent to a printer. When the service is off we still return the
+  // fileName so the caller can show/serve the PDF for the preview modal.
+  return { ok: !!fileName && cfg.usePrintService !== false, fileName };
 }
