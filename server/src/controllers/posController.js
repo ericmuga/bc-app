@@ -10,7 +10,7 @@ import * as Stock from '../models/PosStockModel.js';
 import * as Bom from '../models/PosBomModel.js';
 import * as BcSync from '../models/PosBcSyncModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
-import { signPosOrder, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
+import { signPosOrder, signOrderNow, signOrderBg, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
          fetchPaymentsFromService, buildPrintPayload, generateByConfig, getPrintFormat } from '../services/posReceiptService.js';
 import { ordersDb, sql as ordersSql } from '../db/ordersPool.js';
@@ -154,6 +154,7 @@ export async function confirmPayment(req, res) {
       catch (dispErr) { logger.error('dispatch order creation failed', { error: dispErr.message }); }
       etimsResult = await signPosOrder(order);
       if (etimsResult) await Pos.storeSignResult(orderId, etimsResult);
+      else signOrderBg(orderId);   // inline sign failed/skipped — retry in background, non-blocking
       const fresh = await Pos.getOrder(orderId);
       const printRes = await printPosOrder(fresh, etimsResult);
       printOk = printRes.ok;
@@ -431,6 +432,7 @@ export async function checkoutMulti(req, res) {
       catch (dispErr) { logger.error('dispatch order creation failed', { error: dispErr.message }); }
       etimsResult = await signPosOrder(fresh);
       if (etimsResult) await Pos.storeSignResult(req.params.orderId, etimsResult);
+      else signOrderBg(req.params.orderId);   // inline sign failed/skipped — retry in background, non-blocking
       const printRes = await printPosOrder(fresh, etimsResult);
       printOk = printRes.ok;
       if (printRes.fileName) await Pos.markPrinted(req.params.orderId, printRes.fileName);
@@ -714,15 +716,18 @@ export async function previewEtimsPayload(req, res) {
 
 export async function signOrder(req, res) {
   try {
-    const order = await Pos.getOrder(req.params.orderId);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    if (order.status !== 'paid') return res.status(400).json({ error: 'Only paid orders can be signed' });
-    if (order.etimsInvoiceNo)    return res.status(400).json({ error: 'Order already signed' });
-    const result = await signPosOrder(order);
-    if (!result) return res.status(502).json({ error: 'eTIMS signing failed — check logs' });
-    await Pos.storeSignResult(order.orderId, result);
-    ok(res, { etims: result });
-  } catch (e) { err(res, e); }
+    // Sign a completed (paid) invoice with eTIMS. Idempotent: if it is already
+    // signed, the existing signature is returned. Pass ?resign=1 to force a re-sign.
+    const allowResign = req.query.resign === '1' || req.body?.resign === true;
+    const result = await signOrderNow(req.params.orderId, { allowResign });
+    ok(res, result);
+  } catch (e) {
+    const msg = e.message || '';
+    const code = /not found/i.test(msg) ? 404
+      : /only paid|already/i.test(msg) ? 400
+      : /failed|not configured/i.test(msg) ? 502 : 500;
+    res.status(code).json({ error: msg });
+  }
 }
 
 export async function signCreditMemo(req, res) {

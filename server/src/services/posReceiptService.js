@@ -250,6 +250,55 @@ export async function signPosOrder(order) {
   }
 }
 
+/**
+ * Sign a completed (paid) POS invoice with eTIMS by order id, then persist the
+ * result. This is the reusable "sign an invoice after checkout" function — use it
+ * from the /sign endpoint, a retry, or the checkout flow.
+ *
+ * @param {string} orderId
+ * @param {object} opts
+ * @param {boolean} opts.allowResign  re-sign even if already signed (default false)
+ * @returns {Promise<{etims:object, alreadySigned?:boolean}>}
+ * @throws if the order is missing, not paid, or eTIMS signing fails / isn't configured.
+ */
+export async function signOrderNow(orderId, { allowResign = false } = {}) {
+  const PM = await import('../models/PosModel.js');
+  const order = await PM.getOrder(orderId);
+  if (!order) throw new Error('Order not found');
+  if (order.status !== 'paid') throw new Error('Only paid/completed orders can be signed');
+  if (order.etimsInvoiceNo && !allowResign) {
+    // Idempotent: already signed — return the existing signature, don't re-hit KRA.
+    return {
+      alreadySigned: true,
+      etims: {
+        etimsNo:        order.etimsNo || '',
+        etimsInvoiceNo: order.etimsInvoiceNo,
+        cuSerialNo:     order.cuSerialNo || '',
+        qrUrl:          order.qrUrl || '',
+        signedAt:       order.signedAt || '',
+      },
+    };
+  }
+  const result = await signPosOrder(order);
+  if (!result) throw new Error('eTIMS signing failed or not configured — check logs');
+  await PM.storeSignResult(orderId, result);
+  logger.info('eTIMS invoice signed', { orderNo: order.orderNo, etimsInvoiceNo: result.etimsInvoiceNo });
+  return { etims: result };
+}
+
+/**
+ * Fire-and-forget sign: attempt to sign the order but NEVER throw and NEVER block
+ * the caller. Safe to call after marking an order complete at checkout when eTIMS
+ * may be slow/busy — the sale completes regardless, and the /sign endpoint remains
+ * available to retry. Skips silently if already signed. Call WITHOUT await.
+ */
+export function signOrderBg(orderId) {
+  return Promise.resolve()
+    .then(() => signOrderNow(orderId))
+    .then((r) => { if (!r.alreadySigned) logger.info('eTIMS sign(bg) ok', { orderId }); })
+    .catch((e) => logger.error('eTIMS sign(bg) failed', { orderId, error: e.message }));
+}
+
 export async function signPosCreditMemo(order, { reason = 'RETURN' } = {}) {
   const cfg = await loadEtims(order?.shopCode);
   if (!cfg.creditNoteUrl || !cfg.apiKey) throw new Error('eTIMS Credit Note URL/API key not configured');
