@@ -217,8 +217,8 @@
         <Button
           label="Checkout" icon="pi pi-credit-card" fluid
           class="checkout-btn"
-          :disabled="!lines.length || savingLines"
-          :loading="savingLines"
+          :disabled="!lines.length || openingCheckout"
+          :loading="openingCheckout"
           @click="openCheckout"
         />
         <Button
@@ -323,8 +323,10 @@
 
           <div v-if="mpesaSearch.error" class="mpesa-msg">{{ mpesaSearch.error }}</div>
 
+          <InputText v-if="mpesaSearch.results.length" v-model="mpesaResultFilter"
+                     placeholder="Filter by name or code…" fluid style="margin:4px 0" />
           <!-- Match table: tick one or more transactions (1→many). Latest first. -->
-          <DataTable v-if="mpesaSearch.results.length" :value="mpesaSearch.results"
+          <DataTable v-if="mpesaSearch.results.length" :value="filteredMpesaResults"
                      v-model:selection="mpesaSelected" dataKey="reference" size="small"
                      class="mpesa-table" :scrollable="true" scrollHeight="200px">
             <Column selectionMode="multiple" headerStyle="width:2.2rem" />
@@ -680,7 +682,8 @@ function addFirstMatch() {
 const orderId  = ref(null)
 const orderNo  = ref('')
 const lines    = ref([])
-const savingLines = ref(false)
+const savingLines = ref(false)     // background line auto-save (does NOT spin the Checkout button)
+const openingCheckout = ref(false) // true only while opening the payment dialog
 const linesEl  = ref(null)
 
 const total = computed(() =>
@@ -732,6 +735,13 @@ const mpesaAmount    = ref(0)          // amount to search/allocate (may be a fr
 const mpesaCodeQuery = ref('')         // confirmation-code fallback search
 const mpesaSearch    = ref({ loading: false, error: '', results: [] })
 const mpesaSelected  = ref([])         // checked transactions (1→many matching)
+const mpesaResultFilter = ref('')
+const filteredMpesaResults = computed(() => {
+  const q = mpesaResultFilter.value.trim().toLowerCase()
+  if (!q) return mpesaSearch.value.results
+  return mpesaSearch.value.results.filter(r =>
+    String(r.name || '').toLowerCase().includes(q) || String(r.reference || '').toLowerCase().includes(q))
+})
 const isMpesa = computed(() => selectedPayType.value?.PaymentClass === 'Mobile')
 // Non-cash, non-M-Pesa methods (Card / Bank Deposit / Bank Transfer / Credit) capture a free-text reference.
 const paymentRef = ref('')
@@ -1315,7 +1325,9 @@ function onPayTypeSelect(pt) {
 }
 
 async function openCheckout() {
-  if (!lines.value.length) return
+  if (!lines.value.length || openingCheckout.value) return
+  openingCheckout.value = true
+  try {
   // make sure any pending draft edits land on the order before posting payment
   if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }
   await persistLines()
@@ -1341,6 +1353,7 @@ async function openCheckout() {
   mobileNo.value = contactDraft.value.phone || selectedContact.value?.MobileNo || ''
   splitTenders.value = []
   checkoutVisible.value = true
+  } finally { openingCheckout.value = false }
 }
 
 // ── Split-tender state ────────────────────────────────────────────
@@ -1716,33 +1729,31 @@ function remainingClass(qty) {
 .mpesa-lookup > label { font-size: 12px; font-weight: 600; color: #475467; }
 .mpesa-hint { font-size: 11px; color: #98a2b3; }
 .mpesa-msg { font-size: 12px; color: #b45309; }
-.mpesa-table { margin: 4px 0; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; }
-/* Header: solid, readable */
+.mpesa-table { margin: 4px 0; font-size: 12px; border: 1px solid #374151; border-radius: 8px; overflow: hidden; }
+/* Dark, solid, readable header */
 .mpesa-table :deep(.p-datatable-thead > tr > th) {
-  background: #eef2f7;
-  color: #1f2937;
+  background: #111827;
+  color: #f3f4f6;
   font-weight: 700;
-  border-bottom: 1px solid #cbd5e1;
+  border-bottom: 1px solid #374151;
   padding: 6px 8px;
 }
-/* Body rows: give every row a solid, legible surface (not only on hover) */
+/* Dark body rows — legible at rest, not only on hover */
 .mpesa-table :deep(.p-datatable-tbody > tr) {
-  background: #ffffff;
-  color: #1f2937;
+  background: #1f2937;
+  color: #e5e7eb;
 }
 .mpesa-table :deep(.p-datatable-tbody > tr > td) {
   padding: 5px 8px;
-  color: #1f2937;
-  border-bottom: 1px solid #eef0f3;
+  color: #e5e7eb;
+  border-bottom: 1px solid #374151;
 }
-/* Zebra striping so rows are distinguishable at rest */
-.mpesa-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: #f6f8fb; }
-/* Clear hover + selected states */
-.mpesa-table :deep(.p-datatable-tbody > tr:hover) { background: #eef4ff; }
+.mpesa-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: #232f3e; }
+.mpesa-table :deep(.p-datatable-tbody > tr:hover) { background: #374151; }
 .mpesa-table :deep(.p-datatable-tbody > tr.p-datatable-row-selected),
 .mpesa-table :deep(.p-datatable-tbody > tr[data-p-selected="true"]) {
-  background: #dbeafe;
-  color: #1e3a8a;
+  background: #0f7173;
+  color: #fff;
 }
 .mpesa-matched { margin: 6px 0; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px; }
 .mpesa-matched .mm-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
@@ -2259,10 +2270,5 @@ function remainingClass(qty) {
 body > .p-dialog-mask:has(.pos-soft-dialog) {
   background: rgba(15, 23, 42, 0.55);
 }
-/* The M-Pesa lookup table inside this (light) dialog inherits the dark shell's
-   white text → invisible on white. Force a light, readable table. */
-.pos-soft-dialog.p-dialog .p-datatable-thead > tr > th { background:#eaeef4 !important; color:#1f2937 !important; border-color:#dfe4ec !important; }
-.pos-soft-dialog.p-dialog .p-datatable-tbody > tr > td { background:#fff !important; color:#1f2937 !important; border-color:#e5e7eb !important; }
-.pos-soft-dialog.p-dialog .p-datatable-tbody > tr:hover > td { background:#eef2ff !important; }
-.pos-soft-dialog.p-dialog .p-datatable-tbody > tr.p-datatable-row-selected > td { background:#dbeafe !important; color:#0f172a !important; }
+/* M-Pesa lookup table styling lives in the scoped .mpesa-table rules (dark). */
 </style>
