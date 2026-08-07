@@ -29,6 +29,15 @@ async function userShopCode(req) {
   return Pos.getUserShopCode(req.user.userId);
 }
 
+/** GET /pos/reports/daily-sales — all paid orders in range, scoped to the user's shop. */
+export async function dailySalesSummary(req, res) {
+  try {
+    const shopCode = await userShopCode(req);   // attendant → own shop; admin → selected/all
+    const { dateFrom, dateTo } = req.query;
+    ok(res, await Pos.dailySalesSummary({ shopCode, dateFrom, dateTo }));
+  } catch (e) { err(res, e); }
+}
+
 /** GET /pos/stock/snapshot — fast current on-hand per item (for at-a-glance + export). */
 export async function stockSnapshot(req, res) {
   try {

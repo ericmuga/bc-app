@@ -227,6 +227,7 @@ router.get(  '/pos/stock/snapshot',                            ...canPos,    pos
 router.post( '/pos/stock/upload',                              ...canManage, posStockCtrl.uploadStock);
 
 // ── POS Reports hub (admin / shop-admin shop-comparison; others scope to own shop) ──
+router.get(  '/pos/reports/daily-sales',                       ...canPos,    posStockCtrl.dailySalesSummary);
 router.get(  '/pos/reports/stock-position',                    ...canPos,    posStockCtrl.reportStockPosition);
 router.get(  '/pos/reports/sales-by-item',                     ...canPos,    posStockCtrl.reportSalesByItem);
 router.get(  '/pos/reports/sales-by-contact',                  ...canPos,    posStockCtrl.reportSalesByContact);

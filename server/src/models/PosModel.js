@@ -2363,6 +2363,51 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
   return r.recordset;
 }
 
+/**
+ * Daily sales summary — every PAID order in the date range, optionally scoped to
+ * one shop. Returns { rows, totals }. Row: orderNo, saleDate, shopCode,
+ * cashierName, customerName, paymentMethods, etimsInvoiceNo, totalAmount.
+ */
+export async function dailySalesSummary({ shopCode = null, dateFrom, dateTo } = {}) {
+  const pool = await appPool();
+  const req = pool.request()
+    .input('from', sql.Date, dateFrom ? new Date(dateFrom) : new Date('2000-01-01'))
+    .input('to',   sql.Date, dateTo ? new Date(dateTo) : new Date());
+  let shopFilter = '';
+  if (shopCode) { req.input('shop', sql.NVarChar(50), String(shopCode).toUpperCase()); shopFilter = 'AND o.[ShopCode]=@shop'; }
+
+  const r = await req.query(`
+    SELECT o.[OrderNo],
+           CONVERT(varchar(10), DATEADD(HOUR, 3, o.[CreatedAt]), 23) AS SaleDate,
+           o.[ShopCode], o.[CashierName], o.[ContactName] AS CustomerName,
+           o.[TotalAmount], o.[EtimsInvoiceNo],
+           STUFF((SELECT ', ' + pp.[PaymentTypeCode]
+                  FROM [dbo].[PosPayment] pp
+                  WHERE pp.[OrderId]=o.[OrderId] AND pp.[Status]='confirmed'
+                  FOR XML PATH('')), 1, 2, '') AS PaymentMethods
+    FROM [dbo].[PosOrder] o
+    WHERE o.[Status]='paid'
+      AND CAST(DATEADD(HOUR, 3, o.[CreatedAt]) AS date) BETWEEN @from AND @to
+      ${shopFilter}
+    ORDER BY o.[CreatedAt]
+  `);
+  const rows = r.recordset.map((x) => ({
+    orderNo:        x.OrderNo,
+    saleDate:       x.SaleDate,
+    shopCode:       x.ShopCode || '',
+    cashierName:    x.CashierName || '',
+    customerName:   x.CustomerName || '',
+    paymentMethods: x.PaymentMethods || '',
+    etimsInvoiceNo: x.EtimsInvoiceNo || '',
+    totalAmount:    Number(x.TotalAmount) || 0,
+  }));
+  const totals = {
+    orders: rows.length,
+    totalAmount: rows.reduce((s, x) => s + x.totalAmount, 0),
+  };
+  return { rows, totals };
+}
+
 export async function setOrderLines(orderId, lines) {
   const pool = await appPool();
   const req  = pool.request().input('orderId', sql.UniqueIdentifier, orderId);

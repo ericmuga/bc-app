@@ -29,6 +29,7 @@ export const targetsApi = {
 
 // ── POS Reports hub ───────────────────────────────────────────────────────────
 export const posReportsApi = {
+  dailySales:       (params) => api.get('/pos/reports/daily-sales',       { params }),
   stockPosition:    (params) => api.get('/pos/reports/stock-position',    { params }),
   stockSnapshot:    (params) => api.get('/pos/stock/snapshot',           { params }),
   uploadStock:      (rows)   => api.post('/pos/stock/upload',            { rows }),

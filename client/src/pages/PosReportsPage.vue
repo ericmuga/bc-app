@@ -128,6 +128,7 @@ const error      = ref('')
 
 const reports = computed(() => {
   const list = [
+    { key: 'dailySales',     icon: 'pi pi-receipt',      label: 'Daily sales',     desc: 'All paid orders in the period, with a total' },
     { key: 'stockPosition',  icon: 'pi pi-box',          label: 'Stock position',  desc: 'Opening + entry-type movements + closing' },
     { key: 'salesByItem',    icon: 'pi pi-shopping-bag', label: 'Sales by item',   desc: 'POS + manual sales unioned, by item' },
     { key: 'salesByContact', icon: 'pi pi-user',         label: 'Sales by contact', desc: 'POS-paid orders grouped by contact' },
@@ -139,6 +140,17 @@ const reports = computed(() => {
 
 const columns = computed(() => {
   switch (tab.value) {
+    case 'dailySales':
+      return [
+        { field: 'saleDate',       header: 'Date',      style: 'width:100px' },
+        { field: 'orderNo',        header: 'Order No',  style: 'width:150px' },
+        { field: 'shopCode',       header: 'Shop',      style: 'width:80px' },
+        { field: 'cashierName',    header: 'Cashier',   style: 'min-width:130px' },
+        { field: 'customerName',   header: 'Customer',  style: 'min-width:140px' },
+        { field: 'paymentMethods', header: 'Payment',   style: 'width:120px' },
+        { field: 'etimsInvoiceNo', header: 'eTIMS Inv', style: 'min-width:150px' },
+        { field: 'totalAmount',    header: 'Amount',    style: 'width:130px;text-align:right', format: 'numStrong' },
+      ]
     case 'stockPosition':
       return [
         { field: 'itemNo',      header: 'Item No',      style: 'width:120px' },
@@ -205,6 +217,8 @@ watch(columns, (cols) => {
 const totals = computed(() => {
   if (!rows.value.length) return []
   switch (tab.value) {
+    case 'dailySales':
+      return [{ label: 'Total Sales', value: rows.value.reduce((s, r) => s + Number(r.totalAmount || 0), 0) }]
     case 'salesByItem':
     case 'salesByContact':
     case 'shopComparison':
@@ -273,6 +287,7 @@ async function run() {
   loading.value = true; error.value = ''; rows.value = []
   try {
     const fn = {
+      dailySales:     posReportsApi.dailySales,
       stockPosition:  posReportsApi.stockPosition,
       salesByItem:    posReportsApi.salesByItem,
       salesByContact: posReportsApi.salesByContact,
@@ -288,6 +303,17 @@ async function run() {
 }
 
 async function downloadCsv() {
+  // Daily sales has no server CSV endpoint — build the Excel client-side with a total row.
+  if (tab.value === 'dailySales') {
+    if (!rows.value.length) return
+    const heads = columns.value.map(c => c.header)
+    const aoa = [heads, ...rows.value.map(r => columns.value.map(c => r[c.field] ?? ''))]
+    aoa.push([]); aoa.push(['', '', '', '', '', '', 'TOTAL', totals.value[0]?.value ?? 0])
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Daily Sales')
+    XLSX.writeFile(wb, `daily-sales-${commonParams().dateFrom}_${commonParams().dateTo}.xlsx`)
+    return
+  }
   exporting.value = true
   try {
     const slug = { stockPosition: 'stock-position', salesByItem: 'sales-by-item',
@@ -307,7 +333,7 @@ async function downloadCsv() {
 function downloadPdf() {
   if (!rows.value.length) return
   const pdf = new jsPDF('l', 'mm', 'a4')
-  const slug = { stockPosition: 'Stock Position', salesByItem: 'Sales by Item',
+  const slug = { dailySales: 'Daily Sales Summary', stockPosition: 'Stock Position', salesByItem: 'Sales by Item',
                  salesByContact: 'Sales by Contact', shopComparison: 'Shop Comparison',
                  cashMovement: 'Cash Movement' }[tab.value]
   pdf.setFontSize(14); pdf.text(slug, 14, 14)
@@ -317,6 +343,12 @@ function downloadPdf() {
     c.format === 'num' || c.format === 'numStrong' ? Number(r[c.field] || 0).toFixed(2) : (r[c.field] ?? '')
   ))
   pdf.autoTable({ head, body, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
+  // Sum(s) at the bottom.
+  if (totals.value.length) {
+    let ty = (pdf.lastAutoTable?.finalY || 26) + 8
+    pdf.setFontSize(11); pdf.setFont('helvetica', 'bold')
+    totals.value.forEach(t => { pdf.text(`${t.label}: ${Number(t.value || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 14, ty); ty += 6 })
+  }
   pdf.save(`${slug.toLowerCase().replace(/\s+/g, '-')}-${commonParams().dateFrom}_${commonParams().dateTo}.pdf`)
 }
 
