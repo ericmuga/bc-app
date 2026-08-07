@@ -501,6 +501,12 @@ onMounted(run)
 .reports-page :deep(.p-datepicker-input) {
   background:#fff !important; color:#111827 !important; border-color:#d1d5db !important; color-scheme: light;
 }
-.reports-page :deep(.p-datatable-thead > tr > th) { background:#f3f4f6 !important; color:#111827 !important; }
-.reports-page :deep(.p-datatable-tbody > tr > td) { background:#fff !important; color:#111827 !important; }
+/* Dark, high-contrast report rows so text is always visible (not just on hover). */
+.reports-page :deep(.p-datatable-thead > tr > th) { background:#111827 !important; color:#f3f4f6 !important; border-color:#374151 !important; }
+.reports-page :deep(.p-datatable-tbody > tr) { background:#1f2937 !important; }
+.reports-page :deep(.p-datatable-tbody > tr > td) { background:#1f2937 !important; color:#e5e7eb !important; border-color:#374151 !important; }
+.reports-page :deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:#232f3e !important; }
+.reports-page :deep(.p-datatable-tbody > tr:hover > td) { background:#374151 !important; color:#fff !important; }
+.reports-page :deep(.p-paginator) { background:#1f2937 !important; color:#e5e7eb !important; }
+.totals-row { background:#111827; color:#e5e7eb; }
 </style>
