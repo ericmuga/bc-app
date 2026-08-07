@@ -700,15 +700,25 @@ function openSaveCart() {
   saveCartVisible.value = true
 }
 async function saveCart() {
-  if (!orderId.value) return
+  if (!lines.value?.length) return
   savingCart.value = true
   try {
-    // Persist any pending line changes first so the parked cart reflects what's on screen.
-    if (lines.value?.length) await posApi.setLines(orderId.value, lines.value)
+    // Cancel any pending debounced save so it can't race with us.
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    // The order may not exist yet if the 600ms auto-save hasn't fired — create it
+    // now so parking always works, even right after adding the first item.
+    if (!orderId.value) {
+      const { data } = await posApi.createOrder()
+      orderId.value = data.OrderId || data.orderId
+      orderNo.value = data.OrderNo || data.orderNo
+    }
+    // Persist current lines so the parked cart reflects what's on screen.
+    await posApi.setLines(orderId.value, lines.value)
     await posApi.saveCart(orderId.value, saveCartLabel.value.trim())
     saveCartVisible.value = false
     // Reset terminal state — caller can start a new order or open another one from POS Orders.
     orderId.value = null
+    orderNo.value = ''
     lines.value = []
     contact.value = null
   } catch (e) {
