@@ -45,7 +45,9 @@
       <!-- Cash Report -->
       <h3 class="section-title">Cash Report</h3>
       <DataTable :value="report?.rows ?? []" size="small" responsive-layout="scroll">
-        <Column field="paymentTypeName" header="Payment Method" style="min-width:140px" />
+        <Column header="Payment Method" style="min-width:120px">
+          <template #body="{ data }">{{ data.paymentTypeCode || data.paymentTypeName }}</template>
+        </Column>
         <Column header="Opening"  style="width:100px;text-align:right">
           <template #body="{ data }">{{ n(data.opening) }}</template>
         </Column>
@@ -123,7 +125,7 @@
       <p class="text-muted text-sm">Enter starting cash for each payment method you'll use.</p>
       <div class="balance-form">
         <div v-for="pt in paymentTypes" :key="pt.Code" class="balance-row">
-          <span class="balance-label">{{ pt.Name }}</span>
+          <span class="balance-label">{{ pt.Code }}</span>
           <InputNumber v-model="openingAmounts[pt.Code]" :minFractionDigits="2" mode="decimal" placeholder="0.00" />
         </div>
       </div>
@@ -173,7 +175,7 @@
           <span>Method</span><span>Expected</span><span>Declared</span><span>Variance</span>
         </div>
         <div v-for="row in (report?.rows ?? [])" :key="row.paymentTypeCode" class="close-row">
-          <span>{{ row.paymentTypeName }}</span>
+          <span>{{ row.paymentTypeCode || row.paymentTypeName }}</span>
           <span class="num">{{ n(row.expected) }}</span>
           <InputNumber v-model="closeDeclared[row.paymentTypeCode]" :minFractionDigits="2" mode="decimal" />
           <span :class="varianceClass(closeDeclared[row.paymentTypeCode] != null ? closeDeclared[row.paymentTypeCode] - row.expected : 0)">

@@ -758,7 +758,9 @@ export async function listStockTakes({ shopCode = null, role = 'shop' } = {}) {
   const pool = await appPool();
   const req = pool.request();
   let where = '';
-  if (role !== 'admin' && shopCode) {
+  // Scope to the current shop whenever one is resolved (all roles); admins with
+  // no shop selected see all.
+  if (shopCode) {
     req.input('shopCode', sql.NVarChar(50), shopCode);
     where = 'WHERE [ShopCode]=@shopCode';
   }
