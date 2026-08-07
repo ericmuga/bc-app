@@ -200,6 +200,7 @@ router.get(  '/pos/stock-requests/:requestId',                 ...canPos, posSto
 router.put(  '/pos/stock-requests/:requestId/lines',           ...canPos, posStockCtrl.setRequestLines);
 router.post( '/pos/stock-requests/:requestId/submit',          ...canPos, posStockCtrl.submitRequest);
 router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, posStockCtrl.approveRequest);
+router.post( '/pos/stock-requests/:requestId/push-bc',         ...canManage, posStockCtrl.pushRequestToBc);
 router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
 router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
 

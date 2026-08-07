@@ -12,7 +12,14 @@
 import { db as appDb, sql } from '../db/pool.js';
 import { bcDb, bcSql } from '../db/bcPool.js';
 import { bcTable } from '../services/bcTables.js';
+import { getStockRequest } from './PosStockModel.js';
 import logger from '../services/logger.js';
+
+const toSuom = (u) => (/^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(u || '').trim().toUpperCase()) ? 'KG' : 'PC');
+const yyyymmdd = (d) => {
+  const x = d ? new Date(d) : new Date();
+  return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(2, '0')}${String(x.getDate()).padStart(2, '0')}`;
+};
 
 const num = (v) => (isNaN(Number(v)) ? 0 : Number(v));
 
@@ -29,13 +36,16 @@ export async function resolveShopCompany(shopCode) {
   const pool = await appDb.getPool();
   const r = await pool.request()
     .input('code', sql.NVarChar(50), String(shopCode || '').toUpperCase())
-    .query(`SELECT [Code],[Name],[FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],[WalkInCustomerNo]
+    .query(`SELECT [Code],[Name],[SalespersonCode],[FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],[WalkInCustomerNo]
             FROM [dbo].[PosShop] WHERE [Code]=@code`);
   const s = r.recordset[0];
   if (!s) throw new Error(`Shop ${shopCode} not found`);
   const hit = COMPANY_CUSTOMER_FIELDS.find((c) => s[c.field]);
   if (!hit) throw new Error(`Shop ${shopCode} has no BC customer number set for any company`);
-  return { company: hit.company, customerNo: String(s[hit.field]).trim(), shopName: s.Name };
+  return {
+    company: hit.company, customerNo: String(s[hit.field]).trim(),
+    shopName: s.Name || '', salespersonCode: s.SalespersonCode || '',
+  };
 }
 
 // The exact BC staging columns (order matters for the export sheet). The
@@ -193,4 +203,80 @@ export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType =
 
   logger.info('pushImportedSales', { shopCode, company, inserted, skipped, candidates: rows.length });
   return { company, table, candidates: rows.length, inserted, skipped, orders: extDocs };
+}
+
+// ── Stock request → BC Imported Orders (PDA transfer request) ─────────────────
+const ORDER_PUSH_COLUMNS = [
+  'External Document No_', 'Line No_', 'Sell-to Customer No_', 'Shipment Date',
+  'Salesperson Code', 'Ship-to Code', 'Item No_', 'Quantity', 'Unit of Measure',
+  'Ship-to Name', 'Status', 'Customer Specification', 'Company',
+  'Expected Line Count', 'Error Message', 'PDA Order', 'External Order URL', 'Product Specification',
+];
+const ORDER_PUSH_TYPES = {
+  'External Document No_': bcSql.NVarChar(30), 'Line No_': bcSql.Int,
+  'Sell-to Customer No_': bcSql.NVarChar(20), 'Shipment Date': bcSql.NVarChar(10),  // 'YYYYMMDD'
+  'Salesperson Code': bcSql.NVarChar(20), 'Ship-to Code': bcSql.NVarChar(20),
+  'Item No_': bcSql.NVarChar(20), 'Quantity': bcSql.Decimal(38, 4), 'Unit of Measure': bcSql.NVarChar(10),
+  'Ship-to Name': bcSql.NVarChar(100), 'Status': bcSql.Int, 'Customer Specification': bcSql.NVarChar(250),
+  'Company': bcSql.NVarChar(30), 'Expected Line Count': bcSql.Int, 'Error Message': bcSql.NVarChar(250),
+  'PDA Order': bcSql.TinyInt, 'External Order URL': bcSql.NVarChar(250), 'Product Specification': bcSql.NVarChar(250),
+};
+
+/**
+ * DB-to-DB push of a confirmed stock request into BC's per-company
+ * [{prefix}$Imported Orders$...] table, marked as a PDA order for BC to action.
+ * Idempotent — skips (External Document No_, Line No_) already present.
+ * @returns { company, table, candidates, inserted, skipped }
+ */
+export async function pushImportedOrder({ requestId }) {
+  const reqOrder = await getStockRequest(requestId);
+  if (!reqOrder) throw new Error('Stock request not found');
+  const { company, customerNo, shopName, salespersonCode } = await resolveShopCompany(reqOrder.shopCode);
+  const lines = (reqOrder.lines || []).filter((l) => l.itemNo && Number(l.quantityRequested) > 0);
+  if (!lines.length) return { company, table: null, candidates: 0, inserted: 0, skipped: 0 };
+
+  const table = bcTable(company, 'Imported Orders', { ext: true });
+  const pool = await bcDb.getPool();
+  const extDoc = reqOrder.requestNo;
+
+  const chk = await pool.request()
+    .input('x', bcSql.NVarChar(30), extDoc)
+    .query(`SELECT [Line No_] FROM ${table} WHERE [External Document No_]=@x`);
+  const seen = new Set(chk.recordset.map((r) => Number(r['Line No_'])));
+
+  const shipDate = yyyymmdd(new Date());
+  let inserted = 0, skipped = 0, seq = 0;
+  for (const l of lines) {
+    seq += 1;
+    const lineNo = seq * 10000;
+    if (seen.has(lineNo)) { skipped++; continue; }
+    const values = {
+      'External Document No_': extDoc,
+      'Line No_': lineNo,
+      'Sell-to Customer No_': customerNo.slice(0, 20),
+      'Shipment Date': shipDate,
+      'Salesperson Code': String(salespersonCode || '').slice(0, 20),
+      'Ship-to Code': '',
+      'Item No_': String(l.itemNo).slice(0, 20),
+      'Quantity': Number(l.quantityRequested) || 0,
+      'Unit of Measure': toSuom(l.unitOfMeasure),
+      'Ship-to Name': String(shopName || '').slice(0, 100),
+      'Status': 0,
+      'Customer Specification': String(reqOrder.notes || '').slice(0, 250),
+      'Company': company,
+      'Expected Line Count': lines.length,
+      'Error Message': '',
+      'PDA Order': 1,
+      'External Order URL': '',
+      'Product Specification': '',
+    };
+    const req = pool.request();
+    for (const c of ORDER_PUSH_COLUMNS) req.input(`c_${c.replace(/\W/g, '')}`, ORDER_PUSH_TYPES[c], values[c]);
+    const cols = ORDER_PUSH_COLUMNS.map((c) => `[${c}]`).join(', ');
+    const vals = ORDER_PUSH_COLUMNS.map((c) => `@c_${c.replace(/\W/g, '')}`).join(', ');
+    await req.query(`INSERT INTO ${table} (${cols}) VALUES (${vals})`);
+    inserted++;
+  }
+  logger.info('pushImportedOrder', { requestNo: extDoc, company, inserted, skipped, lines: lines.length });
+  return { company, table, candidates: lines.length, inserted, skipped };
 }

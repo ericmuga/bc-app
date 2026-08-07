@@ -4,6 +4,7 @@
  */
 import * as Pos      from '../models/PosModel.js';
 import * as Stock    from '../models/PosStockModel.js';
+import * as BcSync   from '../models/PosBcSyncModel.js';
 import logger from '../services/logger.js';
 
 function ok(res, data) { return res.json(data); }
@@ -178,7 +179,20 @@ export async function submitRequest(req, res) {
 }
 
 export async function approveRequest(req, res) {
-  try { await Stock.approveStockRequest(req.params.requestId, req.user.userName); ok(res, { ok: true }); }
+  try {
+    await Stock.approveStockRequest(req.params.requestId, req.user.userName);
+    // On confirmation, push the request to BC's Imported Orders (PDA) for BC to
+    // action. Idempotent + non-fatal — approval never fails on a BC hiccup.
+    let bc = null;
+    try { bc = await BcSync.pushImportedOrder({ requestId: req.params.requestId }); }
+    catch (e) { logger.error('pushImportedOrder failed', { error: e.message }); bc = { error: e.message }; }
+    ok(res, { ok: true, bc });
+  } catch (e) { err(res, e, 400); }
+}
+
+/** POST /pos/stock-requests/:requestId/push-bc — (re)push a confirmed request to BC Imported Orders. */
+export async function pushRequestToBc(req, res) {
+  try { ok(res, await BcSync.pushImportedOrder({ requestId: req.params.requestId })); }
   catch (e) { err(res, e, 400); }
 }
 
