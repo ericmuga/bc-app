@@ -58,10 +58,10 @@
           <svg :viewBox="`0 0 ${chartW} ${chartH}`" class="chart-svg" preserveAspectRatio="xMidYMid meet">
             <g v-for="(b, i) in chartBars" :key="b.label">
               <rect :x="b.x" :y="b.y" :width="barW" :height="b.h" :fill="b.color" rx="2" />
-              <text :x="b.x + barW / 2" :y="chartH - 14" text-anchor="middle" font-size="9" fill="#374151">
+              <text :x="b.x + barW / 2" :y="chartH - 14" text-anchor="middle" font-size="9" fill="#cbd5e1">
                 {{ b.shortLabel }}
               </text>
-              <text :x="b.x + barW / 2" :y="b.y - 3" text-anchor="middle" font-size="9" fill="#111827">
+              <text :x="b.x + barW / 2" :y="b.y - 3" text-anchor="middle" font-size="9" fill="#f3f4f6">
                 {{ b.valueLabel }}
               </text>
             </g>
@@ -464,10 +464,10 @@ onMounted(run)
 </script>
 
 <style scoped>
-.reports-page { padding: 16px 20px; background:#f4f6f8; color:#111827; color-scheme:light; min-height: calc(100vh - 56px); }
+.reports-page { padding: 16px 20px; background:#0f172a; color:#e5e7eb; color-scheme:dark; min-height: calc(100vh - 56px); }
 .page-header  { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
-.page-title   { font-size:20px; font-weight:700; margin:0 0 2px; }
-.text-muted   { color:#6b7280; }
+.page-title   { font-size:20px; font-weight:700; margin:0 0 2px; color:#f3f4f6; }
+.text-muted   { color:#9ca3af; }
 .text-sm      { font-size:13px; }
 .mb-3         { margin-bottom:12px; }
 
@@ -477,29 +477,30 @@ onMounted(run)
 .reports-side { display:flex; flex-direction:column; gap:6px; }
 .report-tab {
   display:flex; gap:10px; padding:10px 12px; border-radius:8px;
-  background:#fff; border:1px solid #e5e7eb; cursor:pointer; transition: background 0.15s;
+  background:#1f2937; border:1px solid #374151; cursor:pointer; transition: background 0.15s; color:#e5e7eb;
 }
-.report-tab .pi { font-size:18px; color:#0f7173; }
-.report-tab:hover { background:#eef2ff; }
+.report-tab .pi { font-size:18px; color:#2dd4bf; }
+.report-tab:hover { background:#374151; }
 .report-tab.active { background:#0f7173; color:#fff; border-color:#0f7173; }
 .report-tab.active .pi, .report-tab.active .report-desc { color:#fff; }
 .report-name { font-weight:600; font-size:13px; }
-.report-desc { font-size:11px; color:#6b7280; }
+.report-desc { font-size:11px; color:#9ca3af; }
 
 .reports-main { display:flex; flex-direction:column; gap:12px; min-width:0; }
 .filters { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
 .filter-field { display:flex; flex-direction:column; gap:4px; min-width:140px; }
-.filter-field label { font-size:12px; color:#374151; font-weight:500; }
+.filter-field label { font-size:12px; color:#cbd5e1; font-weight:500; }
 
-.chart-card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:8px 12px; }
-.chart-title { font-weight:600; font-size:13px; margin-bottom:4px; color:#111827; }
+.chart-card { background:#1f2937; border:1px solid #374151; border-radius:8px; padding:8px 12px; }
+.chart-title { font-weight:600; font-size:13px; margin-bottom:4px; color:#f3f4f6; }
 .chart-svg { width:100%; max-height:240px; }
+.chart-svg text { fill:#e5e7eb; }
 
-.totals-row { display:flex; gap:18px; padding:8px 12px; font-size:13px; flex-wrap:wrap; background:#f3f4f6; }
+.totals-row { display:flex; gap:18px; padding:8px 12px; font-size:13px; flex-wrap:wrap; background:#111827; color:#e5e7eb; border-radius:6px; }
 
 .reports-page :deep(.p-inputtext),
 .reports-page :deep(.p-datepicker-input) {
-  background:#fff !important; color:#111827 !important; border-color:#d1d5db !important; color-scheme: light;
+  background:#1f2937 !important; color:#e5e7eb !important; border-color:#374151 !important; color-scheme: dark;
 }
 /* Dark, high-contrast report rows so text is always visible (not just on hover). */
 .reports-page :deep(.p-datatable-thead > tr > th) { background:#111827 !important; color:#f3f4f6 !important; border-color:#374151 !important; }
