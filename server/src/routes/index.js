@@ -203,6 +203,7 @@ router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, pos
 router.post( '/pos/stock-requests/:requestId/push-bc',         ...canManage, posStockCtrl.pushRequestToBc);
 router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
 router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
+router.get(  '/pos/stock-request-lines',                       ...canPos, posStockCtrl.listRequestLines);
 
 // ── POS make-to-order: BOM (recipes) + production plan/produce ──────────────
 router.get(  '/pos/boms',                                      ...canManage, posCtrl.listBoms);

@@ -15,22 +15,72 @@
 
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
+    <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center">
+      <InputText v-model="reqFilters.global.value" placeholder="Search requests…" style="max-width:300px" />
+      <span class="text-muted text-sm">{{ requests.length }} request(s)</span>
+    </div>
     <DataTable :value="requests" dataKey="RequestId" size="small" :loading="loading"
-      selection-mode="single" @row-click="openRequest" responsive-layout="scroll">
-      <Column field="RequestNo"     header="No"         style="width:160px" />
-      <Column field="ShopCode"      header="Shop"       style="width:90px" />
-      <Column field="RequestedName" header="Requested by" style="min-width:140px" />
-      <Column field="LineCount"     header="Lines"      style="width:60px;text-align:right" />
-      <Column field="TotalRequested" header="Total Qty" style="width:90px;text-align:right">
+      selection-mode="single" @row-click="openRequest" responsive-layout="scroll"
+      paginator :rows="20" v-model:filters="reqFilters" filterDisplay="row" removableSort
+      :globalFilterFields="['RequestNo','ShopCode','RequestedName','Status']">
+      <Column field="RequestNo"     header="No"         sortable style="width:170px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="No" style="width:100%" /></template>
+      </Column>
+      <Column field="ShopCode"      header="Shop"       sortable style="width:90px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Shop" style="width:100%" /></template>
+      </Column>
+      <Column field="RequestedName" header="Requested by" sortable style="min-width:140px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="By" style="width:100%" /></template>
+      </Column>
+      <Column field="LineCount"     header="Lines"      sortable style="width:60px;text-align:right" />
+      <Column field="TotalRequested" header="Total Qty" sortable style="width:90px;text-align:right">
         <template #body="{ data }">{{ Number(data.TotalRequested||0).toFixed(2) }}</template>
       </Column>
-      <Column field="Status" header="Status" style="width:110px">
+      <Column field="Status" header="Status" sortable style="width:120px" :showFilterMenu="false">
         <template #body="{ data }">
           <Tag :value="data.Status" :severity="statusSeverity(data.Status)" />
         </template>
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Status" style="width:100%" /></template>
       </Column>
-      <Column field="CreatedAt" header="Created" style="min-width:140px">
+      <Column field="CreatedAt" header="Created" sortable style="min-width:140px">
         <template #body="{ data }">{{ fmtTime(data.CreatedAt) }}</template>
+      </Column>
+    </DataTable>
+
+    <!-- ── Request LINES (flat, filterable, exportable) ─────────────── -->
+    <div class="page-header" style="margin-top:22px">
+      <div><h2 class="page-title" style="font-size:17px">Request Lines</h2>
+        <p class="text-muted text-sm">All request lines for your shop — filter, sort, export.</p></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <InputText v-model="lineFilters.global.value" placeholder="Search lines…" style="max-width:260px" />
+        <Button label="Excel" icon="pi pi-file-excel" severity="secondary" size="small" :disabled="!reqLines.length" @click="exportLinesXlsx" />
+        <Button label="PDF" icon="pi pi-file-pdf" severity="secondary" size="small" :disabled="!reqLines.length" @click="exportLinesPdf" />
+        <Button icon="pi pi-refresh" text size="small" :loading="linesLoading" @click="loadLines" />
+      </div>
+    </div>
+    <DataTable :value="reqLines" dataKey="_k" size="small" :loading="linesLoading" responsive-layout="scroll"
+      paginator :rows="25" v-model:filters="lineFilters" filterDisplay="row" removableSort
+      :globalFilterFields="['requestNo','itemNo','description','status']">
+      <Column field="requestDate" header="Date" sortable style="width:100px" />
+      <Column field="requestNo"   header="Request" sortable style="width:160px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Request" style="width:100%" /></template>
+      </Column>
+      <Column field="itemNo"      header="Item" sortable style="width:120px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Item" style="width:100%" /></template>
+      </Column>
+      <Column field="description" header="Description" sortable style="min-width:180px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Description" style="width:100%" /></template>
+      </Column>
+      <Column field="requested"   header="Requested" sortable style="width:100px;text-align:right">
+        <template #body="{ data }">{{ Number(data.requested||0).toFixed(2) }}</template>
+      </Column>
+      <Column field="received"    header="Received" sortable style="width:100px;text-align:right">
+        <template #body="{ data }">{{ data.received == null ? '—' : Number(data.received).toFixed(2) }}</template>
+      </Column>
+      <Column field="uom"         header="UoM" sortable style="width:70px" />
+      <Column field="status"      header="Status" sortable style="width:110px" :showFilterMenu="false">
+        <template #body="{ data }"><Tag :value="data.status" :severity="statusSeverity(data.status)" /></template>
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Status" style="width:100%" /></template>
       </Column>
     </DataTable>
 
@@ -267,12 +317,61 @@ import Dialog       from 'primevue/dialog'
 import Message      from 'primevue/message'
 import AutoComplete from 'primevue/autocomplete'
 import Select       from 'primevue/select'
+import InputText    from 'primevue/inputtext'
 import { stockApi, posApi } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
+import { jsPDF } from 'jspdf'
+import 'jspdf-autotable'
+import * as XLSX from 'xlsx'
 
 const auth = useAuthStore()
 
 const requests      = ref([])
+const reqFilters = ref({
+  global:      { value: null, matchMode: 'contains' },
+  RequestNo:   { value: null, matchMode: 'contains' },
+  ShopCode:    { value: null, matchMode: 'contains' },
+  RequestedName: { value: null, matchMode: 'contains' },
+  Status:      { value: null, matchMode: 'contains' },
+})
+// ── Request lines (flat listing) ──────────────────────────────────────────────
+const reqLines     = ref([])
+const linesLoading = ref(false)
+const lineFilters = ref({
+  global:      { value: null, matchMode: 'contains' },
+  requestNo:   { value: null, matchMode: 'contains' },
+  itemNo:      { value: null, matchMode: 'contains' },
+  description: { value: null, matchMode: 'contains' },
+  status:      { value: null, matchMode: 'contains' },
+})
+async function loadLines() {
+  linesLoading.value = true
+  try {
+    const { data } = await stockApi.requestLines({})
+    reqLines.value = (data || []).map((r, i) => ({ ...r, _k: `${r.requestNo}_${r.itemNo}_${i}` }))
+  } catch (e) { error.value = e.response?.data?.error ?? e.message }
+  finally { linesLoading.value = false }
+}
+const LINE_COLS = [
+  ['requestDate', 'Date'], ['requestNo', 'Request'], ['itemNo', 'Item'], ['description', 'Description'],
+  ['requested', 'Requested'], ['received', 'Received'], ['uom', 'UoM'], ['status', 'Status'],
+]
+function exportLinesXlsx() {
+  const aoa = [LINE_COLS.map(c => c[1]), ...reqLines.value.map(r => LINE_COLS.map(c => r[c[0]] ?? ''))]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Request Lines')
+  XLSX.writeFile(wb, `stock-request-lines-${new Date().toISOString().slice(0,10)}.xlsx`)
+}
+function exportLinesPdf() {
+  const pdf = new jsPDF('l', 'mm', 'a4')
+  pdf.setFontSize(14); pdf.text('Stock Request Lines', 14, 14)
+  pdf.autoTable({
+    head: [LINE_COLS.map(c => c[1])],
+    body: reqLines.value.map(r => LINE_COLS.map(c => (c[0] === 'requested' || c[0] === 'received') && r[c[0]] != null ? Number(r[c[0]]).toFixed(2) : (r[c[0]] ?? ''))),
+    startY: 20, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] },
+  })
+  pdf.save(`stock-request-lines-${new Date().toISOString().slice(0,10)}.pdf`)
+}
 const loading       = ref(false)
 const error         = ref('')
 const editorVisible = ref(false)
@@ -589,11 +688,11 @@ function fmtTime(v) {
   return new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-onMounted(load)
+onMounted(() => { load(); loadLines() })
 </script>
 
 <style scoped>
-.stock-page { padding: 16px 20px; max-width: 1100px; }
+.stock-page { padding: 16px 20px; }
 .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
 .page-title { font-size:20px; font-weight:700; margin:0 0 2px; }
 .text-muted { color:#888; }

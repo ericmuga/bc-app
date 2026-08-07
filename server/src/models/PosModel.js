@@ -2352,14 +2352,13 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
   const isAdmin = role === 'admin';
 
   let where = '';
-  if (isAdmin) {
-    // admin sees everything
-  } else if (shopCode) {
-    // shop user scoped to their shop
+  // Scope to the current shop whenever one is resolved (attendant's shop, or an
+  // admin's selected shop via X-Shop-Code). Admins with no shop selected see all.
+  if (shopCode) {
     req.input('shopCode', sql.NVarChar(50), shopCode);
     where = 'WHERE o.[ShopCode]=@shopCode';
-  } else {
-    // no shop assigned — fall back to own orders only
+  } else if (!isAdmin) {
+    // non-admin with no shop assigned — fall back to own orders only
     req.input('cashierUserId', sql.NVarChar(100), cashierUserId);
     where = 'WHERE o.[CashierUserId]=@cashierUserId';
   }

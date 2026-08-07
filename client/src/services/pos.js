@@ -176,6 +176,7 @@ export const tillApi = {
 export const stockApi = {
   // Stock requests
   listRequests:   ()                          => api.get('/pos/stock-requests'),
+  requestLines:   (params)                    => api.get('/pos/stock-request-lines', { params }),
   getRequest:     (id)                        => api.get(`/pos/stock-requests/${id}`),
   createRequest:  (body)                      => api.post('/pos/stock-requests', body),
   setLines:       (id, lines)                 => api.put(`/pos/stock-requests/${id}/lines`, { lines }),

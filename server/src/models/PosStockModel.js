@@ -622,6 +622,43 @@ export async function submitStockRequest(requestId) {
             WHERE [RequestId]=@requestId AND [Status]='open'`);
 }
 
+/**
+ * Flat listing of stock-request LINES (across requests) for the given shop/date
+ * window — for a filterable/exportable lines report.
+ */
+export async function listStockRequestLines({ shopCode = null, dateFrom = null, dateTo = null } = {}) {
+  const pool = await appPool();
+  const req = pool.request();
+  const where = ['1=1'];
+  if (shopCode) { req.input('shop', sql.NVarChar(50), shopCode); where.push('h.[ShopCode]=@shop'); }
+  if (dateFrom) { req.input('from', sql.Date, new Date(dateFrom)); where.push('CAST(DATEADD(HOUR,3,h.[CreatedAt]) AS date) >= @from'); }
+  if (dateTo)   { req.input('to',   sql.Date, new Date(dateTo));   where.push('CAST(DATEADD(HOUR,3,h.[CreatedAt]) AS date) <= @to'); }
+  const r = await req.query(`
+    SELECT h.[RequestNo], h.[ShopCode], h.[Status] AS RequestStatus, h.[RequestedName],
+           CONVERT(varchar(10), DATEADD(HOUR,3,h.[CreatedAt]), 23) AS RequestDate,
+           l.[ItemNo], l.[Description], l.[QuantityRequested], l.[QuantityReceived],
+           l.[UnitOfMeasure], l.[Comments], l.[RfNo]
+    FROM [dbo].[PosStockRequestLine] l
+    JOIN [dbo].[PosStockRequest] h ON h.[RequestId] = l.[RequestId]
+    WHERE ${where.join(' AND ')}
+    ORDER BY h.[CreatedAt] DESC, l.[SortOrder]
+  `);
+  return r.recordset.map((x) => ({
+    requestNo:     x.RequestNo,
+    requestDate:   x.RequestDate,
+    shopCode:      x.ShopCode || '',
+    requestedBy:   x.RequestedName || '',
+    status:        x.RequestStatus || '',
+    itemNo:        x.ItemNo,
+    description:   x.Description || '',
+    requested:     Number(x.QuantityRequested) || 0,
+    received:      x.QuantityReceived == null ? null : Number(x.QuantityReceived),
+    uom:           x.UnitOfMeasure || '',
+    comments:      x.Comments || '',
+    rfNo:          x.RfNo || '',
+  }));
+}
+
 export async function approveStockRequest(requestId, approvedBy) {
   const pool = await appPool();
   await pool.request()

@@ -39,6 +39,14 @@ export async function dailySalesSummary(req, res) {
   } catch (e) { err(res, e); }
 }
 
+/** GET /pos/stock-request-lines — flat, filterable listing of request lines (shop-scoped). */
+export async function listRequestLines(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    ok(res, await Stock.listStockRequestLines({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo }));
+  } catch (e) { err(res, e); }
+}
+
 /** GET /pos/stock/snapshot — fast current on-hand per item (for at-a-glance + export). */
 export async function stockSnapshot(req, res) {
   try {
