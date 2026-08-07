@@ -457,6 +457,12 @@ async function migrate(companyId) {
     ['QuantityUnit',       'NVARCHAR(20)  NULL'],
     ['IsByproduct',        'BIT NOT NULL DEFAULT 0'],
     ['SourceCompany',      'NVARCHAR(20)  NULL'],
+    // UoM: base vs sales unit + factor (base units per 1 sales unit, e.g. PC=0.2 KG).
+    // Price is per sales unit; stock/on-hand is in base units, so a sale of N sales
+    // units consumes N * QtyPerSalesUnit base units.
+    ['BaseUnitOfMeasure',  'NVARCHAR(20)  NULL'],
+    ['SalesUnitOfMeasure', 'NVARCHAR(20)  NULL'],
+    ['QtyPerSalesUnit',    'DECIMAL(18,6) NOT NULL DEFAULT 1'],
   ]) {
     await run(`
       IF NOT EXISTS (SELECT * FROM sys.columns

@@ -643,6 +643,7 @@ export async function listBcPdaItems(companyId = 'FCL', shopCode = null) {
   const etimsCodeCol   = extCol('E-Tims Item Code');
   const etimsClassCol  = extCol('Item Class code');    // lowercase 'c' — BC field quirk
   const priceTable     = bcTable(c, 'Sales Price');
+  const itemUomTable   = bcTable(c, 'Item Unit of Measure');   // [Item No_],[Code],[Qty_ per Unit of Measure]
   const vatSetupTable  = bcTable(c, 'VAT Posting Setup');
   const vatBus         = (process.env.POS_VAT_BUS_POSTING_GROUP || 'DOMESTIC').toUpperCase();
 
@@ -705,9 +706,15 @@ export async function listBcPdaItems(companyId = 'FCL', shopCode = null) {
       b.[VAT Prod_ Posting Group]   AS VatPostingGroup,
       ISNULL(b.[Price Includes VAT], 0) AS PriceIncludesVat,
       COALESCE(NULLIF(LTRIM(RTRIM(b.[Sales Unit of Measure])), ''), b.[Base Unit of Measure]) AS UnitOfMeasure,
+      b.[Base Unit of Measure]  AS BaseUnitOfMeasure,
+      b.[Sales Unit of Measure] AS SalesUnitOfMeasure,
+      ISNULL(NULLIF(ium.[Qty_ per Unit of Measure], 0), 1) AS QtyPerSalesUnit,
       ${vatPctColumn ? `ISNULL(vps.[${vatPctColumn}], 0)` : '0'} AS VatPercent
     FROM ${itemExtTable} a
     INNER JOIN ${itemTable} b ON a.[No_] = b.[No_]
+    LEFT JOIN ${itemUomTable} ium
+           ON ium.[Item No_] = a.[No_]
+          AND LTRIM(RTRIM(ium.[Code])) = LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(b.[Sales Unit of Measure])), ''), b.[Base Unit of Measure])))
     ${vatPctColumn ? `
     LEFT JOIN ${vatSetupTable} vps
            ON UPPER(LTRIM(RTRIM(vps.[VAT Bus_ Posting Group])))  = '${vatBus.replace(/'/g, "''")}'
@@ -734,6 +741,9 @@ export async function listBcPdaItems(companyId = 'FCL', shopCode = null) {
     quantityUnit:       r.QuantityUnit?.trim() ?? '',
     isByproduct:        Boolean(r.IsByproduct),
     unitOfMeasure:      r.UnitOfMeasure?.trim() ?? '',
+    baseUnitOfMeasure:  r.BaseUnitOfMeasure?.trim() ?? '',
+    salesUnitOfMeasure: r.SalesUnitOfMeasure?.trim() ?? '',
+    qtyPerSalesUnit:    Number(r.QtyPerSalesUnit) || 1,
     vatPostingGroup:    r.VatPostingGroup?.trim() ?? '',
     priceIncludesVat:   Boolean(r.PriceIncludesVat),
     vatPercent:         Number(r.VatPercent ?? 0),
@@ -1591,6 +1601,9 @@ export async function syncItemsFromBc(companyId = 'FCL', { wipe = false, prune =
         .input('quantityUnit',       sql.NVarChar(20),   it.quantityUnit || null)
         .input('isByproduct',        sql.Bit,            it.isByproduct ? 1 : 0)
         .input('sourceCompany',      sql.NVarChar(20),   String(companyId).toUpperCase())
+        .input('baseUom',            sql.NVarChar(20),   it.baseUnitOfMeasure || null)
+        .input('salesUom',           sql.NVarChar(20),   it.salesUnitOfMeasure || null)
+        .input('qtyPerSalesUnit',    sql.Decimal(18, 6), Number(it.qtyPerSalesUnit) || 1)
         .query(`
           MERGE [dbo].[PosItem] AS t
           USING (SELECT @itemNo AS ItemNo) AS s ON t.[ItemNo] = s.ItemNo
@@ -1602,6 +1615,9 @@ export async function syncItemsFromBc(companyId = 'FCL', { wipe = false, prune =
             [EtimsItemCode]      = @etimsItemCode,
             [EtimsItemClassCode] = @etimsItemClassCode,
             [UnitOfMeasure]      = COALESCE(@unitOfMeasure, [UnitOfMeasure]),
+            [BaseUnitOfMeasure]  = @baseUom,
+            [SalesUnitOfMeasure] = @salesUom,
+            [QtyPerSalesUnit]    = @qtyPerSalesUnit,
             [VatPostingGroup]    = @vatPostingGroup,
             [PriceIncludesVat]   = @priceIncludesVat,
             [VatPercent]         = @vatPercent,
@@ -1615,11 +1631,11 @@ export async function syncItemsFromBc(companyId = 'FCL', { wipe = false, prune =
             [UpdatedAt]          = GETUTCDATE()
           WHEN NOT MATCHED THEN INSERT
             ([ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],
-             [EtimsItemCode],[EtimsItemClassCode],[UnitOfMeasure],
+             [EtimsItemCode],[EtimsItemClassCode],[UnitOfMeasure],[BaseUnitOfMeasure],[SalesUnitOfMeasure],[QtyPerSalesUnit],
              [VatPostingGroup],[PriceIncludesVat],[VatPercent],[TaxType],
              [ProductionCategory],[PackagingUnit],[QuantityUnit],[IsByproduct],[SourceCompany],[IsActive])
             VALUES (@itemNo,@description,@categoryCode,@unitPrice,@barcode,
-                    @etimsItemCode,@etimsItemClassCode,@unitOfMeasure,
+                    @etimsItemCode,@etimsItemClassCode,@unitOfMeasure,@baseUom,@salesUom,@qtyPerSalesUnit,
                     @vatPostingGroup,@priceIncludesVat,@vatPercent,@taxType,
                     @productionCategory,@packagingUnit,@quantityUnit,@isByproduct,@sourceCompany,1);
         `);

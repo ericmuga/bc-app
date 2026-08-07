@@ -131,6 +131,31 @@ export async function postMovement({ shopCode, itemNo, description, movementType
  * Auto-post sale movements for every line on a paid POS order.
  * Idempotent: skips if movements for this order already exist.
  */
+/**
+ * Base-units-per-sales-unit factor per item (PosItem.QtyPerSalesUnit). Stock is
+ * kept in BASE units (BC on-hand baseline), but the POS sells/reserves in SALES
+ * units — e.g. J31010101 sells per PC where 1 PC = 0.2 KG (factor 0.2). Returns
+ * Map<UPPER(itemNo), factor>; items absent → factor 1.
+ */
+export async function salesUnitFactors(itemNos) {
+  const out = new Map();
+  const clean = [...new Set((itemNos || []).map((n) => String(n || '').toUpperCase()).filter(Boolean))];
+  if (!clean.length) return out;
+  const pool = await appPool();
+  const r = pool.request();
+  clean.forEach((n, i) => r.input(`i${i}`, sql.NVarChar(30), n));
+  const res = await r.query(`
+    SELECT UPPER([ItemNo]) AS ItemNo, [QtyPerSalesUnit]
+    FROM [dbo].[PosItem]
+    WHERE UPPER([ItemNo]) IN (${clean.map((_, i) => `@i${i}`).join(',')})
+  `);
+  for (const row of res.recordset) {
+    const f = Number(row.QtyPerSalesUnit);
+    out.set(row.ItemNo, f > 0 ? f : 1);
+  }
+  return out;
+}
+
 export async function postSaleMovementsForOrder(order) {
   if (!order?.lines?.length) return;
   if (!order.shopCode) return;
@@ -142,19 +167,25 @@ export async function postSaleMovementsForOrder(order) {
             WHERE [ReferenceType]=@refType AND [ReferenceId]=@refId`);
   if (exists.recordset[0].n > 0) return;
 
+  // Sales are in sales-units; the ledger is in BASE units → convert by the factor.
+  const factors = await salesUnitFactors(order.lines.map((l) => l.itemNo));
   for (const line of order.lines) {
     if (!line.itemNo || !Number(line.quantity)) continue;
+    const factor  = factors.get(String(line.itemNo).toUpperCase()) || 1;
+    const salesQty = Math.abs(Number(line.quantity));
+    const baseQty  = num(salesQty * factor);
     await postMovement({
       shopCode:      order.shopCode,
       itemNo:        line.itemNo,
       description:   line.description,
       movementType:  'sale',
-      quantity:      -Math.abs(Number(line.quantity)),
+      quantity:      -baseQty,
       unitPrice:     line.unitPrice,
       referenceType: 'order',
       referenceId:   order.orderId,
       referenceNo:   order.orderNo,
       movementDate:  new Date(),
+      notes:         factor !== 1 ? `Sold ${salesQty} sales-unit(s) = ${baseQty} base` : null,
       createdBy:     order.cashierUserId || null,
     });
   }
@@ -224,12 +255,15 @@ export async function assertOrderHasStock({ shopCode, lines }) {
     need.set(ln.itemNo, (need.get(ln.itemNo) || 0) + q);
   }
   if (!need.size) return;
-  const have = await onHandMany(shopCode, [...need.keys()]);
+  const have    = await onHandMany(shopCode, [...need.keys()]);   // BASE units on-hand
+  const factors = await salesUnitFactors([...need.keys()]);        // base per sales unit
   const shortages = [];
   for (const [itemNo, requested] of need) {
-    const onHandQty = have.get(itemNo) || 0;
-    if (requested > onHandQty) {
-      shortages.push({ itemNo, requested, onHand: onHandQty, short: requested - onHandQty });
+    const factor      = factors.get(String(itemNo).toUpperCase()) || 1;
+    const requiredBase = requested * factor;                       // sales qty → base
+    const onHandQty    = have.get(itemNo) || 0;                    // base
+    if (requiredBase > onHandQty + 1e-9) {
+      shortages.push({ itemNo, requested, onHand: onHandQty, short: requiredBase - onHandQty });
     }
   }
   if (shortages.length) {
