@@ -16,13 +16,17 @@
       </div>
       <SelectButton v-model="view" :options="views" option-label="label" option-value="value" :allowEmpty="false" />
       <Button label="Run" icon="pi pi-search" size="small" :loading="loading" @click="load" />
-      <span class="text-muted text-sm" style="margin-left:auto">{{ rows.length }} rows</span>
+      <div class="f-field">
+        <label>Search</label>
+        <InputText v-model="search" placeholder="Code, payer, phone, invoice…" style="min-width:240px" />
+      </div>
+      <span class="text-muted text-sm" style="margin-left:auto">{{ displayRows.length }} / {{ rows.length }} rows</span>
     </section>
 
     <Message v-if="error" severity="error" :closable="true" @close="error=null">{{ error }}</Message>
 
     <!-- Invoice → Payments -->
-    <DataTable v-if="view === 'invoice'" :value="rows" :loading="loading" dataKey="_k" size="small"
+    <DataTable v-if="view === 'invoice'" :value="displayRows" :loading="loading" dataKey="_k" size="small" class="mm-table"
                stripedRows paginator :rows="50" :rowsPerPageOptions="[25,50,100,200]"
                rowGroupMode="subheader" groupRowsBy="OrderNo" sortField="OrderNo" :sortOrder="1">
       <template #groupheader="{ data }">
@@ -41,7 +45,7 @@
     </DataTable>
 
     <!-- Payment → Invoices -->
-    <DataTable v-else :value="rows" :loading="loading" dataKey="MpesaCode" size="small"
+    <DataTable v-else :value="displayRows" :loading="loading" dataKey="MpesaCode" size="small" class="mm-table"
                stripedRows paginator :rows="50" :rowsPerPageOptions="[25,50,100,200]">
       <Column field="MpesaCode" header="M-Pesa Code" style="min-width:120px" />
       <Column field="PayerName" header="Payer" style="min-width:140px"><template #body="{ data }">{{ data.PayerName || '—' }}</template></Column>
@@ -60,12 +64,13 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Message from 'primevue/message'
 import SelectButton from 'primevue/selectbutton'
+import InputText from 'primevue/inputtext'
 import { posSetupApi } from '@/services/pos.js'
 
 const views = [
@@ -79,6 +84,16 @@ const filter = reactive({ from: monthAgo, to: today })
 const rows = ref([])
 const loading = ref(false)
 const error = ref(null)
+const search = ref('')
+
+// Client-side text search across the most useful columns of either view.
+const displayRows = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return rows.value
+  return rows.value.filter(r => [
+    r.MpesaCode, r.PayerName, r.Phone, r.InvoiceNo, r.OrderNo, r.ContactName, r.Invoices,
+  ].some(v => String(v ?? '').toLowerCase().includes(q)))
+})
 
 async function load() {
   loading.value = true; error.value = null
@@ -110,4 +125,23 @@ onMounted(load)
 .grp { display: inline-flex; gap: 6px; align-items: center; }
 .empty { padding: 24px; text-align: center; color: var(--bc-text-muted); }
 .bal-pos { color: var(--bc-warning); font-weight: 700; }
+
+/* Dark table (PrimeVue renders light under the dark shell — force a readable
+   dark palette so rows are legible at rest, not just on hover). */
+.mm-table { font-size: 12px; border: 1px solid #374151; border-radius: 8px; overflow: hidden; }
+.mm-table :deep(.p-datatable-thead > tr > th) {
+  background: #111827; color: #f3f4f6; font-weight: 700;
+  border-bottom: 1px solid #374151; padding: 6px 8px;
+}
+.mm-table :deep(.p-datatable-tbody > tr) { background: #1f2937; color: #e5e7eb; }
+.mm-table :deep(.p-datatable-tbody > tr > td) {
+  padding: 5px 8px; color: #e5e7eb; border-bottom: 1px solid #374151;
+}
+.mm-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: #232f3e; }
+.mm-table :deep(.p-datatable-tbody > tr:hover) { background: #374151; }
+/* Row-group subheader (invoice view) */
+.mm-table :deep(.p-rowgroup-header) { background: #0f1b2b; color: #f3f4f6; }
+.mm-table :deep(.p-rowgroup-header td) { color: #f3f4f6; }
+.mm-table :deep(.p-paginator) { background: #111827; color: #e5e7eb; border: none; }
+.mm-table :deep(.grp .text-muted) { color: #9ca3af; }
 </style>
