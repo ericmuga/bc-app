@@ -2,8 +2,11 @@ import api from './api.js'
 
 // Admin shop selector — when admin picks a shop, the choice is sent on every
 // POS request via X-Shop-Code so the backend scopes data correctly.
+// A per-tab value (sessionStorage) wins over the account-wide default
+// (localStorage), so /pos?shop=CODE can open a second company in another tab
+// without changing the shop the other tabs use.
 let adminShopCode = ''
-try { adminShopCode = localStorage.getItem('adminShopCode') || '' } catch {}
+try { adminShopCode = sessionStorage.getItem('adminShopCode') || localStorage.getItem('adminShopCode') || '' } catch {}
 api.interceptors.request.use((cfg) => {
   if (adminShopCode && cfg.url?.startsWith('/pos')) {
     cfg.headers = cfg.headers || {}
@@ -11,9 +14,16 @@ api.interceptors.request.use((cfg) => {
   }
   return cfg
 })
-export function setAdminShopCode(code) {
+export function setAdminShopCode(code, { perTab = false } = {}) {
   adminShopCode = String(code || '').trim().toUpperCase()
-  try { localStorage.setItem('adminShopCode', adminShopCode) } catch {}
+  try {
+    if (perTab) {
+      sessionStorage.setItem('adminShopCode', adminShopCode)   // this tab only
+    } else {
+      localStorage.setItem('adminShopCode', adminShopCode)     // account-wide default
+      sessionStorage.removeItem('adminShopCode')               // follow the default again
+    }
+  } catch {}
 }
 export function getAdminShopCode() { return adminShopCode }
 

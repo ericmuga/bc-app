@@ -62,12 +62,13 @@
       <div class="order-header">
         <div class="order-header-left">
           <span class="order-title">Current Order</span>
-          <span v-if="myShop" class="order-shop-badge">{{ myShop.Name }}</span>
-          <!-- Admin shop selector — required so prices/payment-types/contacts scope correctly -->
-          <div v-else-if="isAdmin && shops.length" class="admin-shop-picker">
+          <!-- Admin: switch shop/company freely (scopes items, prices, payment
+               types, contacts). Others are locked to their assigned shop. -->
+          <div v-if="isAdmin && shops.length" class="admin-shop-picker">
             <Select v-model="selectedAdminShop" :options="shops" option-label="Name" option-value="Code"
-                    placeholder="Select shop…" size="small" @change="onAdminShopChange" />
+                    placeholder="Select shop…" size="small" filter @change="onAdminShopChange" />
           </div>
+          <span v-else-if="myShop" class="order-shop-badge">{{ myShop.Name }}</span>
         </div>
         <span v-if="orderNo" class="order-no">{{ orderNo }}</span>
         <Button icon="pi pi-cog" text v-tooltip="'Make to stock (from recipe)'" @click="openMake" />
@@ -1082,6 +1083,12 @@ async function loadPrintSvcCfg() {
 
 onMounted(async () => {
   await loadShopsForAdmin()
+  // Deep link: /pos?shop=CODE opens a specific shop/company in this tab (handy for
+  // running two companies side by side in separate browser tabs). Admin only.
+  if (isAdmin.value && route.query.shop) {
+    selectedAdminShop.value = String(route.query.shop).toUpperCase()
+    setAdminShopCode(selectedAdminShop.value, { perTab: true })
+  }
   await loadCatalogue()
   loadPrintSvcCfg()
   if (route.query.resume) {
