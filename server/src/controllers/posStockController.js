@@ -112,6 +112,28 @@ export async function pushAllStockRequestsToBc(req, res) {
   } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
 }
 
+/**
+ * POST /pos/stock/pull-bc-ledger — import BC ledger transactions (transfers,
+ * adjustments, non-POS sales) that don't exist in POS yet, as typed movements.
+ * Body: { entryTypes?:[1,2,3,4], company?, sinceEntryNo? }
+ */
+export async function pullBcLedger(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    await ensureManager(req);
+    const result = await Stock.pullBcLedgerEntries({
+      shopCode,
+      company:     req.body?.company || undefined,
+      entryTypes:  Array.isArray(req.body?.entryTypes) ? req.body.entryTypes : undefined,
+      sinceEntryNo: req.body?.sinceEntryNo != null ? Number(req.body.sinceEntryNo) : null,
+      userId:   req.user.userId,
+      userName: req.user.userName,
+    });
+    ok(res, result);
+  } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
+}
+
 /** GET /pos/stock/harmonize-readiness — is BC done posting this shop's sales/requests? */
 export async function harmonizeReadiness(req, res) {
   try {

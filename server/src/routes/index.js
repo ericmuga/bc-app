@@ -222,6 +222,7 @@ router.post( '/pos/produce',                                   ...canPos, posCtr
 // BC stock baseline (reset from BC on-hand) + incremental ledger loads
 router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
 router.post( '/pos/stock/reset-from-bc',                       ...canPos, posStockCtrl.resetStockFromBc);
+router.post( '/pos/stock/pull-bc-ledger',                      ...canManage, posStockCtrl.pullBcLedger);
 router.get(  '/pos/stock/harmonize-readiness',                 ...canPos, posStockCtrl.harmonizeReadiness);
 router.post( '/pos/stock/push-all-orders-bc',                  ...canManage, posStockCtrl.pushAllStockRequestsToBc);
 router.post( '/pos/stock/harmonize-from-bc',                   ...canPos, posStockCtrl.harmonizeStockFromBc);

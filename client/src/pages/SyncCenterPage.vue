@@ -65,6 +65,9 @@
                   :loading="busyTxn==='sales'" @click="pushSales" />
           <Button label="Push stock requests → BC" icon="pi pi-truck" severity="success" outlined
                   :loading="busyTxn==='orders'" @click="pushOrders" />
+          <Button label="Pull BC transfers/adjustments/sales" icon="pi pi-arrow-down-left" severity="info" outlined
+                  :loading="busyTxn==='pull'" @click="pullLedger"
+                  v-tooltip.bottom="'Import BC ledger entries not in POS (Transfer, +/- Adjustment, and non-POS Sales) as typed movements. Run before Harmonize.'" />
           <Button label="Harmonize with BC" icon="pi pi-sync" severity="info"
                   :loading="busyTxn==='harmonize'" @click="openHarmonize" />
           <Button label="Load fresh from BC" icon="pi pi-download" severity="help" outlined
@@ -234,6 +237,18 @@ async function pushOrders() {
     const { data } = await stockApi.pushAllOrdersBc()
     txnResult.value = { label: 'Push stock requests', summary: `${data.requests} request(s): inserted ${data.inserted}, skipped ${data.skipped}.` }
     toast.add({ severity: 'success', summary: 'Stock requests pushed', detail: txnResult.value.summary, life: 6000 })
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { busyTxn.value = '' }
+}
+
+async function pullLedger() {
+  busyTxn.value = 'pull'; txnResult.value = null; error.value = ''
+  try {
+    const { data } = await stockApi.pullBcLedger({ entryTypes: [1, 2, 3, 4] })
+    const bits = [`inserted ${data.inserted}`, `skipped ${data.skipped}`]
+    if (data.skippedPosSales) bits.push(`${data.skippedPosSales} POS-origin sale(s) skipped`)
+    txnResult.value = { label: 'Pull BC ledger', summary: `${bits.join(', ')} (entries ${data.fromEntryNo + 1}–${data.toEntryNo}, ${data.company}).` }
+    toast.add({ severity: data.inserted ? 'success' : 'info', summary: 'BC ledger pulled', detail: txnResult.value.summary, life: 7000 })
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { busyTxn.value = '' }
 }

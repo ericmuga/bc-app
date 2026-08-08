@@ -1545,6 +1545,119 @@ export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, 
   return { shopCode: code, fromEntryNo: since, toEntryNo: upto, items: net.length };
 }
 
+// BC Item Ledger [Entry Type] → POS movement type. We pull BC-originated stock
+// changes that aren't already in POS: 1 Sale (only when its External Document No is
+// NOT a POS order — i.e. a sale entered directly in BC), 2 Positive Adjmt, 3
+// Negative Adjmt, 4 Transfer. (0 Purchase, 5 Consumption, 6 Output excluded.)
+const LEDGER_TYPE_MOVEMENT = { 1: 'sale', 2: 'positive-adj', 3: 'negative-adj', 4: 'transfer-in' };
+const LEDGER_TYPE_NAME     = { 1: 'Sale', 2: 'Positive Adj', 3: 'Negative Adj', 4: 'Transfer' };
+
+/**
+ * Pull BC Item Ledger entries at the shop's location that don't exist in POS yet
+ * and post them as their proper typed movements (Transfer→transfer-in,
+ * +Adjmt→positive-adj, −Adjmt→negative-adj) — so BC-originated stock changes
+ * (transfers into the shop, back-office adjustments) are visible and attributed in
+ * POS, not just folded into a harmonize delta.
+ *
+ * Idempotent per BC Entry No (stored on the movement as ReferenceType='bc-ledger',
+ * ReferenceNo=<Entry No>). By default it starts from the terminal's watermark
+ * (LastEntryNo) so it never re-imports what a prior harmonize/reset already
+ * reconciled; pass sinceEntryNo to override. Advances the watermark to BC's latest
+ * entry when done. Run this BEFORE Harmonize so harmonize only fixes the residual.
+ *
+ * @returns { shopCode, locationCode, company, fromEntryNo, toEntryNo, inserted, skipped, types, pulled[] }
+ */
+export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes = [1, 2, 3, 4], sinceEntryNo = null, userId = null, userName = null }) {
+  const pool = await appPool();
+  const code = str(shopCode, 50).toUpperCase();
+  const wm   = await getStockWatermark(code);
+  const loc  = wm?.LocationCode || await locationForShop(pool, code);
+  if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
+  const co    = String(company || wm?.SourceCompany || 'FCL').toUpperCase();
+  const types = [...new Set((entryTypes || []).map(Number))].filter(t => [1, 2, 3, 4].includes(t));
+  if (!types.length) throw new Error('No valid entry types (use 1, 2, 3 and/or 4)');
+  const floor = sinceEntryNo != null ? Number(sinceEntryNo) : Number(wm?.LastEntryNo || 0);
+
+  const { table } = ledgerTable(co);
+  const bcPool = await bcDb.getPool();
+  const maxR = await bcPool.request().input('loc', sql.NVarChar(20), str(loc, 20))
+    .query(`SELECT ISNULL(MAX([Entry No_]),0) AS M FROM ${table} WHERE [Location Code]=@loc`);
+  const upto = Number(maxR.recordset[0]?.M || 0);
+
+  const bce = await bcPool.request()
+    .input('loc', sql.NVarChar(20), str(loc, 20))
+    .input('since', sql.Int, floor)
+    .input('upto', sql.Int, upto)
+    .query(`
+      SELECT [Entry No_] AS EntryNo, UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo,
+             [Quantity] AS Qty, [Entry Type] AS EType, RTRIM([Document No_]) AS Doc,
+             RTRIM([External Document No_]) AS ExtDoc, CAST([Posting Date] AS DATE) AS PDate
+      FROM   ${table}
+      WHERE  [Location Code]=@loc AND [Entry No_] > @since AND [Entry No_] <= @upto
+        AND  [Entry Type] IN (${types.join(',')})
+      ORDER BY [Entry No_]`);
+
+  const descByItem = await posItemDescriptions(pool);
+  const existed = await pool.request().input('code', sql.NVarChar(50), code)
+    .query(`SELECT [ReferenceNo] FROM [dbo].[PosStockMovement]
+            WHERE [ShopCode]=@code AND [ReferenceType]='bc-ledger' AND [ReferenceNo] IS NOT NULL`);
+  const seen = new Set(existed.recordset.map(r => String(r.ReferenceNo)));
+
+  // POS order numbers for this shop — used to skip BC sales that ORIGINATED in the
+  // POS (they're already deducted here). We match on the sale's External Document No.
+  let posDocNos = new Set();
+  if (types.includes(1)) {
+    const od = await pool.request().input('code', sql.NVarChar(50), code)
+      .query(`SELECT UPPER(LTRIM(RTRIM([OrderNo]))) AS OrderNo FROM [dbo].[PosOrder] WHERE [ShopCode]=@code AND [OrderNo] IS NOT NULL`);
+    posDocNos = new Set(od.recordset.map(r => r.OrderNo));
+  }
+
+  const pulled = [];
+  let inserted = 0, skipped = 0, skippedPosSales = 0;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    for (const e of bce.recordset) {
+      if (!descByItem.has(e.ItemNo)) continue;             // not a POS item
+      const ref = String(e.EntryNo);
+      if (seen.has(ref)) { skipped++; continue; }          // already imported
+      // Skip POS-originated sales (their External Document No is a POS order no) —
+      // those are already recorded in POS by the checkout, importing would double-count.
+      if (Number(e.EType) === 1 && e.ExtDoc && posDocNos.has(String(e.ExtDoc).toUpperCase())) { skippedPosSales++; continue; }
+      const mt = LEDGER_TYPE_MOVEMENT[Number(e.EType)] || 'positive-adj';
+      await new sql.Request(tx)
+        .input('shopCode',    sql.NVarChar(50),   code)
+        .input('itemNo',      sql.NVarChar(30),   e.ItemNo)
+        .input('description', sql.NVarChar(200),  descByItem.get(e.ItemNo) || null)
+        .input('mt',          sql.NVarChar(30),   mt)
+        .input('qty',         sql.Decimal(18, 4), Number(e.Qty || 0))
+        .input('refno',       sql.NVarChar(30),   ref)
+        .input('mdate',       sql.Date,           e.PDate || new Date())
+        .input('notes',       sql.NVarChar(500),  `BC ${LEDGER_TYPE_NAME[Number(e.EType)] || ('type ' + e.EType)} ${e.Doc || ''} (ILE ${ref}) @ ${loc}`.slice(0, 500))
+        .input('by',          sql.NVarChar(100),  str(userName || userId, 100) || null)
+        .query(`INSERT INTO [dbo].[PosStockMovement]
+          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
+      pulled.push({ entryNo: e.EntryNo, itemNo: e.ItemNo, description: descByItem.get(e.ItemNo) || '', qty: Number(e.Qty || 0), type: Number(e.EType), movementType: mt, doc: e.Doc || '' });
+      inserted++;
+    }
+    await new sql.Request(tx)
+      .input('code', sql.NVarChar(50), code).input('loc', sql.NVarChar(20), loc.toUpperCase())
+      .input('company', sql.NVarChar(20), co).input('entry', sql.Int, upto)
+      .input('by', sql.NVarChar(100), str(userName || userId, 100) || null)
+      .query(`
+        MERGE [dbo].[PosStockWatermark] AS t
+        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
+        WHEN MATCHED THEN UPDATE SET [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,[LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt])
+          VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by,GETUTCDATE());`);
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+
+  logger.info('pullBcLedgerEntries', { shopCode: code, loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types });
+  return { shopCode: code, locationCode: loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types, pulled };
+}
+
 /**
  * Harmonize (reconcile) a terminal's POS on-hand to BC's on-hand at the terminal
  * location, with BC as the source of truth — WITHOUT deleting any history. Meant
