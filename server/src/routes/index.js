@@ -276,8 +276,8 @@ router.get(  '/pos/manual-sales',                              ...canPos, posYie
 router.post( '/pos/manual-sales',                              ...canManage, posYieldCtrl.recordManualSale);
 router.post( '/pos/manual-sales/batch',                        ...canManage, posYieldCtrl.recordManualSaleBatch);
 
-router.get(  '/pos/reports/yield',                             ...canPos, posYieldCtrl.yieldReport);
-router.get(  '/pos/exports/:kind',                             ...canPos, posYieldCtrl.exportYieldCsv);
+router.get(  '/pos/reports/yield',                             ...canManage, posYieldCtrl.yieldReport);
+router.get(  '/pos/exports/:kind',                             ...canManage, posYieldCtrl.exportYieldCsv);
 
 // ── POS Coupons (admin / shop-admin) ───────────────────────────────────────
 router.get(  '/pos/coupons',                              ...canManage, posCouponCtrl.listCoupons);

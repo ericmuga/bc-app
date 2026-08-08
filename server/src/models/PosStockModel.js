@@ -1223,16 +1223,30 @@ export async function salesByItemReport({ shopCode = null, dateFrom, dateTo } = 
         ${shopFilter2}
       GROUP BY ms.[ItemNo], ms.[Description]
     )
-    SELECT [ItemNo], MAX([Description]) AS Description,
-           SUM([Qty]) AS Qty, SUM([Value]) AS Value
-    FROM   Combined
-    GROUP BY [ItemNo]
-    ORDER BY SUM([Value]) DESC
+    SELECT c.[ItemNo], MAX(c.[Description]) AS Description,
+           SUM(c.[Qty]) AS Qty, SUM(c.[Value]) AS Value,
+           pi.[BaseUnitOfMeasure]  AS BaseUom,
+           pi.[SalesUnitOfMeasure] AS SalesUom,
+           ISNULL(NULLIF(pi.[QtyPerSalesUnit], 0), 1) AS Factor
+    FROM   Combined c
+    LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = c.[ItemNo]
+    GROUP BY c.[ItemNo], pi.[BaseUnitOfMeasure], pi.[SalesUnitOfMeasure], pi.[QtyPerSalesUnit]
+    ORDER BY SUM(c.[Value]) DESC
   `);
-  return r.recordset.map(x => ({
-    itemNo: x.ItemNo, description: x.Description || '',
-    qty: Number(x.Qty || 0), value: Number(x.Value || 0),
-  }));
+  const isKg = (u) => /^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(u || '').trim().toUpperCase());
+  return r.recordset.map(x => {
+    const qty    = Number(x.Qty || 0);
+    const factor = Number(x.Factor || 1);
+    // Quantity in KG only makes sense when the item's BASE unit is a weight unit.
+    // qtyKg = sold qty (sales units) × qty-per-sales-unit (base units per sale).
+    const qtyKg  = isKg(x.BaseUom) ? qty * factor : null;
+    return {
+      itemNo: x.ItemNo, description: x.Description || '',
+      qty, value: Number(x.Value || 0),
+      baseUom: x.BaseUom || '', salesUom: x.SalesUom || '', factor,
+      qtyKg,
+    };
+  });
 }
 
 /** Sales by contact — POS-paid orders only (manual sales have no contact). */

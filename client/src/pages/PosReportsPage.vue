@@ -74,6 +74,7 @@
                   :style="c.style || ''" sortable :showFilterMenu="false">
             <template #body="{ data }">
               <span v-if="c.format === 'num'">{{ Number(data[c.field] || 0).toFixed(2) }}</span>
+              <span v-else-if="c.format === 'kg'">{{ data[c.field] == null ? '—' : Number(data[c.field]).toFixed(3) }}</span>
               <strong v-else-if="c.format === 'numStrong'">{{ Number(data[c.field] || 0).toFixed(2) }}</strong>
               <span v-else>{{ data[c.field] }}</span>
             </template>
@@ -171,7 +172,9 @@ const columns = computed(() => {
       return [
         { field: 'itemNo',      header: 'Item No',     style: 'width:120px' },
         { field: 'description', header: 'Description', style: 'min-width:200px' },
-        { field: 'qty',         header: 'Qty',         style: 'width:100px;text-align:right', format: 'num' },
+        { field: 'qty',         header: 'Qty',         style: 'width:90px;text-align:right',  format: 'num' },
+        { field: 'salesUom',    header: 'UoM',         style: 'width:70px' },
+        { field: 'qtyKg',       header: 'Qty (KG)',    style: 'width:100px;text-align:right', format: 'kg' },
         { field: 'value',       header: 'Value',       style: 'width:130px;text-align:right', format: 'numStrong' },
       ]
     case 'salesByContact':
@@ -220,6 +223,10 @@ const totals = computed(() => {
     case 'dailySales':
       return [{ label: 'Total Sales', value: rows.value.reduce((s, r) => s + Number(r.totalAmount || 0), 0) }]
     case 'salesByItem':
+      return [
+        { label: 'Total KG',    value: rows.value.reduce((s, r) => s + Number(r.qtyKg || 0), 0) },
+        { label: 'Total Value', value: rows.value.reduce((s, r) => s + Number(r.value || 0), 0) },
+      ]
     case 'salesByContact':
     case 'shopComparison':
       return [{ label: 'Total Value', value: rows.value.reduce((s, r) => s + Number(r.value || 0), 0) }]
@@ -340,7 +347,9 @@ function downloadPdf() {
   pdf.setFontSize(10); pdf.text(`Period: ${commonParams().dateFrom} → ${commonParams().dateTo}`, 14, 21)
   const head = [columns.value.map(c => c.header)]
   const body = rows.value.map(r => columns.value.map(c =>
-    c.format === 'num' || c.format === 'numStrong' ? Number(r[c.field] || 0).toFixed(2) : (r[c.field] ?? '')
+    c.format === 'kg' ? (r[c.field] == null ? '—' : Number(r[c.field]).toFixed(3))
+    : (c.format === 'num' || c.format === 'numStrong') ? Number(r[c.field] || 0).toFixed(2)
+    : (r[c.field] ?? '')
   ))
   pdf.autoTable({ head, body, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
   // Sum(s) at the bottom.

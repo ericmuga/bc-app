@@ -153,7 +153,7 @@
             <i class="pi pi-money-bill" />
             <span>Cash Till</span>
           </RouterLink>
-          <RouterLink to="/pos/yield" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+          <RouterLink v-if="isAdmin" to="/pos/yield" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-percentage" />
             <span>Yield &amp; Loss</span>
           </RouterLink>

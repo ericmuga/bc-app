@@ -29,7 +29,7 @@
     </DataTable>
 
     <!-- ── New stock take dialog ─────────────────────────────────── -->
-    <Dialog v-model:visible="newTakeVisible" header="New Stock Take" :modal="true" :style="{ width:'420px' }">
+    <Dialog v-model:visible="newTakeVisible" header="New Stock Take" :modal="true" :style="{ width:'420px' }" class="st-dark-dialog">
       <div class="form-row">
         <label>From</label>
         <DatePicker v-model="newDateFrom" date-format="yy-mm-dd" fluid />
@@ -45,7 +45,7 @@
     </Dialog>
 
     <!-- ── Stock take editor ─────────────────────────────────────── -->
-    <Dialog v-model:visible="editorVisible" :header="editorHeader" :modal="true" :style="{ width:'1100px' }">
+    <Dialog v-model:visible="editorVisible" :header="editorHeader" :modal="true" :style="{ width:'1100px' }" class="st-dark-dialog">
       <div v-if="current" class="editor">
         <div class="editor-meta">
           <span><strong>{{ current.stockTakeNo }}</strong> · {{ fmtDate(current.dateFrom) }} → {{ fmtDate(current.dateTo) }}</span>
@@ -114,7 +114,7 @@
     </Dialog>
 
     <!-- ── Item transactions drill-down ──────────────────────────── -->
-    <Dialog v-model:visible="txnsVisible" :header="txnsHeader" :modal="true" :style="{ width:'620px' }">
+    <Dialog v-model:visible="txnsVisible" :header="txnsHeader" :modal="true" :style="{ width:'620px' }" class="st-dark-dialog">
       <DataTable :value="txns" size="small" responsive-layout="scroll">
         <Column field="date" header="Date" style="width:110px">
           <template #body="{ data }">{{ fmtDate(data.date) }}</template>
@@ -336,9 +336,62 @@ onMounted(load)
 .form-row { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
 .form-row label { font-size:13px; font-weight:500; }
 
-.line-input { width:100%; padding:4px 6px; border:1px solid #d1d5db; border-radius:4px; font-size:12px; outline:none; text-align:right; }
+.line-input { width:100%; padding:4px 6px; border:1px solid #374151; border-radius:4px; font-size:12px; outline:none; text-align:right;
+  background:#111827; color:#e5e7eb; }
+.line-input::placeholder { color:#6b7280; }
 .line-input:focus { border-color:#2563eb; }
 
-.num.pos { color:#15803d; font-weight:600; }
-.num.neg { color:#b91c1c; font-weight:600; }
+.num.pos { color:#22c55e; font-weight:600; }
+.num.neg { color:#f87171; font-weight:600; }
+
+/* Dark tables — PrimeVue renders light under the dark shell, making the stock-take
+   sheet unreadable at rest. Force a dark, legible palette. */
+.stock-page :deep(.p-datatable) { border:1px solid #374151; border-radius:8px; overflow:hidden; }
+.stock-page :deep(.p-datatable-thead > tr > th) {
+  background:#111827 !important; color:#f3f4f6 !important; font-weight:700; border-bottom:1px solid #374151 !important;
+}
+.stock-page :deep(.p-datatable-tbody > tr) { background:#1f2937 !important; color:#e5e7eb !important; }
+.stock-page :deep(.p-datatable-tbody > tr > td) {
+  background:#1f2937 !important; color:#e5e7eb !important; border-bottom:1px solid #374151 !important;
+}
+.stock-page :deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:#232f3e !important; }
+.stock-page :deep(.p-datatable-tbody > tr:hover > td) { background:#374151 !important; }
+.stock-page :deep(.p-paginator) { background:#111827 !important; color:#e5e7eb !important; border:none; }
+.stock-page :deep(.p-paginator .p-paginator-page.p-highlight) { background:#0f7173 !important; color:#fff !important; }
+/* Inputs inside the sheet (date pickers, dropdowns) */
+.stock-page :deep(.p-inputtext), .stock-page :deep(.p-datepicker-input) {
+  background:#111827 !important; color:#e5e7eb !important; border-color:#374151 !important; color-scheme:dark;
+}
+</style>
+
+<!-- Unscoped: the stock-take dialogs (New / Editor / Transactions) teleport to
+     <body>, so scoped :deep rules can't reach them. Force a dark palette here. -->
+<style>
+.st-dark-dialog.p-dialog {
+  background:#1f2937; border:1px solid #374151; box-shadow:0 12px 40px rgba(0,0,0,0.5);
+}
+.st-dark-dialog.p-dialog .p-dialog-header { background:#111827; color:#f3f4f6; border-bottom:1px solid #374151; }
+.st-dark-dialog.p-dialog .p-dialog-title  { font-weight:700; font-size:16px; }
+.st-dark-dialog.p-dialog .p-dialog-header .p-dialog-header-icon { color:#cbd5e1; }
+.st-dark-dialog.p-dialog .p-dialog-content { background:#1f2937; color:#e5e7eb; }
+.st-dark-dialog.p-dialog .p-dialog-footer  { background:#111827; border-top:1px solid #374151; }
+.st-dark-dialog .editor-meta { color:#e5e7eb; }
+/* Inputs (date pickers, physical/comment line inputs) */
+.st-dark-dialog .p-inputtext, .st-dark-dialog .p-datepicker-input, .st-dark-dialog .line-input {
+  background:#111827 !important; color:#e5e7eb !important; border-color:#374151 !important; color-scheme:dark;
+}
+.st-dark-dialog .line-input::placeholder { color:#6b7280; }
+/* DataTable — force dark rows/cells over the PrimeVue light theme. */
+.st-dark-dialog .p-datatable-thead > tr > th {
+  background:#111827 !important; color:#f3f4f6 !important; border-bottom:1px solid #374151 !important;
+}
+.st-dark-dialog .p-datatable-tbody > tr { background:#1f2937 !important; color:#e5e7eb !important; }
+.st-dark-dialog .p-datatable-tbody > tr > td {
+  background:#1f2937 !important; color:#e5e7eb !important; border-bottom:1px solid #374151 !important;
+}
+.st-dark-dialog .p-datatable-tbody > tr:nth-child(even) > td { background:#232f3e !important; }
+.st-dark-dialog .p-datatable-tbody > tr:hover > td { background:#374151 !important; }
+.st-dark-dialog .p-paginator { background:#111827 !important; color:#e5e7eb !important; border:none; }
+/* Dim the backdrop rather than flash bright */
+body > .p-dialog-mask:has(.st-dark-dialog) { background:rgba(0,0,0,0.6); }
 </style>
