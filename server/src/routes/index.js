@@ -229,6 +229,7 @@ router.post( '/pos/stock/harmonize-from-bc',                   ...canPos, posSto
 router.get(  '/pos/stock/bc-ledger-dates',                     ...canPos, posStockCtrl.bcLedgerDates);
 router.post( '/pos/stock/load-from-bc',                        ...canPos, posStockCtrl.loadStockFromBc);
 
+router.get(  '/pos/stock/ledger',                              ...canPos, posStockCtrl.stockLedgerReport);
 router.get(  '/pos/stock/daily-movements',                     ...canPos, posStockCtrl.dailyReport);
 
 // Local stock snapshot (at-a-glance) + bulk stock upload (physical stock-take)

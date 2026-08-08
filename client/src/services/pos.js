@@ -206,6 +206,8 @@ export const stockApi = {
   bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
   loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),
 
+  // Stock ledger (chronological, running balance)
+  ledger:         (params)                    => api.get('/pos/stock/ledger', { params }),
   // Daily movements report
   dailyReport:    (params)                    => api.get('/pos/stock/daily-movements', { params }),
   dailyReportCsv: (params)                    => api.get('/pos/stock/daily-movements.csv', { params, responseType: 'blob' }),

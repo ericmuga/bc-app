@@ -409,6 +409,18 @@ export async function exportRequestBcJournal(req, res) {
   } catch (e) { err(res, e, 400); }
 }
 
+// ── Stock ledger (chronological, running balance) ────────────────────────────
+export async function stockLedgerReport(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'shopCode required' });
+    const dateFrom = req.query.dateFrom || new Date().toISOString().slice(0, 10);
+    const dateTo   = req.query.dateTo   || dateFrom;
+    const itemNo   = req.query.itemNo   || null;
+    ok(res, await Stock.stockLedger({ shopCode, dateFrom, dateTo, itemNo }));
+  } catch (e) { err(res, e); }
+}
+
 // ── Daily Movements Report ───────────────────────────────────────────────────
 
 export async function dailyReport(req, res) {

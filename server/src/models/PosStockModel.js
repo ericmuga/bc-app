@@ -387,6 +387,73 @@ export async function onHand(shopCode, itemNo) {
   return Number(r.recordset[0].Qty || 0);
 }
 
+// ── Stock ledger (chronological, running balance per item) ───────────────────
+/**
+ * Item-ledger-style report: every movement in the period as its own row, with a
+ * running balance per item (opening = net of all movements before dateFrom).
+ * Columns per row: date, item, description, type, ref, qtyIn, qtyOut, balance.
+ */
+export async function stockLedger({ shopCode, dateFrom, dateTo, itemNo = null }) {
+  const pool = await appPool();
+  const req = pool.request()
+    .input('shopCode', sql.NVarChar(50), shopCode.toUpperCase())
+    .input('dateFrom', sql.Date, dateFrom)
+    .input('dateTo',   sql.Date, dateTo);
+  let itemFilter = '';
+  if (itemNo) { req.input('itemNo', sql.NVarChar(30), itemNo.toUpperCase()); itemFilter = 'AND m.[ItemNo]=@itemNo'; }
+
+  const r = await req.query(`
+    WITH ItemsInRange AS (
+      SELECT DISTINCT m.[ItemNo] FROM [dbo].[PosStockMovement] m
+      WHERE m.[ShopCode]=@shopCode AND m.[MovementDate] BETWEEN @dateFrom AND @dateTo ${itemFilter}
+    ),
+    Opening AS (
+      SELECT m.[ItemNo], SUM(m.[Quantity]) AS Opening
+      FROM   [dbo].[PosStockMovement] m JOIN ItemsInRange i ON i.[ItemNo]=m.[ItemNo]
+      WHERE  m.[ShopCode]=@shopCode AND m.[MovementDate] < @dateFrom
+      GROUP BY m.[ItemNo]
+    ),
+    Entries AS (
+      SELECT m.[MovementId], m.[ItemNo], m.[Description], m.[MovementType], m.[Quantity],
+             m.[MovementDate], m.[CreatedAt], m.[ReferenceType], m.[ReferenceNo], m.[Notes]
+      FROM   [dbo].[PosStockMovement] m JOIN ItemsInRange i ON i.[ItemNo]=m.[ItemNo]
+      WHERE  m.[ShopCode]=@shopCode AND m.[MovementDate] BETWEEN @dateFrom AND @dateTo ${itemFilter}
+    )
+    SELECT e.[ItemNo], e.[Description], pit.[UnitOfMeasure] AS Uom,
+           e.[MovementDate] AS [Date], e.[CreatedAt], e.[MovementType], e.[Quantity],
+           e.[ReferenceType], e.[ReferenceNo], e.[Notes],
+           ISNULL(o.Opening,0) AS OpeningBalance,
+           ISNULL(o.Opening,0) + SUM(e.[Quantity]) OVER (
+             PARTITION BY e.[ItemNo]
+             ORDER BY e.[MovementDate], e.[CreatedAt], e.[MovementId]
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           ) AS Balance
+    FROM Entries e
+    LEFT JOIN Opening o   ON o.[ItemNo]  = e.[ItemNo]
+    LEFT JOIN [dbo].[PosItem] pit ON pit.[ItemNo] = e.[ItemNo]
+    ORDER BY pit.[Description], e.[ItemNo], e.[MovementDate], e.[CreatedAt], e.[MovementId]
+  `);
+  return r.recordset.map(x => {
+    const q = Number(x.Quantity || 0);
+    return {
+      itemNo:      x.ItemNo,
+      description: x.Description || '',
+      uom:         x.Uom || '',
+      date:        x.Date,
+      createdAt:   x.CreatedAt,
+      type:        x.MovementType,
+      referenceType: x.ReferenceType || '',
+      referenceNo: x.ReferenceNo || '',
+      notes:       x.Notes || '',
+      qtyIn:       q > 0 ? q : 0,
+      qtyOut:      q < 0 ? Math.abs(q) : 0,
+      quantity:    q,
+      opening:     Number(x.OpeningBalance || 0),
+      balance:     Number(x.Balance || 0),
+    };
+  });
+}
+
 // ── Daily movements report ───────────────────────────────────────────────────
 /**
  * For each (date, item) inside the period, return:

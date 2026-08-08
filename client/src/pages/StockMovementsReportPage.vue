@@ -14,6 +14,10 @@
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
     <div class="filters">
+      <div class="filter-field">
+        <label>View</label>
+        <SelectButton v-model="view" :options="viewOptions" option-label="label" option-value="value" :allowEmpty="false" @change="load" />
+      </div>
       <div v-if="canSwitchShop" class="filter-field">
         <label>Shop</label>
         <Select v-model="shopCode" :options="shops" option-label="Name" option-value="Code"
@@ -34,7 +38,46 @@
       <Button label="Run" icon="pi pi-play" @click="load" :loading="loading" />
     </div>
 
-    <DataTable :value="filteredRows" dataKey="key" size="small" :loading="loading"
+    <div class="list-search">
+      <InputText v-model="ledgerFilters.global.value" placeholder="Search all columns…" style="min-width:280px" />
+      <span class="text-muted text-sm">{{ (view === 'ledger' ? ledgerRows.length : rows.length) }} row(s)</span>
+    </div>
+
+    <!-- Ledger: chronological, running balance, per-column filterable + sortable -->
+    <DataTable v-if="view === 'ledger'" :value="ledgerRows" dataKey="key" size="small" :loading="loading"
+      responsive-layout="scroll" :paginator="true" :rows="100" removableSort
+      v-model:filters="ledgerFilters" filterDisplay="row"
+      :globalFilterFields="['itemNo','description','type','referenceNo','notes']"
+      :pt="{ table: { class: 'movements-table' } }" table-style="min-width: 1100px">
+      <Column field="date" header="Date" sortable header-style="width:110px" :showFilterMenu="false">
+        <template #body="{ data }">{{ fmtDate(data.date) }}</template>
+      </Column>
+      <Column field="itemNo" header="Item No" sortable header-style="width:120px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Item" style="width:100%" /></template>
+      </Column>
+      <Column field="description" header="Description" sortable header-style="min-width:200px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Description" style="width:100%" /></template>
+      </Column>
+      <Column field="type" header="Type" sortable header-style="width:120px" :showFilterMenu="false">
+        <template #body="{ data }"><span :class="typeClass(data.type)">{{ typeLabel(data.type) }}</span></template>
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Type" style="width:100%" /></template>
+      </Column>
+      <Column field="referenceNo" header="Reference" sortable header-style="width:130px" :showFilterMenu="false">
+        <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Ref" style="width:100%" /></template>
+      </Column>
+      <Column field="qtyIn" header="In" sortable header-style="width:90px;text-align:right" body-style="text-align:right">
+        <template #body="{ data }"><span class="num pos">{{ data.qtyIn ? n(data.qtyIn) : '' }}</span></template>
+      </Column>
+      <Column field="qtyOut" header="Out" sortable header-style="width:90px;text-align:right" body-style="text-align:right">
+        <template #body="{ data }"><span class="num neg">{{ data.qtyOut ? n(data.qtyOut) : '' }}</span></template>
+      </Column>
+      <Column field="balance" header="Balance" sortable header-style="width:100px;text-align:right" body-style="text-align:right">
+        <template #body="{ data }"><strong>{{ n(data.balance) }}</strong></template>
+      </Column>
+    </DataTable>
+
+    <!-- Daily buckets (original) -->
+    <DataTable v-else :value="filteredRows" dataKey="key" size="small" :loading="loading"
       responsive-layout="scroll" :paginator="true" :rows="50" sort-field="date" sort-mode="multiple"
       :pt="{ table: { class: 'movements-table' } }"
       table-style="min-width: 1100px">
@@ -79,6 +122,7 @@ import Column     from 'primevue/column'
 import DatePicker from 'primevue/datepicker'
 import InputText  from 'primevue/inputtext'
 import Select     from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import Message    from 'primevue/message'
 import { stockApi, posApi, setAdminShopCode, getAdminShopCode } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
@@ -103,9 +147,36 @@ const dateFrom = ref(today)
 const dateTo   = ref(today)
 const itemFilter = ref('')
 
-const rows    = ref([])
+const rows    = ref([])          // daily-bucket rows
+const ledgerRows = ref([])       // chronological ledger rows
 const loading = ref(false)
 const error   = ref('')
+
+// Default to the ledger view (chronological, running balance).
+const view = ref('ledger')
+const viewOptions = [
+  { label: 'Ledger',  value: 'ledger' },
+  { label: 'Daily',   value: 'daily'  },
+]
+const ledgerFilters = ref({
+  global:      { value: null, matchMode: 'contains' },
+  itemNo:      { value: null, matchMode: 'contains' },
+  description: { value: null, matchMode: 'contains' },
+  type:        { value: null, matchMode: 'contains' },
+  referenceNo: { value: null, matchMode: 'contains' },
+})
+
+// Friendly labels + colour for the movement types shown in the ledger.
+const TYPE_LABELS = {
+  'sale': 'Sale', 'transfer-in': 'Transfer In', 'positive-adj': '+ Adj', 'negative-adj': '− Adj',
+  'produce-in': 'Produced', 'consume-out': 'Consumed', 'reset': 'Reset', 'bc-load': 'BC Load',
+  'bc-adjust-in': 'BC Adj', 'bc-adjust-out': 'BC Adj',
+}
+function typeLabel(t) { return TYPE_LABELS[t] || t }
+function typeClass(t) {
+  if (['sale', 'consume-out', 'negative-adj', 'bc-adjust-out'].includes(t)) return 'chip chip-out'
+  return 'chip chip-in'
+}
 
 const filteredRows = computed(() => rows.value)
 
@@ -131,8 +202,13 @@ async function load() {
     }
     // Send the filter as an exact item No to switch the report to per-item mode.
     if (itemFilter.value.trim()) params.itemNo = itemFilter.value.trim().toUpperCase()
-    const { data } = await stockApi.dailyReport(params)
-    rows.value = data.map((r, i) => ({ ...r, key: `${r.itemNo || 'shop'}_${r.date}_${i}` }))
+    if (view.value === 'ledger') {
+      const { data } = await stockApi.ledger(params)
+      ledgerRows.value = data.map((r, i) => ({ ...r, key: `${r.itemNo}_${r.referenceNo || ''}_${i}` }))
+    } else {
+      const { data } = await stockApi.dailyReport(params)
+      rows.value = data.map((r, i) => ({ ...r, key: `${r.itemNo || 'shop'}_${r.date}_${i}` }))
+    }
   } catch (e) {
     error.value = e.response?.data?.error ?? e.message
   } finally {
@@ -141,21 +217,30 @@ async function load() {
 }
 
 const exporting = ref(false)
+function downloadCsvString(csv, name) {
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a'); a.href = url; a.download = name
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 async function exportCsv() {
   exporting.value = true; error.value = ''
   try {
-    const params = {
-      dateFrom: isoDate(dateFrom.value),
-      dateTo:   isoDate(dateTo.value),
-    }
+    const params = { dateFrom: isoDate(dateFrom.value), dateTo: isoDate(dateTo.value) }
     if (itemFilter.value.trim()) params.itemNo = itemFilter.value.trim().toUpperCase()
-    const res = await stockApi.dailyReportCsv(params)
-    const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `stock-movements-${params.dateFrom}_${params.dateTo}.csv`
-    document.body.appendChild(a); a.click(); a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    if (view.value === 'ledger') {
+      const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+      const head = ['Date', 'Item No', 'Description', 'Type', 'Reference', 'In', 'Out', 'Balance']
+      const lines = [head.join(',')]
+      for (const r of ledgerRows.value) {
+        lines.push([isoDate(new Date(r.date)), r.itemNo, r.description, typeLabel(r.type), r.referenceNo,
+                    r.qtyIn || '', r.qtyOut || '', r.balance].map(esc).join(','))
+      }
+      downloadCsvString(lines.join('\n'), `stock-ledger-${params.dateFrom}_${params.dateTo}.csv`)
+    } else {
+      const res = await stockApi.dailyReportCsv(params)
+      downloadCsvString(res.data, `stock-movements-${params.dateFrom}_${params.dateTo}.csv`)
+    }
   } catch (e) {
     error.value = e.response?.data?.error ?? e.message
   } finally {
@@ -181,4 +266,11 @@ onMounted(async () => { await loadShops(); await load() })
 .num.pos { color:#15803d; }
 .num.neg { color:#b91c1c; }
 :deep(.movements-table) { font-size: 12px; }
+
+.list-search { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
+.list-search :deep(.p-inputtext) { min-width:280px; }
+
+.chip { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+.chip-in  { background:#dcfce7; color:#15803d; }
+.chip-out { background:#fee2e2; color:#b91c1c; }
 </style>
