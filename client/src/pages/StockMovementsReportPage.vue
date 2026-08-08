@@ -14,6 +14,11 @@
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
     <div class="filters">
+      <div v-if="canSwitchShop" class="filter-field">
+        <label>Shop</label>
+        <Select v-model="shopCode" :options="shops" option-label="Name" option-value="Code"
+                placeholder="Select shop…" filter @change="onShopChange" />
+      </div>
       <div class="filter-field">
         <label>From</label>
         <DatePicker v-model="dateFrom" date-format="yy-mm-dd" />
@@ -73,10 +78,25 @@ import DataTable  from 'primevue/datatable'
 import Column     from 'primevue/column'
 import DatePicker from 'primevue/datepicker'
 import InputText  from 'primevue/inputtext'
+import Select     from 'primevue/select'
 import Message    from 'primevue/message'
-import { stockApi } from '@/services/pos.js'
+import { stockApi, posApi, setAdminShopCode, getAdminShopCode } from '@/services/pos.js'
+import { useAuthStore } from '@/stores/auth.js'
 
+const auth = useAuthStore()
 const today = new Date()
+
+// Shop scope — managers (admin/shop-admin) can pick which shop's movements to view;
+// cashiers are auto-scoped to their own shop by the server. Without a selection an
+// admin has no shop context, so the report returns "shopCode required".
+const shops    = ref([])
+const shopCode = ref(getAdminShopCode() || '')
+const canSwitchShop = computed(() => shops.value.length > 1)
+async function loadShops() {
+  try { shops.value = (await posApi.listMyShops()).data || [] } catch { shops.value = [] }
+  if (!shopCode.value && shops.value.length) { shopCode.value = shops.value[0].Code; setAdminShopCode(shopCode.value, { perTab: true }) }
+}
+function onShopChange() { setAdminShopCode(shopCode.value, { perTab: true }); load() }
 
 // Default to a single-day view (today) — broaden the range as needed.
 const dateFrom = ref(today)
@@ -143,7 +163,7 @@ async function exportCsv() {
   }
 }
 
-onMounted(load)
+onMounted(async () => { await loadShops(); await load() })
 </script>
 
 <style scoped>
