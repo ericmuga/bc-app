@@ -1355,24 +1355,33 @@ function ledgerTable(company) {
   return { c, table: bcTable(c, 'Item Ledger Entry') };
 }
 
-/** Current on-hand per item at a BC location, plus the latest ledger Entry No. */
+/**
+ * Current on-hand per item at a BC location, plus the ledger Entry No the on-hand
+ * is computed as-of. Snapshot-consistent: we capture MAX([Entry No_]) first, then
+ * sum ONLY entries up to and including it. That guarantees the returned on-hand
+ * exactly matches the returned maxEntryNo, so a watermark stamped at maxEntryNo
+ * never sits ahead of (or behind) the balance we reset/harmonized to — even if BC
+ * posts new entries mid-read.
+ */
 export async function bcStockOnHandAtLocation(company, locationCode) {
   const { table } = ledgerTable(company);
   const bcPool = await bcDb.getPool();
-  const r = await bcPool.request()
-    .input('loc', sql.NVarChar(20), str(locationCode, 20))
-    .query(`
-      SELECT UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo, SUM([Quantity]) AS Qty
-      FROM   ${table}
-      WHERE  [Location Code] = @loc
-      GROUP BY UPPER(LTRIM(RTRIM([Item No_])))
-      HAVING SUM([Quantity]) <> 0`);
   const maxR = await bcPool.request()
     .input('loc', sql.NVarChar(20), str(locationCode, 20))
     .query(`SELECT ISNULL(MAX([Entry No_]), 0) AS MaxEntry FROM ${table} WHERE [Location Code] = @loc`);
+  const maxEntryNo = Number(maxR.recordset[0]?.MaxEntry || 0);
+  const r = await bcPool.request()
+    .input('loc',  sql.NVarChar(20), str(locationCode, 20))
+    .input('upto', sql.Int,          maxEntryNo)
+    .query(`
+      SELECT UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo, SUM([Quantity]) AS Qty
+      FROM   ${table}
+      WHERE  [Location Code] = @loc AND [Entry No_] <= @upto
+      GROUP BY UPPER(LTRIM(RTRIM([Item No_])))
+      HAVING SUM([Quantity]) <> 0`);
   return {
     items: r.recordset.map(x => ({ itemNo: x.ItemNo, qty: Number(x.Qty || 0) })),
-    maxEntryNo: Number(maxR.recordset[0]?.MaxEntry || 0),
+    maxEntryNo,
   };
 }
 
