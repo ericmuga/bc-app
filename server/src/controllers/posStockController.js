@@ -102,6 +102,25 @@ export async function resetStockFromBc(req, res) {
   } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
 }
 
+/**
+ * POST /pos/stock/harmonize-from-bc — reconcile POS on-hand to BC (source of
+ * truth) by posting correcting adjustments, without wiping history. Daily driver.
+ */
+export async function harmonizeStockFromBc(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    await ensureManager(req);
+    const result = await Stock.harmonizeStockWithBc({
+      shopCode,
+      company:  req.body?.company || undefined,
+      userId:   req.user.userId,
+      userName: req.user.userName,
+    });
+    ok(res, result);
+  } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
+}
+
 export async function bcLedgerDates(req, res) {
   try {
     const shopCode = await userShopCode(req);

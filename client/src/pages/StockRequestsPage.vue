@@ -6,6 +6,8 @@
         <p class="text-muted text-sm">Request stock from HQ. Completed requests automatically increase shop inventory.</p>
       </div>
       <div style="display:flex;gap:8px">
+        <Button label="Harmonize with BC" icon="pi pi-sync" severity="success" outlined @click="openHarmonize"
+                v-tooltip.bottom="'Daily reconcile: correct POS on-hand to BC (source of truth) without wiping history'" />
         <Button label="Stock Reset" icon="pi pi-history" severity="warn" outlined @click="openReset" />
         <Button label="Load from BC" icon="pi pi-download" severity="help" outlined @click="openLoad" />
         <Button label="New Request" icon="pi pi-plus" @click="newRequest" />
@@ -241,6 +243,54 @@
       </template>
     </Dialog>
 
+    <!-- ── Harmonize with BC dialog (daily reconcile) ───────────────── -->
+    <Dialog v-model:visible="harmonizeVisible" header="Harmonize with BC — daily stock reconcile" :modal="true" :style="{ width: '560px' }">
+      <Message severity="info" :closable="false" class="mb-3">
+        Reconciles this terminal's on-hand to Business Central (the source of truth) by posting a
+        <strong>correcting adjustment per item</strong> — it does <strong>not</strong> delete any
+        history, so your inventory trail stays intact. Run it each morning, like opening the till.
+      </Message>
+      <div class="text-sm" style="display:flex;flex-direction:column;gap:4px">
+        <div><strong>Terminal:</strong> {{ watermark?.shopCode || wmShop || '—' }}</div>
+        <div v-if="watermark?.watermark"><strong>Last synced entry:</strong> {{ watermark.watermark.LastEntryNo }}
+          <span class="text-muted">({{ fmtTime(watermark.watermark.LastLoadAt || watermark.watermark.ResetAt) }})</span></div>
+        <div v-else class="text-muted">No baseline yet — this will establish one from BC.</div>
+      </div>
+      <div v-if="!isManager" class="elev-box">
+        <p class="text-muted text-sm">Admin authorization required.</p>
+        <input v-model="adminUsername" class="elev-input" placeholder="Admin username" autocomplete="off" />
+        <input v-model="adminPassword" type="password" class="elev-input" placeholder="Admin password" autocomplete="off" />
+      </div>
+      <Message v-if="harmonizeError" severity="error" :closable="false" class="mt-2">{{ harmonizeError }}</Message>
+
+      <!-- Result summary + the correcting entries -->
+      <div v-if="harmonizeResult" class="mt-3">
+        <Message severity="success" :closable="false" class="mb-2">
+          Reconciled to BC @ {{ harmonizeResult.locationCode }}:
+          <strong>{{ harmonizeResult.increased }}</strong> increased,
+          <strong>{{ harmonizeResult.decreased }}</strong> decreased,
+          {{ harmonizeResult.unchanged }} unchanged.
+        </Message>
+        <DataTable v-if="harmonizeResult.adjustments?.length" :value="harmonizeResult.adjustments"
+                   size="small" :scrollable="true" scroll-height="240px" responsive-layout="scroll">
+          <Column field="itemNo" header="Item" style="width:100px" />
+          <Column field="description" header="Description" style="min-width:160px" />
+          <Column field="posQty" header="POS" style="width:80px;text-align:right"><template #body="{data}">{{ Number(data.posQty).toFixed(2) }}</template></Column>
+          <Column field="bcQty" header="BC" style="width:80px;text-align:right"><template #body="{data}">{{ Number(data.bcQty).toFixed(2) }}</template></Column>
+          <Column field="delta" header="Correction" style="width:100px;text-align:right">
+            <template #body="{data}"><span :class="data.delta > 0 ? 'num pos' : 'num neg'">{{ data.delta > 0 ? '+' : '' }}{{ Number(data.delta).toFixed(2) }}</span></template>
+          </Column>
+        </DataTable>
+        <p v-else class="text-muted text-sm">Already in sync — no corrections needed.</p>
+      </div>
+
+      <template #footer>
+        <Button :label="harmonizeResult ? 'Close' : 'Cancel'" text @click="harmonizeVisible=false" :disabled="harmonizing" />
+        <Button v-if="!harmonizeResult" label="Harmonize now" icon="pi pi-sync" severity="success"
+                :loading="harmonizing" @click="doHarmonize" />
+      </template>
+    </Dialog>
+
     <!-- ── Stock Reset dialog ────────────────────────────────────── -->
     <Dialog v-model:visible="resetVisible" header="Stock Reset — load BC on-hand" :modal="true" :style="{ width: '480px' }">
       <Message severity="warn" :closable="false" class="mb-3">
@@ -393,6 +443,11 @@ const adminPassword = ref('')
 const resetVisible  = ref(false)
 const resetting     = ref(false)
 const resetError    = ref('')
+// harmonize dialog
+const harmonizeVisible = ref(false)
+const harmonizing      = ref(false)
+const harmonizeError   = ref('')
+const harmonizeResult  = ref(null)
 // load dialog
 const loadVisible   = ref(false)
 const loadingStock  = ref(false)
@@ -423,6 +478,19 @@ async function doReset() {
     alert(`Stock reset: ${data.items} item(s) seeded from BC @ ${data.locationCode} (baseline entry ${data.lastEntryNo}).`)
   } catch (e) { resetError.value = e.response?.data?.error ?? e.message }
   finally { resetting.value = false }
+}
+
+async function openHarmonize() {
+  harmonizeError.value = ''; harmonizeResult.value = null; clearElevation(); await loadWatermark(); harmonizeVisible.value = true
+}
+async function doHarmonize() {
+  harmonizeError.value = ''; harmonizing.value = true
+  try {
+    const { data } = await stockApi.harmonizeFromBc(elevationBody())
+    harmonizeResult.value = data
+    await loadWatermark()
+  } catch (e) { harmonizeError.value = e.response?.data?.error ?? e.message }
+  finally { harmonizing.value = false }
 }
 
 async function openLoad() {

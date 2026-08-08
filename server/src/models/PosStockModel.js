@@ -1535,3 +1535,88 @@ export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, 
   logger.info('pos/loadStockFromBc', { shopCode: code, loc, fromEntryNo: since, toEntryNo: upto, items: net.length });
   return { shopCode: code, fromEntryNo: since, toEntryNo: upto, items: net.length };
 }
+
+/**
+ * Harmonize (reconcile) a terminal's POS on-hand to BC's on-hand at the terminal
+ * location, with BC as the source of truth — WITHOUT deleting any history. Meant
+ * to be run each morning, like opening the cash till.
+ *
+ * For every item it posts a single correcting movement: delta = BC − POS. Items
+ * the POS holds that BC no longer shows are brought down to BC (usually 0). These
+ * are ordinary movements (type 'bc-adjust-in' / 'bc-adjust-out', reference
+ * 'bc-harmonize' / BC-HARM-<date>), so the full inventory trail is preserved and
+ * the correction itself is visible in every stock report.
+ *
+ * Afterwards POS on-hand equals BC on-hand as of BC's latest ledger Entry No, so
+ * the watermark is advanced to that point (later incremental loads don't
+ * double-count). Runs atomically — the whole reconciliation lands or none of it.
+ *
+ * @returns { shopCode, locationCode, company, lastEntryNo, increased, decreased,
+ *            unchanged, adjustments:[{itemNo, description, posQty, bcQty, delta}] }
+ */
+export async function harmonizeStockWithBc({ shopCode, company = 'FCL', userId = null, userName = null }) {
+  const pool = await appPool();
+  const code = str(shopCode, 50).toUpperCase();
+  const loc  = await locationForShop(pool, code);
+  if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
+
+  // BC truth at the location + POS current on-hand (from the local ledger).
+  const { items: bcItems, maxEntryNo } = await bcStockOnHandAtLocation(company, loc);
+  const descByItem = await posItemDescriptions(pool);
+  const bcByItem = new Map();
+  for (const it of bcItems) if (descByItem.has(it.itemNo)) bcByItem.set(it.itemNo, Number(it.qty || 0));
+
+  const snap = await stockSnapshot({ shopCode: code });
+  const posByItem = new Map(snap.map(s => [String(s.itemNo).toUpperCase(), Number(s.onHand || 0)]));
+
+  // Union so POS-only surplus is zeroed to BC, and BC-only items are seeded.
+  const itemNos = new Set([...bcByItem.keys(), ...posByItem.keys()]);
+  const ref = 'BC-HARM-' + new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  const adjustments = [];
+  let increased = 0, decreased = 0, unchanged = 0;
+
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    for (const itemNo of itemNos) {
+      const bcQty  = bcByItem.get(itemNo) ?? 0;
+      const posQty = posByItem.get(itemNo) ?? 0;
+      const delta  = Math.round((bcQty - posQty) * 10000) / 10000;
+      if (delta === 0) { unchanged++; continue; }
+      await new sql.Request(tx)
+        .input('shopCode',     sql.NVarChar(50),   code)
+        .input('itemNo',       sql.NVarChar(30),   itemNo)
+        .input('description',  sql.NVarChar(200),  descByItem.get(itemNo) || null)
+        .input('movementType', sql.NVarChar(30),   delta > 0 ? 'bc-adjust-in' : 'bc-adjust-out')
+        .input('quantity',     sql.Decimal(18, 4), delta)
+        .input('refno',        sql.NVarChar(30),   ref)
+        .input('notes',        sql.NVarChar(500),  `Harmonize to BC: ${posQty} → ${bcQty} (Δ ${delta > 0 ? '+' : ''}${delta}) @ ${loc}`)
+        .input('createdBy',    sql.NVarChar(100),  str(userName || userId, 100) || null)
+        .query(`INSERT INTO [dbo].[PosStockMovement]
+          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@itemNo,@description,@movementType,@quantity,'bc-harmonize',@refno,GETDATE(),@notes,@createdBy)`);
+      adjustments.push({ itemNo, description: descByItem.get(itemNo) || '', posQty, bcQty, delta });
+      if (delta > 0) increased++; else decreased++;
+    }
+    // POS now equals BC as of maxEntryNo — advance/seed the watermark.
+    await new sql.Request(tx)
+      .input('code',    sql.NVarChar(50),  code)
+      .input('loc',     sql.NVarChar(20),  loc.toUpperCase())
+      .input('company', sql.NVarChar(20),  String(company).toUpperCase())
+      .input('entry',   sql.Int,           maxEntryNo)
+      .input('by',      sql.NVarChar(100), str(userName || userId, 100) || null)
+      .query(`
+        MERGE [dbo].[PosStockWatermark] AS t
+        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
+        WHEN MATCHED THEN UPDATE SET
+          [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,
+          [LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt])
+          VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by,GETUTCDATE());`);
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+
+  logger.info('pos/harmonizeStockWithBc', { shopCode: code, loc, company, increased, decreased, unchanged, lastEntryNo: maxEntryNo });
+  return { shopCode: code, locationCode: loc, company, lastEntryNo: maxEntryNo, increased, decreased, unchanged, adjustments };
+}
