@@ -336,13 +336,13 @@ onMounted(load)
 .form-row { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
 .form-row label { font-size:13px; font-weight:500; }
 
-.line-input { width:100%; padding:4px 6px; border:1px solid #374151; border-radius:4px; font-size:12px; outline:none; text-align:right;
-  background:#111827; color:#e5e7eb; }
-.line-input::placeholder { color:#6b7280; }
+.line-input { width:100%; padding:4px 6px; border:1px solid #cbd5e1; border-radius:4px; font-size:12px; outline:none; text-align:right;
+  background:#ffffff; color:#111827; }
+.line-input::placeholder { color:#94a3b8; }
 .line-input:focus { border-color:#2563eb; }
 
-.num.pos { color:#22c55e; font-weight:600; }
-.num.neg { color:#f87171; font-weight:600; }
+.num.pos { color:#15803d; font-weight:600; }
+.num.neg { color:#b91c1c; font-weight:600; }
 
 /* Dark tables — PrimeVue renders light under the dark shell, making the stock-take
    sheet unreadable at rest. Force a dark, legible palette. */
@@ -365,33 +365,34 @@ onMounted(load)
 </style>
 
 <!-- Unscoped: the stock-take dialogs (New / Editor / Transactions) teleport to
-     <body>, so scoped :deep rules can't reach them. Force a dark palette here. -->
+     <body>, so scoped :deep rules can't reach them. Clean LIGHT theme, black text
+     (forcing dark left uncovered white areas with invisible text). -->
 <style>
 .st-dark-dialog.p-dialog {
-  background:#1f2937; border:1px solid #374151; box-shadow:0 12px 40px rgba(0,0,0,0.5);
+  background:#ffffff; border:1px solid #d0d5dd; box-shadow:0 12px 40px rgba(15,23,42,0.28);
 }
-.st-dark-dialog.p-dialog .p-dialog-header { background:#111827; color:#f3f4f6; border-bottom:1px solid #374151; }
-.st-dark-dialog.p-dialog .p-dialog-title  { font-weight:700; font-size:16px; }
-.st-dark-dialog.p-dialog .p-dialog-header .p-dialog-header-icon { color:#cbd5e1; }
-.st-dark-dialog.p-dialog .p-dialog-content { background:#1f2937; color:#e5e7eb; }
-.st-dark-dialog.p-dialog .p-dialog-footer  { background:#111827; border-top:1px solid #374151; }
-.st-dark-dialog .editor-meta { color:#e5e7eb; }
+.st-dark-dialog.p-dialog .p-dialog-header { background:#f1f5f9 !important; color:#111827 !important; border-bottom:1px solid #e2e8f0; }
+.st-dark-dialog.p-dialog .p-dialog-title  { font-weight:700; font-size:16px; color:#111827 !important; }
+.st-dark-dialog.p-dialog .p-dialog-header .p-dialog-header-icon { color:#334155 !important; }
+.st-dark-dialog.p-dialog .p-dialog-content { background:#ffffff !important; color:#111827 !important; }
+.st-dark-dialog.p-dialog .p-dialog-footer  { background:#f8fafc !important; border-top:1px solid #e2e8f0; }
+.st-dark-dialog .editor-meta { color:#111827 !important; }
+.st-dark-dialog .text-muted { color:#475569 !important; }
 /* Inputs (date pickers, physical/comment line inputs) */
 .st-dark-dialog .p-inputtext, .st-dark-dialog .p-datepicker-input, .st-dark-dialog .line-input {
-  background:#111827 !important; color:#e5e7eb !important; border-color:#374151 !important; color-scheme:dark;
+  background:#ffffff !important; color:#111827 !important; border-color:#cbd5e1 !important; color-scheme:light;
 }
-.st-dark-dialog .line-input::placeholder { color:#6b7280; }
-/* DataTable — force dark rows/cells over the PrimeVue light theme. */
+.st-dark-dialog .line-input::placeholder { color:#94a3b8; }
+/* DataTable — light rows, black text (override PrimeVue defaults). */
 .st-dark-dialog .p-datatable-thead > tr > th {
-  background:#111827 !important; color:#f3f4f6 !important; border-bottom:1px solid #374151 !important;
+  background:#f1f5f9 !important; color:#111827 !important; border-bottom:1px solid #e2e8f0 !important;
 }
-.st-dark-dialog .p-datatable-tbody > tr { background:#1f2937 !important; color:#e5e7eb !important; }
+.st-dark-dialog .p-datatable-tbody > tr { background:#ffffff !important; color:#111827 !important; }
 .st-dark-dialog .p-datatable-tbody > tr > td {
-  background:#1f2937 !important; color:#e5e7eb !important; border-bottom:1px solid #374151 !important;
+  background:#ffffff !important; color:#111827 !important; border-bottom:1px solid #eef2f6 !important;
 }
-.st-dark-dialog .p-datatable-tbody > tr:nth-child(even) > td { background:#232f3e !important; }
-.st-dark-dialog .p-datatable-tbody > tr:hover > td { background:#374151 !important; }
-.st-dark-dialog .p-paginator { background:#111827 !important; color:#e5e7eb !important; border:none; }
-/* Dim the backdrop rather than flash bright */
-body > .p-dialog-mask:has(.st-dark-dialog) { background:rgba(0,0,0,0.6); }
+.st-dark-dialog .p-datatable-tbody > tr:nth-child(even) > td { background:#f8fafc !important; }
+.st-dark-dialog .p-datatable-tbody > tr:hover > td { background:#eff6ff !important; }
+.st-dark-dialog .p-paginator { background:#f8fafc !important; color:#111827 !important; border:none; }
+body > .p-dialog-mask:has(.st-dark-dialog) { background:rgba(15,23,42,0.55); }
 </style>

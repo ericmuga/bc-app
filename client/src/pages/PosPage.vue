@@ -2306,45 +2306,41 @@ body > .p-dialog-mask:has(.pos-soft-dialog) {
 }
 /* M-Pesa lookup table styling lives in the scoped .mpesa-table rules (dark). */
 
-/* ── Dark dialog (e.g. Price List) — the dialog teleports to <body>, so these
-   must be unscoped. Darkens the chrome, the table, inputs and paginator. ─────── */
+/* ── Price List modal — clean LIGHT theme with BLACK text. The dialog teleports
+   to <body> (unscoped rules), and forcing it dark left uncovered white areas with
+   invisible white text, so we make it a consistent light dialog instead. ─────── */
 .pos-dark-dialog.p-dialog {
-  background: #1f2937;
-  border: 1px solid #374151;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  background: #ffffff;
+  border: 1px solid #d0d5dd;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.28);
 }
 .pos-dark-dialog.p-dialog .p-dialog-header {
-  background: #111827; color: #f3f4f6; border-bottom: 1px solid #374151;
+  background: #f1f5f9 !important; color: #111827 !important; border-bottom: 1px solid #e2e8f0;
 }
-.pos-dark-dialog.p-dialog .p-dialog-title { font-weight: 700; font-size: 16px; }
-.pos-dark-dialog.p-dialog .p-dialog-header .p-dialog-header-icon { color: #cbd5e1; }
-.pos-dark-dialog.p-dialog .p-dialog-content { background: #1f2937; color: #e5e7eb; }
-.pos-dark-dialog.p-dialog .p-dialog-footer { background: #111827; border-top: 1px solid #374151; }
-.pos-dark-dialog .text-muted { color: #9ca3af; }
+.pos-dark-dialog.p-dialog .p-dialog-title { font-weight: 700; font-size: 16px; color: #111827 !important; }
+.pos-dark-dialog.p-dialog .p-dialog-header .p-dialog-header-icon { color: #334155 !important; }
+.pos-dark-dialog.p-dialog .p-dialog-content { background: #ffffff !important; color: #111827 !important; }
+.pos-dark-dialog.p-dialog .p-dialog-footer { background: #f8fafc !important; border-top: 1px solid #e2e8f0; }
+.pos-dark-dialog .text-muted { color: #475569 !important; }
 /* Inputs */
 .pos-dark-dialog .p-inputtext {
-  background: #111827; color: #e5e7eb; border: 1px solid #374151;
+  background: #ffffff !important; color: #111827 !important; border: 1px solid #cbd5e1 !important;
 }
-.pos-dark-dialog .p-inputtext::placeholder { color: #6b7280; }
-/* DataTable — force dark rows at rest (PrimeVue's theme sets a white row/cell
-   background with high specificity, so we override tr AND td with !important). */
+.pos-dark-dialog .p-inputtext::placeholder { color: #94a3b8 !important; }
+/* DataTable — light rows, black text (override PrimeVue defaults with !important). */
 .pos-dark-dialog .p-datatable-thead > tr > th {
-  background: #111827 !important; color: #f3f4f6 !important; border-bottom: 1px solid #374151 !important;
+  background: #f1f5f9 !important; color: #111827 !important; border-bottom: 1px solid #e2e8f0 !important;
 }
-.pos-dark-dialog .p-datatable-tbody > tr { background: #1f2937 !important; color: #e5e7eb !important; }
+.pos-dark-dialog .p-datatable-tbody > tr { background: #ffffff !important; color: #111827 !important; }
 .pos-dark-dialog .p-datatable-tbody > tr > td {
-  background: #1f2937 !important; color: #e5e7eb !important; border-bottom: 1px solid #374151 !important;
+  background: #ffffff !important; color: #111827 !important; border-bottom: 1px solid #eef2f6 !important;
 }
-.pos-dark-dialog .p-datatable-tbody > tr:nth-child(even) > td { background: #232f3e !important; }
-.pos-dark-dialog .p-datatable-tbody > tr:hover > td { background: #374151 !important; }
+.pos-dark-dialog .p-datatable-tbody > tr:nth-child(even) > td { background: #f8fafc !important; }
+.pos-dark-dialog .p-datatable-tbody > tr:hover > td { background: #eff6ff !important; }
+.pos-dark-dialog .mono { color: #111827 !important; }
 /* Paginator */
-.pos-dark-dialog .p-paginator { background: #111827; color: #e5e7eb; border: none; }
-.pos-dark-dialog .p-paginator .p-paginator-page,
-.pos-dark-dialog .p-paginator .p-paginator-first,
-.pos-dark-dialog .p-paginator .p-paginator-prev,
-.pos-dark-dialog .p-paginator .p-paginator-next,
-.pos-dark-dialog .p-paginator .p-paginator-last { color: #cbd5e1; }
-.pos-dark-dialog .p-paginator .p-paginator-page.p-highlight { background: #0f7173; color: #fff; }
+.pos-dark-dialog .p-paginator { background: #f8fafc !important; color: #111827 !important; border: none; }
+.pos-dark-dialog .p-paginator .p-paginator-page.p-highlight { background: #0f7173 !important; color: #fff !important; }
 /* Backdrop */
-body > .p-dialog-mask:has(.pos-dark-dialog) { background: rgba(0, 0, 0, 0.6); }
+body > .p-dialog-mask:has(.pos-dark-dialog) { background: rgba(15, 23, 42, 0.55); }
 </style>
