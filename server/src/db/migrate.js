@@ -367,7 +367,40 @@ async function migrate(companyId) {
                    WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='Email')
       ALTER TABLE [dbo].[PosShop] ADD [Email] NVARCHAR(200) NULL
   `);
+  // Inter-company shop variants: an explicit BC Company per shop row, and a
+  // GroupCode linking the company variants of the same physical shop. Both are
+  // additive + nullable — existing shops stay standalone and behave exactly as
+  // before until an admin groups them.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='Company')
+      ALTER TABLE [dbo].[PosShop] ADD [Company] NVARCHAR(20) NULL
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='GroupCode')
+      ALTER TABLE [dbo].[PosShop] ADD [GroupCode] NVARCHAR(50) NULL
+  `);
+  // Back-fill Company for existing shops (default FCL; admins refine per variant).
+  // Only touches rows with no Company yet, so it never disturbs the live shops.
+  await run(`UPDATE [dbo].[PosShop] SET [Company]='FCL' WHERE [Company] IS NULL OR [Company]=''`);
   console.log('  [dbo].[PosShop] OK');
+
+  // ── [dbo].[PosShopGroup] (physical shop shared across company variants) ──────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosShopGroup' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosShopGroup] (
+      [GroupCode]      NVARCHAR(50)  NOT NULL PRIMARY KEY,
+      [Name]           NVARCHAR(200) NOT NULL,
+      [MpesaTill]      NVARCHAR(30)  NULL,   -- shared physical till across variants
+      [MpesaStoreName] NVARCHAR(100) NULL,
+      [IsActive]       BIT           NOT NULL DEFAULT 1,
+      [SortOrder]      INT           NOT NULL DEFAULT 0,
+      [CreatedAt]      DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]      DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosShopGroup] OK');
 
   // ── [dbo].[PosContact] ────────────────────────────────────────────────────
   await run(`
