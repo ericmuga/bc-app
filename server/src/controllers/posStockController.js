@@ -102,15 +102,39 @@ export async function resetStockFromBc(req, res) {
   } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
 }
 
+/** GET /pos/stock/harmonize-readiness — is BC done posting this shop's sales/requests? */
+export async function harmonizeReadiness(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    ok(res, { shopCode, ...(await BcSync.bcPostingReadiness({ shopCode })) });
+  } catch (e) { err(res, e); }
+}
+
 /**
  * POST /pos/stock/harmonize-from-bc — reconcile POS on-hand to BC (source of
  * truth) by posting correcting adjustments, without wiping history. Daily driver.
+ * By default it refuses if BC still has unposted sales/requests for the shop
+ * (409 with the pending counts); pass { force:true } to override.
  */
 export async function harmonizeStockFromBc(req, res) {
   try {
     const shopCode = await userShopCode(req);
     if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
     await ensureManager(req);
+
+    // Guard: don't reconcile against a BC that hasn't finished posting the shop's
+    // own sales/receipts, unless the caller explicitly forces it.
+    if (!req.body?.force) {
+      const readiness = await BcSync.bcPostingReadiness({ shopCode });
+      if (!readiness.ready) {
+        return res.status(409).json({
+          error: 'Business Central has not finished posting this shop\'s sales / stock requests. Wait until they clear, or force the harmonize.',
+          readiness,
+        });
+      }
+    }
+
     const result = await Stock.harmonizeStockWithBc({
       shopCode,
       company:  req.body?.company || undefined,

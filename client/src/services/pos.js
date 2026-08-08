@@ -199,6 +199,7 @@ export const stockApi = {
   // BC stock baseline (reset to BC on-hand) + incremental ledger loads
   bcWatermark:    ()                          => api.get('/pos/stock/bc-watermark'),
   resetFromBc:    (body = {})                 => api.post('/pos/stock/reset-from-bc', body),
+  harmonizeReadiness:()                       => api.get('/pos/stock/harmonize-readiness'),
   harmonizeFromBc:(body = {})                 => api.post('/pos/stock/harmonize-from-bc', body),
   bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
   loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),

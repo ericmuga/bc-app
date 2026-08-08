@@ -286,6 +286,52 @@ export async function pushImportedOrder({ requestId }) {
   return { company, table, candidates: lines.length, inserted, skipped };
 }
 
+/**
+ * BC posting readiness for a shop — is everything the POS pushed already processed
+ * by BC? Inspects the staging tables: pending sales are pushed lines still
+ * Executed=0 / Posted=0; pending orders are pushed rows still Status=0. Use this
+ * before a morning Harmonize so we don't reconcile against a BC that hasn't yet
+ * absorbed the shop's own sales/receipts.
+ *
+ * A per-table read that errors (e.g. a differently-named flag column) yields
+ * `null` for that side and a warning, so the caller can proceed with caution
+ * rather than crash. `ready` is true only when both sides are confirmed clear.
+ *
+ * @returns { company, customerNo, salesPending, ordersPending, ready, warnings[] }
+ */
+export async function bcPostingReadiness({ shopCode }) {
+  const { company, customerNo } = await resolveShopCompany(shopCode);
+  const pool = await bcDb.getPool();
+  const salesTable  = bcTable(company, 'Imported SalesAL', { ext: true });
+  const ordersTable = bcTable(company, 'Imported Orders',  { ext: true });
+  const warnings = [];
+
+  let salesPending = null;
+  try {
+    const s = await pool.request()
+      .input('cust', bcSql.NVarChar(20), customerNo.slice(0, 10))
+      .query(`SELECT COUNT(*) AS Lines, COUNT(DISTINCT [ExtDocNo]) AS Docs
+              FROM ${salesTable}
+              WHERE [CustNO]=@cust AND (ISNULL([Executed],0)=0 OR ISNULL([Posted],0)=0)`);
+    salesPending = { lines: Number(s.recordset[0]?.Lines || 0), docs: Number(s.recordset[0]?.Docs || 0) };
+  } catch (e) { warnings.push(`Could not read Imported SalesAL: ${e.message}`); }
+
+  let ordersPending = null;
+  try {
+    const o = await pool.request()
+      .input('cust', bcSql.NVarChar(20), customerNo.slice(0, 20))
+      .query(`SELECT COUNT(*) AS Lines, COUNT(DISTINCT [External Document No_]) AS Docs
+              FROM ${ordersTable}
+              WHERE [Sell-to Customer No_]=@cust AND ISNULL([Status],0)=0`);
+    ordersPending = { lines: Number(o.recordset[0]?.Lines || 0), docs: Number(o.recordset[0]?.Docs || 0) };
+  } catch (e) { warnings.push(`Could not read Imported Orders: ${e.message}`); }
+
+  const ready = salesPending !== null && ordersPending !== null
+    && salesPending.lines === 0 && ordersPending.lines === 0;
+
+  return { company, customerNo, salesPending, ordersPending, ready, warnings };
+}
+
 // ── Fire-and-forget variants ─────────────────────────────────────────────────
 // Kick off the BC push but NEVER throw and NEVER block the caller. If BC is busy
 // or unreachable the sale / approval still completes; the awaited functions above

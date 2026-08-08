@@ -256,6 +256,27 @@
           <span class="text-muted">({{ fmtTime(watermark.watermark.LastLoadAt || watermark.watermark.ResetAt) }})</span></div>
         <div v-else class="text-muted">No baseline yet — this will establish one from BC.</div>
       </div>
+
+      <!-- BC posting readiness: only harmonize once BC has posted the shop's sales/requests -->
+      <div v-if="!harmonizeResult" class="mt-3">
+        <div v-if="checkingReadiness" class="text-muted text-sm"><i class="pi pi-spin pi-spinner" /> Checking BC posting status…</div>
+        <template v-else-if="harmonizeReadiness">
+          <Message v-if="bcReady" severity="success" :closable="false">
+            BC has posted all of this shop's sales &amp; stock requests — safe to harmonize.
+          </Message>
+          <Message v-else severity="warn" :closable="false">
+            Business Central still has unposted items for this shop:
+            <strong>{{ harmonizeReadiness.salesPending?.docs ?? '?' }}</strong> sale(s)
+            ({{ harmonizeReadiness.salesPending?.lines ?? '?' }} line(s)) and
+            <strong>{{ harmonizeReadiness.ordersPending?.docs ?? '?' }}</strong> stock request(s) pending.
+            Wait for them to post, or force the harmonize below.
+          </Message>
+          <div v-if="harmonizeReadiness.warnings?.length" class="text-muted text-sm mt-1">
+            {{ harmonizeReadiness.warnings.join(' · ') }}
+          </div>
+        </template>
+      </div>
+
       <div v-if="!isManager" class="elev-box">
         <p class="text-muted text-sm">Admin authorization required.</p>
         <input v-model="adminUsername" class="elev-input" placeholder="Admin username" autocomplete="off" />
@@ -286,8 +307,12 @@
 
       <template #footer>
         <Button :label="harmonizeResult ? 'Close' : 'Cancel'" text @click="harmonizeVisible=false" :disabled="harmonizing" />
-        <Button v-if="!harmonizeResult" label="Harmonize now" icon="pi pi-sync" severity="success"
-                :loading="harmonizing" @click="doHarmonize" />
+        <template v-if="!harmonizeResult">
+          <Button v-if="bcReady" label="Harmonize now" icon="pi pi-sync" severity="success"
+                  :loading="harmonizing" :disabled="checkingReadiness" @click="doHarmonize(false)" />
+          <Button v-else label="Harmonize anyway" icon="pi pi-exclamation-triangle" severity="warn"
+                  :loading="harmonizing" :disabled="checkingReadiness" @click="doHarmonize(true)" />
+        </template>
       </template>
     </Dialog>
 
@@ -448,6 +473,9 @@ const harmonizeVisible = ref(false)
 const harmonizing      = ref(false)
 const harmonizeError   = ref('')
 const harmonizeResult  = ref(null)
+const harmonizeReadiness = ref(null)
+const checkingReadiness  = ref(false)
+const bcReady = computed(() => harmonizeReadiness.value?.ready === true)
 // load dialog
 const loadVisible   = ref(false)
 const loadingStock  = ref(false)
@@ -481,16 +509,29 @@ async function doReset() {
 }
 
 async function openHarmonize() {
-  harmonizeError.value = ''; harmonizeResult.value = null; clearElevation(); await loadWatermark(); harmonizeVisible.value = true
+  harmonizeError.value = ''; harmonizeResult.value = null; harmonizeReadiness.value = null
+  clearElevation(); harmonizeVisible.value = true
+  await loadWatermark()
+  checkingReadiness.value = true
+  try { harmonizeReadiness.value = (await stockApi.harmonizeReadiness()).data }
+  catch (e) { harmonizeError.value = e.response?.data?.error ?? e.message }
+  finally { checkingReadiness.value = false }
 }
-async function doHarmonize() {
+async function doHarmonize(force = false) {
   harmonizeError.value = ''; harmonizing.value = true
   try {
-    const { data } = await stockApi.harmonizeFromBc(elevationBody())
+    const { data } = await stockApi.harmonizeFromBc({ ...elevationBody(), force })
     harmonizeResult.value = data
     await loadWatermark()
-  } catch (e) { harmonizeError.value = e.response?.data?.error ?? e.message }
-  finally { harmonizing.value = false }
+  } catch (e) {
+    // 409 = BC still has unposted sales/requests; surface the counts + allow override.
+    if (e.response?.status === 409 && e.response.data?.readiness) {
+      harmonizeReadiness.value = e.response.data.readiness
+      harmonizeError.value = e.response.data.error
+    } else {
+      harmonizeError.value = e.response?.data?.error ?? e.message
+    }
+  } finally { harmonizing.value = false }
 }
 
 async function openLoad() {
