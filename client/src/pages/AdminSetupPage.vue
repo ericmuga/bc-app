@@ -692,47 +692,17 @@ GROUP BY [G_L Account No_]</pre>
         </summary>
         <div class="accordion-body">
 
-          <!-- Master sync banner -->
+          <!-- Master/BC sync moved to the dedicated, admin-only Sync Center. -->
           <div class="sync-bar">
             <div class="sync-info">
               <i class="pi pi-cloud-download" />
               <div>
-                <div class="sync-title">Sync master records from Business Central</div>
-                <div class="sync-sub">Refreshes payment methods (M-PESA endpoint, balance accounts) and item prices/eTIMS codes for all PosItems already in the catalogue.</div>
+                <div class="sync-title">Syncs have moved to the Sync Center</div>
+                <div class="sync-sub">All Business Central syncs (master data per company FCL/CM/RMK, and transactional syncs per shop) now live in one place.</div>
               </div>
             </div>
-            <Button label="Sync everything from BC" icon="pi pi-sync" severity="info"
-                    :loading="syncingFromBc" @click="syncFromBc" />
+            <Button label="Open Sync Center" icon="pi pi-sync" severity="info" @click="$router.push('/pos/sync')" />
           </div>
-
-          <!-- Per-step buttons so admins can run individual stages on demand -->
-          <div class="sync-steps">
-            <Button v-for="step in syncSteps" :key="step.kind"
-                    :label="step.label" :icon="step.icon" size="small" severity="secondary"
-                    :loading="syncingStep === step.kind"
-                    :disabled="!!syncingStep && syncingStep !== step.kind"
-                    @click="syncStep(step.kind)" />
-          </div>
-
-          <Message v-if="syncResult" :severity="syncResult.errors?.length ? 'warn' : 'success'" :closable="true" class="mb-3">
-            <span v-if="syncResult.kind">
-              Step <strong>{{ syncResult.kind }}</strong>: {{ syncResult.count }} record(s) synced.
-            </span>
-            <span v-else>
-              Synced {{ syncResult.paymentTypes }} payment type(s) and refreshed {{ syncResult.items }} item(s).
-            </span>
-            <span v-if="syncResult.errors?.length"> Errors: {{ syncResult.errors.join('; ') }}</span>
-          </Message>
-
-          <!-- Sync mode chooser (Wipe / Upsert / Cancel — Cancel aborts) -->
-          <Dialog v-model:visible="syncMode.visible" :header="syncMode.title" :modal="true" :style="{ width: '460px' }">
-            <p class="text-muted text-sm" style="margin-top:0">{{ syncMode.body }}</p>
-            <template #footer>
-              <Button label="Cancel" text @click="syncMode.visible = false" />
-              <Button label="Upsert (keep existing)" icon="pi pi-refresh" severity="secondary" @click="runSyncStep(syncMode.kind, { wipe: false })" />
-              <Button label="Wipe & reimport" icon="pi pi-exclamation-triangle" severity="danger" @click="runSyncStep(syncMode.kind, { wipe: true })" />
-            </template>
-          </Dialog>
 
           <!-- Print configuration -->
           <details class="pos-sub-accordion">

@@ -223,6 +223,7 @@ router.post( '/pos/produce',                                   ...canPos, posCtr
 router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
 router.post( '/pos/stock/reset-from-bc',                       ...canPos, posStockCtrl.resetStockFromBc);
 router.get(  '/pos/stock/harmonize-readiness',                 ...canPos, posStockCtrl.harmonizeReadiness);
+router.post( '/pos/stock/push-all-orders-bc',                  ...canManage, posStockCtrl.pushAllStockRequestsToBc);
 router.post( '/pos/stock/harmonize-from-bc',                   ...canPos, posStockCtrl.harmonizeStockFromBc);
 router.get(  '/pos/stock/bc-ledger-dates',                     ...canPos, posStockCtrl.bcLedgerDates);
 router.post( '/pos/stock/load-from-bc',                        ...canPos, posStockCtrl.loadStockFromBc);

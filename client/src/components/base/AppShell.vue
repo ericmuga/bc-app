@@ -165,6 +165,10 @@
             <i class="pi pi-ticket" />
             <span>Coupons</span>
           </RouterLink>
+          <RouterLink v-if="isAdmin" to="/pos/sync" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-sync" />
+            <span>Sync Center</span>
+          </RouterLink>
           <RouterLink v-if="isAdmin" to="/pos/mpesa-matching" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-money-bill" />
             <span>M-Pesa Reconciliation</span>

@@ -102,6 +102,16 @@ export async function resetStockFromBc(req, res) {
   } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
 }
 
+/** POST /pos/stock/push-all-orders-bc — (re)push all approved/completed requests for the shop. */
+export async function pushAllStockRequestsToBc(req, res) {
+  try {
+    const shopCode = await userShopCode(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop in context' });
+    await ensureManager(req);
+    ok(res, await BcSync.pushAllImportedOrders({ shopCode }));
+  } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
+}
+
 /** GET /pos/stock/harmonize-readiness — is BC done posting this shop's sales/requests? */
 export async function harmonizeReadiness(req, res) {
   try {

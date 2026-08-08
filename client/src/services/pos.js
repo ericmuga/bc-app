@@ -201,6 +201,7 @@ export const stockApi = {
   resetFromBc:    (body = {})                 => api.post('/pos/stock/reset-from-bc', body),
   harmonizeReadiness:()                       => api.get('/pos/stock/harmonize-readiness'),
   harmonizeFromBc:(body = {})                 => api.post('/pos/stock/harmonize-from-bc', body),
+  pushAllOrdersBc:(body = {})                 => api.post('/pos/stock/push-all-orders-bc', body),
   bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
   loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),
 

@@ -38,10 +38,6 @@
                   :disabled="!rows.length" :loading="exporting" @click="downloadCsv" />
           <Button label="PDF" icon="pi pi-file-pdf" severity="secondary"
                   :disabled="!rows.length" @click="downloadPdf" />
-          <Button label="BC Sales export" icon="pi pi-database" severity="secondary" :loading="stkBusy"
-                  @click="exportBcSales" v-tooltip="'Export paid POS invoice lines in BC Imported-SalesAL schema'" />
-          <Button label="Push to BC" icon="pi pi-cloud-upload" severity="secondary" :loading="stkBusy"
-                  @click="pushBcSales" v-tooltip="'Write a shop\'s paid sales into BC Imported SalesAL (DB-to-DB)'" />
           <template v-if="tab === 'stockPosition'">
             <span class="stk-sep" />
             <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />

@@ -51,6 +51,7 @@ const routes = [
       { path: 'pos/targets',        name: 'PosTargets',    component: () => import('@/pages/TargetsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/coupons',        name: 'PosCoupons',    component: () => import('@/pages/CouponsPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/mpesa-matching', name: 'MpesaMatching', component: () => import('@/pages/MpesaMatchingPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'pos/sync',           name: 'SyncCenter',    component: () => import('@/pages/SyncCenterPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },

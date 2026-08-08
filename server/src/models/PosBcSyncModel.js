@@ -332,6 +332,31 @@ export async function bcPostingReadiness({ shopCode }) {
   return { company, customerNo, salesPending, ordersPending, ready, warnings };
 }
 
+/**
+ * Bulk (re)push of a shop's approved/completed stock requests into BC Imported
+ * Orders. Idempotent per request (skips lines already present). Used by the Sync
+ * Center to backfill anything a live auto-push may have missed (BC was busy).
+ */
+export async function pushAllImportedOrders({ shopCode }) {
+  const pool = await appDb.getPool();
+  const r = await pool.request()
+    .input('shop', sql.NVarChar(50), String(shopCode || '').toUpperCase())
+    .query(`SELECT [RequestId],[RequestNo] FROM [dbo].[PosStockRequest]
+            WHERE [ShopCode]=@shop AND [Status] IN ('approved','completed')
+            ORDER BY [CreatedAt] DESC`);
+  let inserted = 0, skipped = 0;
+  const results = [];
+  for (const row of r.recordset) {
+    try {
+      const res = await pushImportedOrder({ requestId: row.RequestId });
+      inserted += res.inserted; skipped += res.skipped;
+      results.push({ requestNo: row.RequestNo, inserted: res.inserted, skipped: res.skipped });
+    } catch (e) { results.push({ requestNo: row.RequestNo, error: e.message }); }
+  }
+  logger.info('pushAllImportedOrders', { shopCode, requests: r.recordset.length, inserted, skipped });
+  return { shopCode, requests: r.recordset.length, inserted, skipped, results };
+}
+
 // ── Fire-and-forget variants ─────────────────────────────────────────────────
 // Kick off the BC push but NEVER throw and NEVER block the caller. If BC is busy
 // or unreachable the sale / approval still completes; the awaited functions above
