@@ -156,6 +156,7 @@ const canManage = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
 router.get( '/pos/items',                          ...canPos, posCtrl.getItems);
 router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
 router.get( '/pos/my-shop',                        ...canPos, posCtrl.getMyShop);
+router.get( '/pos/my-shops',                       ...canPos, posCtrl.getMyShops);
 router.get( '/pos/contacts',                       ...canPos, posCtrl.listContacts);
 router.post('/pos/contacts',                       ...canPos, posCtrl.createContact);
 router.get( '/pos/walk-in',                        ...canPos, posCtrl.getMyWalkIn);

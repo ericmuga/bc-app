@@ -62,9 +62,10 @@
       <div class="order-header">
         <div class="order-header-left">
           <span class="order-title">Current Order</span>
-          <!-- Admin: switch shop/company freely (scopes items, prices, payment
-               types, contacts). Others are locked to their assigned shop. -->
-          <div v-if="isAdmin && shops.length" class="admin-shop-picker">
+          <!-- Shop / company switcher. Admin & shop-admin can pick any shop;
+               a cashier only sees the shops they are tagged into (e.g. Kasarani
+               FCL + Kasarani CM). Single-shop users just see a badge. -->
+          <div v-if="canSwitchShop" class="admin-shop-picker">
             <Select v-model="selectedAdminShop" :options="shops" option-label="Name" option-value="Code"
                     placeholder="Select shop…" size="small" filter @change="onAdminShopChange" />
           </div>
@@ -600,6 +601,9 @@ const route  = useRoute()
 const toast  = useToast()
 const auth   = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
+// The switcher shows whenever the user has more than one selectable shop
+// (admins/shop-admins get all shops; cashiers get only the shops they're tagged in).
+const canSwitchShop = computed(() => shops.value.length > 1)
 
 // ── v-click-outside directive (inline) ───────────────────────────
 const vClickOutside = {
@@ -876,16 +880,18 @@ async function loadCatalogue() {
   }
 }
 
-async function loadShopsForAdmin() {
-  if (!isAdmin.value) return
+async function loadMyShops() {
   try {
-    const { data } = await posApi.listShops()
-    shops.value = data
-  } catch {}
+    // Server returns exactly the shops this user may operate as: all shops for
+    // admin/shop-admin, only tagged shops for a cashier.
+    const { data } = await posApi.listMyShops()
+    shops.value = Array.isArray(data) ? data : []
+  } catch { shops.value = [] }
 }
 
 async function onAdminShopChange() {
-  setAdminShopCode(selectedAdminShop.value)
+  // Per-tab so switching in one tab doesn't hijack another tab's shop.
+  setAdminShopCode(selectedAdminShop.value, { perTab: true })
   // Reload everything that's shop-scoped
   await loadCatalogue()
 }
@@ -1092,14 +1098,17 @@ async function loadPrintSvcCfg() {
 }
 
 onMounted(async () => {
-  await loadShopsForAdmin()
+  await loadMyShops()
   // Deep link: /pos?shop=CODE opens a specific shop/company in this tab (handy for
-  // running two companies side by side in separate browser tabs). Admin only.
-  if (isAdmin.value && route.query.shop) {
+  // running two companies side by side in separate tabs). The server still enforces
+  // that a cashier can only use a shop they're tagged into.
+  if (route.query.shop) {
     selectedAdminShop.value = String(route.query.shop).toUpperCase()
     setAdminShopCode(selectedAdminShop.value, { perTab: true })
   }
   await loadCatalogue()
+  // Reflect the resolved current shop in the switcher when nothing was chosen yet.
+  if (!selectedAdminShop.value && myShop.value?.Code) selectedAdminShop.value = myShop.value.Code
   loadPrintSvcCfg()
   if (route.query.resume) {
     await loadResumedOrder(route.query.resume)

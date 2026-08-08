@@ -2023,6 +2023,28 @@ export async function listUserShops(userId) {
   } catch { return []; }
 }
 
+/** The set of shop codes a user is tagged into (uppercase). */
+export async function listUserShopCodes(userId) {
+  const rows = await listUserShops(userId);
+  return rows.map((r) => String(r.ShopCode || '').toUpperCase()).filter(Boolean);
+}
+
+/**
+ * Shops a user may operate as (for the terminal shop switcher).
+ *  - admin / shop-admin: ANY shop.
+ *  - cashier (shop): only shops they are tagged into (PosUserShop) plus their
+ *    profile shop as a fallback.
+ * Returns full PosShop rows (Code, Name, …) so the client can render the picker.
+ */
+export async function listMyShops(userId, role) {
+  const all = await listShops({ activeOnly: true });
+  if (role === 'admin' || role === 'shop-admin') return all;
+  const codes = new Set(await listUserShopCodes(userId));
+  const profile = await getUserShopCode(userId);
+  if (profile) codes.add(String(profile).toUpperCase());
+  return all.filter((s) => codes.has(String(s.Code).toUpperCase()));
+}
+
 /**
  * Replace the user's full set of shop assignments. `shops` is an array of
  * { shopCode, isPrimary }. Exactly one row may have isPrimary=true; if more,

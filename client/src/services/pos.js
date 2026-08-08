@@ -80,6 +80,7 @@ export const posApi = {
   getItems:       ()           => api.get('/pos/items'),
   getPaymentTypes:()           => api.get('/pos/payment-types'),
   getMyShop:      ()           => api.get('/pos/my-shop'),
+  listMyShops:    ()           => api.get('/pos/my-shops'),
   listContacts:   ()           => api.get('/pos/contacts'),
   createContact:  (body)       => api.post('/pos/contacts', body),
   getWalkIn:      ()           => api.get('/pos/walk-in'),

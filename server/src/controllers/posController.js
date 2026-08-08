@@ -24,13 +24,25 @@ function err(res, e, code = 500) {
 }
 
 async function resolveShopCode(userId, role, req = null) {
-  // Admin priority: explicit X-Shop-Code header → assigned ShopCode on profile → null
-  if (role === 'admin') {
-    const headerShop = req?.headers?.['x-shop-code'];
-    if (headerShop) return String(headerShop).trim().toUpperCase();
-    return Pos.getUserShopCode(userId);   // admin can self-assign in their profile
+  const raw    = req?.headers?.['x-shop-code'];
+  const header = raw ? String(raw).trim().toUpperCase() : null;
+
+  // admin & shop-admin may operate as ANY shop.
+  if (role === 'admin' || role === 'shop-admin') {
+    if (header) return header;
+    return Pos.getUserShopCode(userId);
   }
-  return Pos.getUserShopCode(userId);
+
+  // cashier (shop role): may only operate as a shop they are tagged into
+  // (PosUserShop) or their own profile shop. A header for any other shop is
+  // ignored and we fall back to the profile shop — so a cashier can toggle
+  // between (e.g.) Kasarani FCL and Kasarani CM but not into a shop they lack.
+  const profile = await Pos.getUserShopCode(userId);
+  if (header) {
+    const allowed = await Pos.listUserShopCodes(userId);
+    if (allowed.includes(header) || header === String(profile || '').toUpperCase()) return header;
+  }
+  return profile;
 }
 
 // ── POS terminal ──────────────────────────────────────────────────────────────
@@ -58,6 +70,17 @@ export async function getMyShop(req, res) {
     const shops = await Pos.listShops({ activeOnly: false });
     const shop  = shops.find(s => s.Code === shopCode) ?? null;
     ok(res, shop);
+  } catch (e) { err(res, e); }
+}
+
+/**
+ * Shops the current user may select in the terminal switcher.
+ *  - admin / shop-admin → all shops.
+ *  - cashier → only the shops they are tagged into (+ profile shop).
+ */
+export async function getMyShops(req, res) {
+  try {
+    ok(res, await Pos.listMyShops(req.user.userId, req.user.role));
   } catch (e) { err(res, e); }
 }
 
