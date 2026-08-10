@@ -2,9 +2,11 @@ import { normalizeRole } from './access.js'
 
 export const POS_ROLE        = 'shop'
 export const SHOP_ADMIN_ROLE = 'shop-admin'
+export const SALES_ADMIN_ROLE = 'sales-admin'
+export const CHEF_ROLE        = 'chef'
 
-const POS_ROLES         = ['admin', SHOP_ADMIN_ROLE, POS_ROLE]
-const POS_MANAGER_ROLES = ['admin', SHOP_ADMIN_ROLE]
+const POS_ROLES         = ['admin', SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, POS_ROLE, CHEF_ROLE]
+const POS_MANAGER_ROLES = ['admin', SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE]
 // Admin areas (Users, SMTP, scheduled reports, mgmt accounts) restricted to global admin only
 const GLOBAL_ADMIN_ROLES = ['admin']
 

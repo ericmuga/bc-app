@@ -83,7 +83,14 @@ router.beforeEach((to) => {
     // real admin sees what the chosen role would see; non-admin users have
     // no impersonation and so effectiveRole === actualRole.
     const role = normalizeRole(auth.effectiveRole)
-    if (!to.meta.roles.includes(role)) {
+    // "Acts-as" expansion: composite roles satisfy the routes of the roles they
+    // subsume, so we don't have to list them on every route meta.
+    //   sales-admin → shop-admin (POS) + sales (reports)
+    //   chef        → costing (BOM/recipes) + production
+    const actsAs = new Set([role])
+    if (role === 'sales-admin') { actsAs.add('shop-admin'); actsAs.add('sales') }
+    if (role === 'chef')        { actsAs.add('production'); actsAs.add('shop') }
+    if (!to.meta.roles.some(r => actsAs.has(r))) {
       if (canAccessOrders(role)) return '/orders/scan'
       if (canAccessInvoices(role)) return '/invoices/scan'
       if (canAccessReports(role)) return '/reports'

@@ -7,6 +7,8 @@ export const ROLES = {
   FINANCE: 'finance',
   SHOP: 'shop',
   SHOP_ADMIN: 'shop-admin',
+  SALES_ADMIN: 'sales-admin',   // shop-admin (POS management) + sales (reports)
+  CHEF: 'chef',                 // BOM/recipe authoring + production orders
   COSTING: 'costing',
   PRODUCTION: 'production',
   // Dispatch / pick-and-pack fulfilment (distinct from DISPATCH which is BC order scanning)
@@ -17,17 +19,19 @@ export const ROLES = {
   LOADER: 'loader',
 };
 
-export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST];
+export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.SALES_ADMIN];
 export const ORDER_ROLES = [ROLES.ADMIN, ROLES.DISPATCH];
 export const INVOICE_ROLES = [ROLES.ADMIN, ROLES.SECURITY];
 export const ADMIN_ROLES = [ROLES.ADMIN];
 export const FINANCE_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.ANALYST];
-export const POS_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SHOP];
+export const POS_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.SHOP, ROLES.CHEF];
 export const COSTING_ROLES = [ROLES.ADMIN, ROLES.COSTING];
 export const PRODUCTION_ROLES = [ROLES.ADMIN, ROLES.PRODUCTION, ROLES.ANALYST];
+// Production-order module: chef authors BOMs + runs production orders; managers oversee.
+export const PRODUCTION_ORDER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.CHEF];
 // Manager-level POS actions: transfers, portioning, write-offs, master-data sync.
 // Shop-admin sees POS setup but NOT global admin areas (users, SMTP, finance, etc.)
-export const POS_MANAGER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN];
+export const POS_MANAGER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN];
 
 // ── Dispatch / pick-and-pack fulfilment ─────────────────────────────────────
 // Module access (any dispatch role) + per-stage guards.

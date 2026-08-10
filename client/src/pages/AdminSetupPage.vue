@@ -1551,6 +1551,8 @@ const roleOptions = [
   { label: 'Security', value: 'security' },
   { label: 'Shop',     value: 'shop' },
   { label: 'Shop Admin', value: 'shop-admin' },
+  { label: 'Sales Admin', value: 'sales-admin' },
+  { label: 'Chef',     value: 'chef' },
   { label: 'Costing',  value: 'costing' },
   { label: 'Dispatch Registry',   value: 'dispatch-registry' },
   { label: 'Dispatch Supervisor', value: 'dispatch-supervisor' },
