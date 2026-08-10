@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, ROLES } from '@/lib/access.js'
 import { canAccessFinance, FINANCE_ROLE } from '@/lib/financeAccess.js'
-import { canAccessPos, POS_ROLE, SHOP_ADMIN_ROLE } from '@/lib/posAccess.js'
+import { canAccessPos, POS_ROLE, SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, CHEF_ROLE } from '@/lib/posAccess.js'
 import { canAccessCosting, COSTING_ROLE } from '@/lib/costingAccess.js'
 import { canAccessDispatch, canDispatchAssign } from '@/lib/dispatchAccess.js'
 
@@ -52,6 +52,7 @@ const routes = [
       { path: 'pos/coupons',        name: 'PosCoupons',    component: () => import('@/pages/CouponsPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/mpesa-matching', name: 'MpesaMatching', component: () => import('@/pages/MpesaMatchingPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/sync',           name: 'SyncCenter',    component: () => import('@/pages/SyncCenterPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'pos/production',      name: 'Production',     component: () => import('@/pages/ProductionPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, CHEF_ROLE] } },
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },

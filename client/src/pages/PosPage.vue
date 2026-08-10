@@ -72,7 +72,7 @@
           <span v-else-if="myShop" class="order-shop-badge">{{ myShop.Name }}</span>
         </div>
         <span v-if="orderNo" class="order-no">{{ orderNo }}</span>
-        <Button icon="pi pi-cog" text v-tooltip="'Make to stock (from recipe)'" @click="openMake" />
+        <!-- Make-to-stock moved to the dedicated Production module (sidebar → Production). -->
         <Button icon="pi pi-list" text v-tooltip="'Price list'" @click="priceListVisible = true" />
         <Button icon="pi pi-trash" text severity="danger" v-tooltip="'Clear order'" @click="clearOrder" :disabled="!lines.length" />
       </div>

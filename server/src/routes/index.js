@@ -27,8 +27,9 @@ import * as productionCtrl from '../controllers/productionController.js';
 import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES,
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
+import * as posProdCtrl from '../controllers/posProductionController.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -153,10 +154,21 @@ router.delete('/mgmt/templates/:templateId/measures/:measureId', ...adminOnly, m
 // ── POS terminal ─────────────────────────────────────────────────────────────
 const canPos    = [authMiddleware, requireRole(...POS_ROLES)];
 const canManage = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
+const canProdOrder = [authMiddleware, requireRole(...PRODUCTION_ORDER_ROLES)];
 router.get( '/pos/items',                          ...canPos, posCtrl.getItems);
 router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
 router.get( '/pos/my-shop',                        ...canPos, posCtrl.getMyShop);
 router.get( '/pos/my-shops',                       ...canPos, posCtrl.getMyShops);
+
+// ── Production orders (build finished items from BOMs) ───────────────────────
+router.get(  '/pos/production/makeable',           ...canProdOrder, posProdCtrl.listMakeable);
+router.get(  '/pos/production/orders',             ...canProdOrder, posProdCtrl.listOrders);
+router.post( '/pos/production/orders',             ...canProdOrder, posProdCtrl.createOrder);
+router.get(  '/pos/production/orders/:id',         ...canProdOrder, posProdCtrl.getOrder);
+router.put(  '/pos/production/orders/:id/lines',   ...canProdOrder, posProdCtrl.setLines);
+router.patch('/pos/production/orders/:id',         ...canProdOrder, posProdCtrl.updateHeader);
+router.post( '/pos/production/orders/:id/post',    ...canProdOrder, posProdCtrl.postOrder);
+router.post( '/pos/production/orders/:id/cancel',  ...canProdOrder, posProdCtrl.cancelOrder);
 router.get( '/pos/contacts',                       ...canPos, posCtrl.listContacts);
 router.post('/pos/contacts',                       ...canPos, posCtrl.createContact);
 router.get( '/pos/walk-in',                        ...canPos, posCtrl.getMyWalkIn);

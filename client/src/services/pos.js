@@ -313,3 +313,15 @@ export const posSetupApi = {
   getBranding:  ()      => api.get('/pos/setup/branding'),
   saveBranding: (body)  => api.put('/pos/setup/branding', body),
 }
+
+// ── Production orders (build finished items from BOMs) ─────────────────────────
+export const posProdApi = {
+  makeable:    ()             => api.get('/pos/production/makeable'),
+  listOrders:  ()             => api.get('/pos/production/orders'),
+  getOrder:    (id)           => api.get(`/pos/production/orders/${id}`),
+  createOrder: (body)         => api.post('/pos/production/orders', body),
+  setLines:    (id, lines)    => api.put(`/pos/production/orders/${id}/lines`, { lines }),
+  updateHeader:(id, body)     => api.patch(`/pos/production/orders/${id}`, body),
+  postOrder:   (id)           => api.post(`/pos/production/orders/${id}/post`),
+  cancelOrder: (id)           => api.post(`/pos/production/orders/${id}/cancel`),
+}
