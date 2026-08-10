@@ -1087,6 +1087,8 @@ GROUP BY [G_L Account No_]</pre>
                 <div class="builder-checks">
                   <Checkbox v-model="posItemForm.isActive" binary input-id="pos-item-active" />
                   <label for="pos-item-active">Active</label>
+                  <Checkbox v-model="posItemForm.isService" binary input-id="pos-item-service" style="margin-left:12px" />
+                  <label for="pos-item-service" v-tooltip.bottom="'Service/overhead item (e.g. consumables) — costed on production but never stock-adjusted'">Service (no inventory)</label>
                 </div>
               </div>
               <div class="item-photo-row" style="display:flex;align-items:center;gap:10px;margin-top:8px">
@@ -2286,12 +2288,12 @@ async function deletePosCategory(d) {
 // items
 const editingPosItem  = ref(false)
 const savingPosItem   = ref(false)
-const posItemForm     = ref({ itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0,
+const posItemForm     = ref({ itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, isService: false, sortOrder: 0,
                               etimsItemCode: '', etimsItemClassCode: '', taxType: '', unitOfMeasure: '', imageUrl: '' })
 
-function newPosItem()  { posItemForm.value = { itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, sortOrder: 0,
+function newPosItem()  { posItemForm.value = { itemId: null, itemNo: '', description: '', categoryCode: '', unitPrice: 0, barcode: '', isActive: true, isService: false, sortOrder: 0,
                                                etimsItemCode: '', etimsItemClassCode: '', taxType: '', unitOfMeasure: '', imageUrl: '' }; editingPosItem.value = true }
-function editPosItem(d){ posItemForm.value = { itemId: d.ItemId, itemNo: d.ItemNo, description: d.Description, categoryCode: d.CategoryCode || '', unitPrice: Number(d.UnitPrice||0), barcode: d.Barcode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder,
+function editPosItem(d){ posItemForm.value = { itemId: d.ItemId, itemNo: d.ItemNo, description: d.Description, categoryCode: d.CategoryCode || '', unitPrice: Number(d.UnitPrice||0), barcode: d.Barcode||'', isActive: Boolean(d.IsActive), isService: Boolean(d.IsService), sortOrder: d.SortOrder,
                                                etimsItemCode: d.EtimsItemCode || '', etimsItemClassCode: d.EtimsItemClassCode || '', taxType: d.TaxType || '', unitOfMeasure: d.UnitOfMeasure || '', imageUrl: d.ImageUrl || '' }; editingPosItem.value = true }
 
 async function savePosItem() {

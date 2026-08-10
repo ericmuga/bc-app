@@ -102,7 +102,8 @@ export async function listPosItems(opts = {}) {
   const cols = `[ItemId],[ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],
            [ImageUrl],[IsActive],[SortOrder],[CreatedAt],[UpdatedAt],
            [EtimsItemCode],[EtimsItemClassCode],[TaxType],[UnitOfMeasure],
-           [VatPostingGroup],[VatPercent],[PackagingUnit],[QuantityUnit]`;
+           [VatPostingGroup],[VatPercent],[PackagingUnit],[QuantityUnit],
+           ISNULL([IsService],0) AS IsService`;
   const req = pool.request();
   let where = '';
   if (opts.q) {
@@ -250,8 +251,9 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null } = {
 }
 
 export async function savePosItem({ itemId, itemNo, description, categoryCode, unitPrice, barcode, imageUrl, isActive = true, sortOrder = 0,
-                                    etimsItemCode = null, etimsItemClassCode = null, taxType = null, unitOfMeasure = null }) {
+                                    etimsItemCode = null, etimsItemClassCode = null, taxType = null, unitOfMeasure = null, isService = false }) {
   const pool = await appPool();
+  const hasSvc = await columnExists(pool, 'PosItem', 'IsService');
   const req = pool.request()
     .input('itemNo',             sql.NVarChar(30),   str(itemNo, 30).toUpperCase())
     .input('description',        sql.NVarChar(200),  str(description))
@@ -264,7 +266,8 @@ export async function savePosItem({ itemId, itemNo, description, categoryCode, u
     .input('etimsItemCode',      sql.NVarChar(50),   str(etimsItemCode, 50) || null)
     .input('etimsItemClassCode', sql.NVarChar(50),   str(etimsItemClassCode, 50) || null)
     .input('taxType',            sql.NVarChar(10),   str(taxType, 10) || null)
-    .input('unitOfMeasure',      sql.NVarChar(20),   str(unitOfMeasure, 20) || null);
+    .input('unitOfMeasure',      sql.NVarChar(20),   str(unitOfMeasure, 20) || null)
+    .input('isService',          sql.Bit,            bool(isService) ? 1 : 0);
 
   if (itemId) {
     req.input('itemId', sql.UniqueIdentifier, itemId);
@@ -275,6 +278,7 @@ export async function savePosItem({ itemId, itemNo, description, categoryCode, u
           [IsActive]=@isActive,[SortOrder]=@sortOrder,
           [EtimsItemCode]=@etimsItemCode,[EtimsItemClassCode]=@etimsItemClassCode,
           [TaxType]=@taxType,[UnitOfMeasure]=@unitOfMeasure,
+          ${hasSvc ? '[IsService]=@isService,' : ''}
           [UpdatedAt]=GETUTCDATE()
       WHERE [ItemId]=@itemId
     `);
@@ -282,10 +286,10 @@ export async function savePosItem({ itemId, itemNo, description, categoryCode, u
   }
   const result = await req.query(`
     INSERT INTO [dbo].[PosItem]([ItemNo],[Description],[CategoryCode],[UnitPrice],[Barcode],[ImageUrl],[IsActive],[SortOrder],
-                                [EtimsItemCode],[EtimsItemClassCode],[TaxType],[UnitOfMeasure])
+                                [EtimsItemCode],[EtimsItemClassCode],[TaxType],[UnitOfMeasure]${hasSvc ? ',[IsService]' : ''})
     OUTPUT INSERTED.[ItemId]
     VALUES(@itemNo,@description,@categoryCode,@unitPrice,@barcode,@imageUrl,@isActive,@sortOrder,
-           @etimsItemCode,@etimsItemClassCode,@taxType,@unitOfMeasure)
+           @etimsItemCode,@etimsItemClassCode,@taxType,@unitOfMeasure${hasSvc ? ',@isService' : ''})
   `);
   return result.recordset[0].ItemId;
 }

@@ -324,4 +324,6 @@ export const posProdApi = {
   updateHeader:(id, body)     => api.patch(`/pos/production/orders/${id}`, body),
   postOrder:   (id)           => api.post(`/pos/production/orders/${id}/post`),
   cancelOrder: (id)           => api.post(`/pos/production/orders/${id}/cancel`),
+  pushBc:      (id)           => api.post(`/pos/production/orders/${id}/push-bc`),
+  pushAllBc:   ()             => api.post('/pos/production/push-bc'),
 }

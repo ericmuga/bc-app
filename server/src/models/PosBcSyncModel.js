@@ -13,6 +13,7 @@ import { db as appDb, sql } from '../db/pool.js';
 import { bcDb, bcSql } from '../db/bcPool.js';
 import { bcTable } from '../services/bcTables.js';
 import { getStockRequest } from './PosStockModel.js';
+import { getProductionOrder, listProductionOrders } from './PosProductionModel.js';
 import logger from '../services/logger.js';
 
 const toSuom = (u) => (/^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(u || '').trim().toUpperCase()) ? 'KG' : 'PC');
@@ -355,6 +356,118 @@ export async function pushAllImportedOrders({ shopCode }) {
   }
   logger.info('pushAllImportedOrders', { shopCode, requests: r.recordset.length, inserted, skipped });
   return { shopCode, requests: r.recordset.length, inserted, skipped, results };
+}
+
+// ── Production orders → BC WMS tables ────────────────────────────────────────
+// Header = the OUTPUT (Line No_ 1000). Journal = output (Line 1000, EntryType 0)
+// + components (Line 2000.., EntryType 1). Keys: header on Production Order No_,
+// journal on (Production Order No_, Line No_). Status always 0; we only INSERT
+// where the key is absent, so rows BC has already processed (Status>0) are never
+// touched. Service/overhead lines are excluded (not real inventory). Decimal(38,4)
+// to avoid the driver's 38,20 overflow; [Date Time] is a real datetime.
+export async function pushProductionOrder({ prodOrderId }) {
+  const order = await getProductionOrder(prodOrderId);
+  if (!order) throw new Error('Production order not found');
+  if (order.status !== 'posted') throw new Error('Only posted production orders can be pushed to BC');
+  const company = order.company || (await resolveShopCompany(order.shopCode)).company;
+  const loc  = String(order.locationCode || '').slice(0, 10);
+  const user = String(order.postedBy || order.createdBy || 'POS').slice(0, 50);
+  const when = order.postedAt ? new Date(order.postedAt) : new Date();
+  const poNo = order.orderNo;
+
+  const hdrTable = bcTable(company, 'WMSProduction Order Header', { ext: true });
+  const jnlTable = bcTable(company, 'WMS Production Journal Line', { ext: true });
+  const pool = await bcDb.getPool();
+
+  // Journal rows: 1000 = output (EntryType 0); components 2000,2010,… (EntryType 1).
+  const rows = [{ lineNo: 1000, itemNo: order.outputItemNo, qty: Number(order.outputQty || 0), uom: order.outputUom, entryType: 0 }];
+  let ln = 2000;
+  for (const l of order.lines) {
+    if (l.lineType !== 'component' || l.isService) continue;
+    const q = Number(l.actualQty || 0);
+    if (q <= 0) continue;
+    rows.push({ lineNo: ln, itemNo: l.itemNo, qty: q, uom: l.uom, entryType: 1 });
+    ln += 10;
+  }
+
+  let hdrInserted = 0, jnlInserted = 0, jnlSkipped = 0;
+
+  const hchk = await pool.request().input('po', bcSql.NVarChar(50), poNo)
+    .query(`SELECT 1 FROM ${hdrTable} WHERE [Production Order No_]=@po`);
+  if (!hchk.recordset.length) {
+    await pool.request()
+      .input('po',   bcSql.NVarChar(50), poNo)
+      .input('item', bcSql.NVarChar(20), String(order.outputItemNo).slice(0, 20))
+      .input('qty',  bcSql.Decimal(38, 4), Number(order.outputQty || 0))
+      .input('ext',  bcSql.NVarChar(50), poNo)
+      .input('uom',  bcSql.NVarChar(10), String(order.outputUom || '').slice(0, 10))
+      .input('loc',  bcSql.NVarChar(10), loc)
+      .input('bin',  bcSql.NVarChar(20), '')
+      .input('user', bcSql.NVarChar(50), user)
+      .input('line', bcSql.Int, 1000)
+      .input('rt',   bcSql.NVarChar(50), '')
+      .input('dt',   bcSql.DateTime, when)
+      .input('st',   bcSql.Int, 0)
+      .query(`INSERT INTO ${hdrTable}
+        ([Production Order No_],[Item No_],[Quantity],[External Document No_],[UOM],[Location Code],[Bin Code],[User],[Line No_],[Routing],[Date Time],[Status])
+        VALUES (@po,@item,@qty,@ext,@uom,@loc,@bin,@user,@line,@rt,@dt,@st)`);
+    hdrInserted = 1;
+  }
+
+  const existing = await pool.request().input('po', bcSql.NVarChar(50), poNo)
+    .query(`SELECT [Line No_] AS L FROM ${jnlTable} WHERE [Production Order No_]=@po`);
+  const seen = new Set(existing.recordset.map((r) => Number(r.L)));
+  for (const r of rows) {
+    if (seen.has(r.lineNo)) { jnlSkipped++; continue; }
+    await pool.request()
+      .input('po',   bcSql.NVarChar(50), poNo)
+      .input('line', bcSql.Int, r.lineNo)
+      .input('item', bcSql.NVarChar(20), String(r.itemNo).slice(0, 20))
+      .input('qty',  bcSql.Decimal(38, 4), Number(r.qty || 0))
+      .input('uom',  bcSql.NVarChar(10), String(r.uom || '').slice(0, 10))
+      .input('loc',  bcSql.NVarChar(10), loc)
+      .input('bin',  bcSql.NVarChar(20), '')
+      .input('et',   bcSql.Int, r.entryType)
+      .input('dt',   bcSql.DateTime, when)
+      .input('user', bcSql.NVarChar(50), user)
+      .input('st',   bcSql.Int, 0)
+      .query(`INSERT INTO ${jnlTable}
+        ([Production Order No_],[Line No_],[Item No_],[Quantity],[UOM],[Location Code],[Bin Code],[EntryType],[Date Time],[User],[Status])
+        VALUES (@po,@line,@item,@qty,@uom,@loc,@bin,@et,@dt,@user,@st)`);
+    jnlInserted++;
+  }
+
+  try {
+    const ap = await appDb.getPool();
+    await ap.request().input('id', sql.UniqueIdentifier, prodOrderId).input('bc', sql.NVarChar(50), poNo)
+      .query(`UPDATE [dbo].[PosProductionOrder] SET [BcOrderNo]=@bc,[UpdatedAt]=GETUTCDATE() WHERE [ProdOrderId]=@id`);
+  } catch { /* non-fatal */ }
+
+  logger.info('pushProductionOrder', { orderNo: poNo, company, hdrInserted, jnlInserted, jnlSkipped });
+  return { orderNo: poNo, company, hdrInserted, jnlInserted, jnlSkipped, lines: rows.length };
+}
+
+export function pushProductionOrderBg(prodOrderId) {
+  return Promise.resolve()
+    .then(() => pushProductionOrder({ prodOrderId }))
+    .then((r) => logger.info('pushProductionOrder(bg) ok', { prodOrderId, jnlInserted: r.jnlInserted }))
+    .catch((e) => logger.error('pushProductionOrder(bg) failed', { prodOrderId, error: e.message }));
+}
+
+/** Bulk (re)push of a shop's POSTED production orders (idempotent). */
+export async function pushAllProductionOrders({ shopCode } = {}) {
+  const posted = (await listProductionOrders({ shopCode })).filter((o) => o.status === 'posted');
+  let hdrInserted = 0, jnlInserted = 0;
+  const results = [];
+  for (const o of posted) {
+    try {
+      const r = await pushProductionOrder({ prodOrderId: o.prodOrderId });
+      hdrInserted += r.hdrInserted; jnlInserted += r.jnlInserted;
+      results.push({ orderNo: o.orderNo, jnlInserted: r.jnlInserted, jnlSkipped: r.jnlSkipped });
+    } catch (e) { results.push({ orderNo: o.orderNo, error: e.message }); }
+  }
+  logger.info('pushAllProductionOrders', { shopCode, orders: posted.length, hdrInserted, jnlInserted });
+  return { orders: posted.length, hdrInserted, jnlInserted, results };
 }
 
 // ── Fire-and-forget variants ─────────────────────────────────────────────────

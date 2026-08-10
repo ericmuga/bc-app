@@ -6,6 +6,7 @@
 import * as Prod from '../models/PosProductionModel.js';
 import * as Bom  from '../models/PosBomModel.js';
 import * as Pos  from '../models/PosModel.js';
+import * as BcSync from '../models/PosBcSyncModel.js';
 import { db as appDb, sql } from '../db/pool.js';
 import logger from '../services/logger.js';
 
@@ -88,11 +89,27 @@ export async function updateHeader(req, res) {
 }
 
 export async function postOrder(req, res) {
-  try { ok(res, await Prod.postProductionOrder(req.params.id, { userId: req.user.userId, userName: req.user.userName })); }
-  catch (e) { err(res, e, 400); }
+  try {
+    const out = await Prod.postProductionOrder(req.params.id, { userId: req.user.userId, userName: req.user.userName });
+    // Fire-and-forget push to BC WMS tables (a busy BC never blocks the post).
+    if (out?.status === 'posted') BcSync.pushProductionOrderBg(req.params.id);
+    ok(res, out);
+  } catch (e) { err(res, e, 400); }
 }
 
 export async function cancelOrder(req, res) {
   try { ok(res, await Prod.cancelProductionOrder(req.params.id)); }
   catch (e) { err(res, e, 400); }
+}
+
+/** POST /pos/production/orders/:id/push-bc — (re)push one posted order to BC. */
+export async function pushOrderToBc(req, res) {
+  try { ok(res, await BcSync.pushProductionOrder({ prodOrderId: req.params.id })); }
+  catch (e) { err(res, e, 400); }
+}
+
+/** POST /pos/production/push-bc — bulk (re)push the shop's posted orders (Sync Center). */
+export async function pushAllToBc(req, res) {
+  try { ok(res, await BcSync.pushAllProductionOrders({ shopCode: await userShopCode(req) })); }
+  catch (e) { err(res, e); }
 }

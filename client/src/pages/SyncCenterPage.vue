@@ -65,6 +65,8 @@
                   :loading="busyTxn==='sales'" @click="pushSales" />
           <Button label="Push stock requests → BC" icon="pi pi-truck" severity="success" outlined
                   :loading="busyTxn==='orders'" @click="pushOrders" />
+          <Button label="Push production orders → BC" icon="pi pi-cog" severity="success" outlined
+                  :loading="busyTxn==='prod'" @click="pushProduction" />
           <Button label="Pull BC transfers/adjustments/sales" icon="pi pi-arrow-down-left" severity="info" outlined
                   :loading="busyTxn==='pull'" @click="pullLedger"
                   v-tooltip.bottom="'Import BC ledger entries not in POS (Transfer, +/- Adjustment, and non-POS Sales) as typed movements. Run before Harmonize.'" />
@@ -158,7 +160,7 @@ import Column       from 'primevue/column'
 import Message      from 'primevue/message'
 import Dialog       from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
-import { posSetupApi, posReportsApi, stockApi, setAdminShopCode } from '@/services/pos.js'
+import { posSetupApi, posReportsApi, stockApi, posProdApi, setAdminShopCode } from '@/services/pos.js'
 
 const toast = useToast()
 const error = ref('')
@@ -249,6 +251,16 @@ async function pullLedger() {
     if (data.skippedPosSales) bits.push(`${data.skippedPosSales} POS-origin sale(s) skipped`)
     txnResult.value = { label: 'Pull BC ledger', summary: `${bits.join(', ')} (entries ${data.fromEntryNo + 1}–${data.toEntryNo}, ${data.company}).` }
     toast.add({ severity: data.inserted ? 'success' : 'info', summary: 'BC ledger pulled', detail: txnResult.value.summary, life: 7000 })
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { busyTxn.value = '' }
+}
+
+async function pushProduction() {
+  busyTxn.value = 'prod'; txnResult.value = null; error.value = ''
+  try {
+    const { data } = await posProdApi.pushAllBc()
+    txnResult.value = { label: 'Push production orders', summary: `${data.orders} posted order(s): headers ${data.hdrInserted}, journal lines ${data.jnlInserted}.` }
+    toast.add({ severity: 'success', summary: 'Production pushed', detail: txnResult.value.summary, life: 6000 })
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { busyTxn.value = '' }
 }

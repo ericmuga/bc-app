@@ -131,6 +131,7 @@ export async function getProductionOrder(prodOrderId) {
     locationCode: hdr.LocationCode, outputItemNo: hdr.OutputItemNo, outputDescription: hdr.OutputDescription,
     outputUom: hdr.OutputUom, outputQty: Number(hdr.OutputQty || 0), bomId: hdr.BomId, status: hdr.Status,
     notes: hdr.Notes || '', bcOrderNo: hdr.BcOrderNo || '', postedAt: hdr.PostedAt, createdAt: hdr.CreatedAt,
+    createdBy: hdr.CreatedBy || '', postedBy: hdr.PostedBy || '',
     lines: l.recordset.map((x) => ({
       prodLineId: x.ProdLineId, lineType: x.LineType, itemNo: x.ItemNo, description: x.Description || '',
       uom: x.Uom || '', standardQty: Number(x.StandardQty || 0), actualQty: Number(x.ActualQty || 0),

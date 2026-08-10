@@ -169,6 +169,8 @@ router.put(  '/pos/production/orders/:id/lines',   ...canProdOrder, posProdCtrl.
 router.patch('/pos/production/orders/:id',         ...canProdOrder, posProdCtrl.updateHeader);
 router.post( '/pos/production/orders/:id/post',    ...canProdOrder, posProdCtrl.postOrder);
 router.post( '/pos/production/orders/:id/cancel',  ...canProdOrder, posProdCtrl.cancelOrder);
+router.post( '/pos/production/orders/:id/push-bc', ...canProdOrder, posProdCtrl.pushOrderToBc);
+router.post( '/pos/production/push-bc',            ...canProdOrder, posProdCtrl.pushAllToBc);
 router.get( '/pos/contacts',                       ...canPos, posCtrl.listContacts);
 router.post('/pos/contacts',                       ...canPos, posCtrl.createContact);
 router.get( '/pos/walk-in',                        ...canPos, posCtrl.getMyWalkIn);
