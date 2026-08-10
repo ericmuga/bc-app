@@ -1082,6 +1082,58 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[PosBomLine] OK');
 
+  // ── Production orders ────────────────────────────────────────────────────────
+  // Service/overhead items (onions, consumables) — costed on a production order but
+  // never stock-checked and never posting inventory movements.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosItem]') AND name='IsService')
+      ALTER TABLE [dbo].[PosItem] ADD [IsService] BIT NOT NULL DEFAULT 0
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosProductionOrder' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosProductionOrder] (
+      [ProdOrderId]   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [OrderNo]       NVARCHAR(30)     NOT NULL UNIQUE,
+      [ShopCode]      NVARCHAR(50)     NULL,
+      [Company]       NVARCHAR(20)     NULL,
+      [LocationCode]  NVARCHAR(20)     NULL,
+      [OutputItemNo]  NVARCHAR(30)     NOT NULL,
+      [OutputDescription] NVARCHAR(200) NULL,
+      [OutputUom]     NVARCHAR(20)     NULL,
+      [OutputQty]     DECIMAL(18,4)    NOT NULL DEFAULT 0,
+      [BomId]         UNIQUEIDENTIFIER NULL,
+      [Status]        NVARCHAR(20)     NOT NULL DEFAULT 'open',   -- open | posted | cancelled
+      [Notes]         NVARCHAR(500)    NULL,
+      [BcOrderNo]     NVARCHAR(50)     NULL,
+      [CreatedBy]     NVARCHAR(100)    NULL,
+      [PostedBy]      NVARCHAR(100)    NULL,
+      [PostedAt]      DATETIME2        NULL,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosProductionOrder] OK');
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosProductionLine' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosProductionLine] (
+      [ProdLineId]  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [ProdOrderId] UNIQUEIDENTIFIER NOT NULL,
+      [LineType]    NVARCHAR(20)     NOT NULL DEFAULT 'component', -- component | overhead
+      [ItemNo]      NVARCHAR(30)     NOT NULL,
+      [Description] NVARCHAR(200)    NULL,
+      [Uom]         NVARCHAR(20)     NULL,
+      [StandardQty] DECIMAL(18,4)    NOT NULL DEFAULT 0,   -- from BOM x output qty
+      [ActualQty]   DECIMAL(18,4)    NOT NULL DEFAULT 0,   -- editable, prefilled = standard
+      [IsService]   BIT              NOT NULL DEFAULT 0,   -- overhead / non-inventory
+      [UnitCost]    DECIMAL(18,4)    NULL,
+      [SortOrder]   INT              NOT NULL DEFAULT 0,
+      CONSTRAINT [FK_PosProductionLine] FOREIGN KEY ([ProdOrderId])
+        REFERENCES [dbo].[PosProductionOrder]([ProdOrderId]) ON DELETE CASCADE
+    )
+  `);
+  console.log('  [dbo].[PosProductionLine] OK');
+
   // ── [dbo].[CustPostingGroupMap] ─────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='CustPostingGroupMap' AND schema_id=SCHEMA_ID('dbo'))
