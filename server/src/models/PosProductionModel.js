@@ -118,6 +118,17 @@ export async function createProductionOrder({ shopCode, company = null, location
   return getProductionOrder(prodOrderId);
 }
 
+/** Service/overhead items only (IsService=1) — for the production overhead picker. */
+export async function listServiceItems() {
+  const pool = await appPool();
+  if (!(await columnExists(pool, 'PosItem', 'IsService'))) return [];
+  const r = await pool.request().query(`
+    SELECT [ItemNo], [Description], [UnitOfMeasure] AS Uom, [UnitPrice] AS UnitPrice
+    FROM [dbo].[PosItem] WHERE [IsService]=1 AND [IsActive]=1
+    ORDER BY [Description], [ItemNo]`);
+  return r.recordset.map((x) => ({ itemNo: x.ItemNo, description: x.Description || x.ItemNo, uom: x.Uom || '', unitPrice: Number(x.UnitPrice || 0) }));
+}
+
 export async function getProductionOrder(prodOrderId) {
   const pool = await appPool();
   const h = await pool.request().input('id', sql.UniqueIdentifier, prodOrderId)

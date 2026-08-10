@@ -124,13 +124,13 @@ import DataTable   from 'primevue/datatable'
 import Column      from 'primevue/column'
 import Tag         from 'primevue/tag'
 import Message     from 'primevue/message'
-import { posProdApi, posApi } from '@/services/pos.js'
+import { posProdApi } from '@/services/pos.js'
 
 const loading  = ref(false)
 const error    = ref('')
 const orders   = ref([])
 const makeable = ref([])
-const catalogue = ref([])
+const serviceItems = ref([])
 const current  = ref(null)
 const newItem  = ref(null)
 const newQty   = ref(1)
@@ -149,7 +149,8 @@ const filters = ref({
 const editable   = computed(() => current.value?.status === 'open')
 const components = computed(() => (current.value?.lines || []).filter(l => l.lineType === 'component'))
 const overheads  = computed(() => (current.value?.lines || []).filter(l => l.lineType === 'overhead'))
-const itemOptions = computed(() => catalogue.value.map(i => ({ label: `${i.itemNo} — ${i.description}`, value: i.itemNo, item: i })))
+// Overhead picker shows ONLY service items (IsService) — never inventorable items.
+const itemOptions = computed(() => serviceItems.value.map(i => ({ label: `${i.itemNo} — ${i.description}`, value: i.itemNo, item: i })))
 
 function n(v) { return Number(v || 0).toFixed(2) }
 function fmtTime(v) { return v ? new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '' }
@@ -163,7 +164,7 @@ async function load() {
 }
 async function loadLists() {
   try { makeable.value = (await posProdApi.makeable()).data.map(m => ({ label: `${m.itemNo} — ${m.description}`, value: m.itemNo })) } catch {}
-  try { catalogue.value = (await posApi.getItems()).data.flatMap(c => c.items) } catch {}
+  try { serviceItems.value = (await posProdApi.serviceItems()).data } catch {}
 }
 
 async function createOrder() {
@@ -181,10 +182,10 @@ async function openOrder(row) {
   catch (e) { error.value = e.response?.data?.error || e.message }
 }
 
-function addOverhead(e) {
-  const it = catalogue.value.find(i => i.itemNo === ohItem.value)
+function addOverhead() {
+  const it = serviceItems.value.find(i => i.itemNo === ohItem.value)
   if (!it) return
-  current.value.lines.push({ prodLineId: null, lineType: 'overhead', itemNo: it.itemNo, description: it.description, uom: it.unitOfMeasure || '', standardQty: 0, actualQty: 1, isService: true, unitCost: it.unitPrice ?? null, sortOrder: current.value.lines.length })
+  current.value.lines.push({ prodLineId: null, lineType: 'overhead', itemNo: it.itemNo, description: it.description, uom: it.uom || '', standardQty: 0, actualQty: 1, isService: true, unitCost: it.unitPrice ?? null, sortOrder: current.value.lines.length })
   ohItem.value = null
 }
 

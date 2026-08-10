@@ -317,6 +317,7 @@ export const posSetupApi = {
 // ── Production orders (build finished items from BOMs) ─────────────────────────
 export const posProdApi = {
   makeable:    ()             => api.get('/pos/production/makeable'),
+  serviceItems:()             => api.get('/pos/production/service-items'),
   listOrders:  ()             => api.get('/pos/production/orders'),
   getOrder:    (id)           => api.get(`/pos/production/orders/${id}`),
   createOrder: (body)         => api.post('/pos/production/orders', body),

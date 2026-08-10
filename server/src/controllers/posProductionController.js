@@ -48,6 +48,11 @@ export async function listMakeable(_req, res) {
   } catch (e) { err(res, e); }
 }
 
+/** GET /pos/production/service-items — service/overhead items for the overhead picker. */
+export async function listServiceItems(_req, res) {
+  try { ok(res, await Prod.listServiceItems()); } catch (e) { err(res, e); }
+}
+
 export async function listOrders(req, res) {
   try { ok(res, await Prod.listProductionOrders({ shopCode: await userShopCode(req) })); }
   catch (e) { err(res, e); }

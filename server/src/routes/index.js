@@ -162,6 +162,7 @@ router.get( '/pos/my-shops',                       ...canPos, posCtrl.getMyShops
 
 // ── Production orders (build finished items from BOMs) ───────────────────────
 router.get(  '/pos/production/makeable',           ...canProdOrder, posProdCtrl.listMakeable);
+router.get(  '/pos/production/service-items',      ...canProdOrder, posProdCtrl.listServiceItems);
 router.get(  '/pos/production/orders',             ...canProdOrder, posProdCtrl.listOrders);
 router.post( '/pos/production/orders',             ...canProdOrder, posProdCtrl.createOrder);
 router.get(  '/pos/production/orders/:id',         ...canProdOrder, posProdCtrl.getOrder);
