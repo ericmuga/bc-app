@@ -298,6 +298,8 @@ const canDispLoad     = computed(() => canDispatchLoad(role.value))
 const roleOptions = [
   { label: '(actual: admin)', value: '' },
   { label: 'shop-admin',      value: 'shop-admin' },
+  { label: 'sales-admin',     value: 'sales-admin' },
+  { label: 'chef',            value: 'chef' },
   { label: 'shop (cashier)',  value: 'shop' },
   { label: 'dispatch',        value: 'dispatch' },
   { label: 'security',        value: 'security' },
