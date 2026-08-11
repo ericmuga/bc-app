@@ -60,7 +60,7 @@
               <template #body="{ data }">
                 <Select v-model="data.shopCode" :options="posShopOptions" option-label="label" option-value="value"
                   placeholder="— none —" show-clear fluid
-                  :disabled="!['shop','admin'].includes(data.role)" />
+                  :disabled="!['shop','shop-admin','sales-admin','chef','admin'].includes(data.role)" />
               </template>
               <template #filter="{ filterModel, filterCallback }">
                 <Select v-model="filterModel.value" :options="posShopOptions" option-label="label" option-value="value"

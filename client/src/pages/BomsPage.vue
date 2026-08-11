@@ -14,9 +14,9 @@
 
     <Message v-if="error" severity="error" :closable="true" @close="error=''" class="mb-3">{{ error }}</Message>
 
-    <!-- Editor -->
-    <section v-if="editing" class="card">
-      <h3><i class="pi pi-pencil" /> {{ form.itemId || form._existing ? 'Edit recipe' : 'New recipe' }}</h3>
+    <!-- Editor modal -->
+    <Dialog v-model:visible="editing" :header="form._existing ? 'Edit recipe' : 'New recipe'" :modal="true"
+            :style="{ width:'820px' }" class="bom-dialog">
       <div class="new-row">
         <div class="fld" style="flex:1;min-width:260px">
           <label>Finished item</label>
@@ -46,11 +46,11 @@
         </tbody>
       </table>
 
-      <div class="editor-actions">
-        <Button label="Save recipe" icon="pi pi-save" :loading="saving" :disabled="!form.itemNo || !form.lines.length" @click="save" />
+      <template #footer>
         <Button label="Cancel" text @click="editing=false" />
-      </div>
-    </section>
+        <Button label="Save recipe" icon="pi pi-save" :loading="saving" :disabled="!form.itemNo || !form.lines.length" @click="save" />
+      </template>
+    </Dialog>
 
     <!-- List -->
     <section class="card">
@@ -94,6 +94,7 @@ import Checkbox    from 'primevue/checkbox'
 import DataTable   from 'primevue/datatable'
 import Column      from 'primevue/column'
 import Message     from 'primevue/message'
+import Dialog      from 'primevue/dialog'
 import { posApi, posProdApi } from '@/services/pos.js'
 
 const loading = ref(false)
@@ -203,4 +204,26 @@ onMounted(async () => { await loadItems(); await load() })
 .bom-page :deep(.p-datatable-tbody > tr > td) { background:#1f2937 !important; color:#e5e7eb !important; border-color:#374151 !important; }
 .bom-page :deep(.p-datatable-tbody > tr:hover > td) { background:#374151 !important; }
 .bom-page :deep(.p-paginator) { background:#1f2937 !important; color:#e5e7eb !important; }
+</style>
+
+<!-- Unscoped: the recipe editor dialog teleports to <body>. Light theme, black text. -->
+<style>
+.bom-dialog.p-dialog { background:#ffffff; border:1px solid #d0d5dd; }
+.bom-dialog.p-dialog .p-dialog-header { background:#f1f5f9 !important; color:#111827 !important; border-bottom:1px solid #e2e8f0; }
+.bom-dialog.p-dialog .p-dialog-title { font-weight:700; color:#111827 !important; }
+.bom-dialog.p-dialog .p-dialog-content { background:#ffffff !important; color:#111827 !important; }
+.bom-dialog.p-dialog .p-dialog-footer { background:#f8fafc !important; border-top:1px solid #e2e8f0; }
+.bom-dialog .new-row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+.bom-dialog .fld { display:flex; flex-direction:column; gap:4px; }
+.bom-dialog .fld label { font-size:12px; color:#475569; }
+.bom-dialog .chk { display:flex; align-items:center; gap:6px; font-size:13px; color:#111827; }
+.bom-dialog .sub { font-size:13px; color:#334155; margin:12px 0 6px; }
+.bom-dialog .sub-row { display:flex; justify-content:space-between; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+.bom-dialog .text-muted { color:#64748b; }
+.bom-dialog .lines { width:100%; border-collapse:collapse; font-size:13px; }
+.bom-dialog .lines th, .bom-dialog .lines td { border-bottom:1px solid #e2e8f0; padding:5px 8px; text-align:left; color:#111827; }
+.bom-dialog .lines th { color:#111827; background:#f1f5f9; font-weight:700; }
+.bom-dialog .lines .r { text-align:right; }
+.bom-dialog .p-inputtext, .bom-dialog .p-inputnumber-input { background:#ffffff !important; color:#111827 !important; border-color:#cbd5e1 !important; }
+body > .p-dialog-mask:has(.bom-dialog) { background:rgba(15,23,42,0.55); }
 </style>
