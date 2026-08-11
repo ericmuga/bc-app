@@ -36,9 +36,13 @@ async function itemMeta(pool, itemNos) {
   if (!uniq.length) return out;
   const req = pool.request();
   uniq.forEach((n, i) => req.input(`i${i}`, sql.NVarChar(30), n));
-  const hasSvc = await columnExists(pool, 'PosItem', 'IsService');
+  const hasSvc  = await columnExists(pool, 'PosItem', 'IsService');
+  const hasBase = await columnExists(pool, 'PosItem', 'BaseUnitOfMeasure');
+  // BOM / production quantities are in BASE units (the inventory ledger is), so
+  // report the base UoM (fall back to the sales UoM when none set).
+  const uomExpr = hasBase ? `COALESCE(NULLIF([BaseUnitOfMeasure],''),[UnitOfMeasure])` : `[UnitOfMeasure]`;
   const r = await req.query(`
-    SELECT UPPER([ItemNo]) AS ItemNo, [Description], [UnitOfMeasure] AS Uom, [UnitPrice] AS UnitPrice
+    SELECT UPPER([ItemNo]) AS ItemNo, [Description], ${uomExpr} AS Uom, [UnitPrice] AS UnitPrice
            ${hasSvc ? ', [IsService]' : ', CAST(0 AS BIT) AS IsService'}
     FROM [dbo].[PosItem] WHERE UPPER([ItemNo]) IN (${uniq.map((_, i) => `@i${i}`).join(',')})`);
   for (const x of r.recordset) out.set(x.ItemNo, { description: x.Description || '', uom: x.Uom || '', unitPrice: Number(x.UnitPrice || 0), isService: !!x.IsService });
@@ -121,9 +125,12 @@ export async function createProductionOrder({ shopCode, company = null, location
 /** All active POS items (itemNo, description, uom, isService) — for BOM/production pickers. */
 export async function listCatalogueItems() {
   const pool = await appPool();
-  const hasSvc = await columnExists(pool, 'PosItem', 'IsService');
+  const hasSvc  = await columnExists(pool, 'PosItem', 'IsService');
+  const hasBase = await columnExists(pool, 'PosItem', 'BaseUnitOfMeasure');
+  // Report the BASE unit of measure for BOM/production (falls back to sales UoM).
+  const uomExpr = hasBase ? `COALESCE(NULLIF([BaseUnitOfMeasure],''),[UnitOfMeasure])` : `[UnitOfMeasure]`;
   const r = await pool.request().query(`
-    SELECT [ItemNo], [Description], [UnitOfMeasure] AS Uom${hasSvc ? ', ISNULL([IsService],0) AS IsService' : ', CAST(0 AS BIT) AS IsService'}
+    SELECT [ItemNo], [Description], ${uomExpr} AS Uom${hasSvc ? ', ISNULL([IsService],0) AS IsService' : ', CAST(0 AS BIT) AS IsService'}
     FROM [dbo].[PosItem] WHERE [IsActive]=1 ORDER BY [Description],[ItemNo]`);
   return r.recordset.map((x) => ({ itemNo: x.ItemNo, description: x.Description || x.ItemNo, uom: x.Uom || '', isService: !!x.IsService }));
 }
