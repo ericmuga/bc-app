@@ -321,6 +321,7 @@ export const posSetupApi = {
 export const posProdApi = {
   makeable:    ()             => api.get('/pos/production/makeable'),
   serviceItems:()             => api.get('/pos/production/service-items'),
+  items:       ()             => api.get('/pos/production/items'),
   listOrders:  ()             => api.get('/pos/production/orders'),
   getOrder:    (id)           => api.get(`/pos/production/orders/${id}`),
   createOrder: (body)         => api.post('/pos/production/orders', body),

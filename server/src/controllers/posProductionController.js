@@ -53,6 +53,11 @@ export async function listServiceItems(_req, res) {
   try { ok(res, await Prod.listServiceItems()); } catch (e) { err(res, e); }
 }
 
+/** GET /pos/production/items — all active items (for BOM + production pickers). */
+export async function listItems(_req, res) {
+  try { ok(res, await Prod.listCatalogueItems()); } catch (e) { err(res, e); }
+}
+
 export async function listOrders(req, res) {
   try { ok(res, await Prod.listProductionOrders({ shopCode: await userShopCode(req) })); }
   catch (e) { err(res, e); }

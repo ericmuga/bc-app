@@ -24,11 +24,14 @@ export const ORDER_ROLES = [ROLES.ADMIN, ROLES.DISPATCH];
 export const INVOICE_ROLES = [ROLES.ADMIN, ROLES.SECURITY];
 export const ADMIN_ROLES = [ROLES.ADMIN];
 export const FINANCE_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.ANALYST];
-export const POS_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.SHOP, ROLES.CHEF];
+export const POS_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.SHOP];
 export const COSTING_ROLES = [ROLES.ADMIN, ROLES.COSTING];
 export const PRODUCTION_ROLES = [ROLES.ADMIN, ROLES.PRODUCTION, ROLES.ANALYST];
-// Production-order module: chef authors BOMs + runs production orders; managers oversee.
-export const PRODUCTION_ORDER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.CHEF];
+// Production orders + Recipes (BOM) sidebar module: admin, sales-admin, chef.
+// Chef is limited to exactly these two functions.
+export const PRODUCTION_ORDER_ROLES = [ROLES.ADMIN, ROLES.SALES_ADMIN, ROLES.CHEF];
+// BOM/recipe endpoints also stay available to shop-admin (POS Setup accordion).
+export const BOM_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.CHEF];
 // Manager-level POS actions: transfers, portioning, write-offs, master-data sync.
 // Shop-admin sees POS setup but NOT global admin areas (users, SMTP, finance, etc.)
 export const POS_MANAGER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN];

@@ -27,7 +27,7 @@ import * as productionCtrl from '../controllers/productionController.js';
 import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES,
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 import * as posProdCtrl from '../controllers/posProductionController.js';
 
@@ -155,6 +155,7 @@ router.delete('/mgmt/templates/:templateId/measures/:measureId', ...adminOnly, m
 const canPos    = [authMiddleware, requireRole(...POS_ROLES)];
 const canManage = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
 const canProdOrder = [authMiddleware, requireRole(...PRODUCTION_ORDER_ROLES)];
+const canBom       = [authMiddleware, requireRole(...BOM_ROLES)];
 router.get( '/pos/items',                          ...canPos, posCtrl.getItems);
 router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
 router.get( '/pos/my-shop',                        ...canPos, posCtrl.getMyShop);
@@ -163,6 +164,7 @@ router.get( '/pos/my-shops',                       ...canPos, posCtrl.getMyShops
 // ── Production orders (build finished items from BOMs) ───────────────────────
 router.get(  '/pos/production/makeable',           ...canProdOrder, posProdCtrl.listMakeable);
 router.get(  '/pos/production/service-items',      ...canProdOrder, posProdCtrl.listServiceItems);
+router.get(  '/pos/production/items',              ...canBom, posProdCtrl.listItems);
 router.get(  '/pos/production/orders',             ...canProdOrder, posProdCtrl.listOrders);
 router.post( '/pos/production/orders',             ...canProdOrder, posProdCtrl.createOrder);
 router.get(  '/pos/production/orders/:id',         ...canProdOrder, posProdCtrl.getOrder);
@@ -222,10 +224,10 @@ router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posSto
 router.get(  '/pos/stock-request-lines',                       ...canPos, posStockCtrl.listRequestLines);
 
 // ── POS make-to-order: BOM (recipes) + production plan/produce ──────────────
-router.get(  '/pos/boms',                                      ...canManage, posCtrl.listBoms);
-router.get(  '/pos/boms/:itemNo',                              ...canManage, posCtrl.getBom);
-router.post( '/pos/boms',                                      ...canManage, posCtrl.saveBom);
-router.delete('/pos/boms/:itemNo',                             ...canManage, posCtrl.deleteBom);
+router.get(  '/pos/boms',                                      ...canBom, posCtrl.listBoms);
+router.get(  '/pos/boms/:itemNo',                              ...canBom, posCtrl.getBom);
+router.post( '/pos/boms',                                      ...canBom, posCtrl.saveBom);
+router.delete('/pos/boms/:itemNo',                             ...canBom, posCtrl.deleteBom);
 router.get(  '/pos/makeable-items',                            ...canPos, posCtrl.listMakeable);
 router.get(  '/pos/setup/branding',                            ...canManage, posCtrl.getBranding);
 router.put(  '/pos/setup/branding',                            ...canManage, posCtrl.saveBranding);

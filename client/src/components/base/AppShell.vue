@@ -165,10 +165,6 @@
             <i class="pi pi-ticket" />
             <span>Coupons</span>
           </RouterLink>
-          <RouterLink v-if="canViewProduction" to="/pos/production" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-cog" />
-            <span>Production</span>
-          </RouterLink>
           <RouterLink v-if="isAdmin" to="/pos/sync" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-sync" />
             <span>Sync Center</span>
@@ -184,6 +180,19 @@
           <RouterLink to="/pos/help" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-book" />
             <span>Documentation</span>
+          </RouterLink>
+        </details>
+
+        <!-- Production (Recipes + Production Orders) — admin, sales-admin, chef -->
+        <details v-if="canViewProduction" class="nav-section" :open="navOpen.production" @toggle="onNavToggle('production', $event)">
+          <summary class="section-label">Production</summary>
+          <RouterLink to="/pos/recipes" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-book" />
+            <span>Recipes (BOM)</span>
+          </RouterLink>
+          <RouterLink to="/pos/production" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-cog" />
+            <span>Production Orders</span>
           </RouterLink>
         </details>
 
@@ -258,7 +267,7 @@ window.addEventListener('resize', () => {
 
 // Sidebar section open/closed state (persisted per browser)
 const NAV_KEY = 'bcapp.navOpen'
-const navOpenDefault = { orders: true, invoices: true, analytics: true, costing: true, pos: true, admin: true }
+const navOpenDefault = { orders: true, invoices: true, analytics: true, costing: true, pos: true, production: true, admin: true }
 let saved = navOpenDefault
 try {
   const raw = localStorage.getItem(NAV_KEY)
@@ -284,8 +293,8 @@ const canViewReports = computed(() => canAccessReports(role.value) || String(rol
 const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
 const canViewCosting = computed(() => canAccessCosting(role.value))
-// chef authors POS "make" recipes (PosBom) + runs production orders (own module)
-const canViewProduction = computed(() => ['admin', 'shop-admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
+// Recipes (BOM) + Production module — admin, sales-admin, chef (chef sees only this)
+const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
 const canViewDispatch = computed(() => canAccessDispatch(role.value))
 const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.value || '').toLowerCase()))
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))

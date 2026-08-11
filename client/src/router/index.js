@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, ROLES } from '@/lib/access.js'
 import { canAccessFinance, FINANCE_ROLE } from '@/lib/financeAccess.js'
-import { canAccessPos, POS_ROLE, SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, CHEF_ROLE } from '@/lib/posAccess.js'
+import { canAccessPos, canAccessProduction, POS_ROLE, SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, CHEF_ROLE } from '@/lib/posAccess.js'
 import { canAccessCosting, COSTING_ROLE } from '@/lib/costingAccess.js'
 import { canAccessDispatch, canDispatchAssign } from '@/lib/dispatchAccess.js'
 
@@ -17,6 +17,7 @@ function defaultRouteForRole(role) {
   if (canAccessReports(r))  return '/reports'
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
+  if (canAccessProduction(r)) return '/pos/production'
   if (canAccessCosting(r))  return '/costing'
   if (canAccessDispatch(r)) return '/dispatch/registry'
   return '/login'
@@ -52,7 +53,8 @@ const routes = [
       { path: 'pos/coupons',        name: 'PosCoupons',    component: () => import('@/pages/CouponsPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/mpesa-matching', name: 'MpesaMatching', component: () => import('@/pages/MpesaMatchingPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/sync',           name: 'SyncCenter',    component: () => import('@/pages/SyncCenterPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
-      { path: 'pos/production',      name: 'Production',     component: () => import('@/pages/ProductionPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, CHEF_ROLE] } },
+      { path: 'pos/recipes',        name: 'Recipes',       component: () => import('@/pages/BomsPage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
+      { path: 'pos/production',      name: 'Production',     component: () => import('@/pages/ProductionPage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
@@ -90,7 +92,7 @@ router.beforeEach((to) => {
     //   chef        → costing (BOM/recipes) + production
     const actsAs = new Set([role])
     if (role === 'sales-admin') { actsAs.add('shop-admin'); actsAs.add('sales') }
-    if (role === 'chef')        { actsAs.add('production'); actsAs.add('shop') }
+    // chef is limited to Recipes + Production, whose route metas list 'chef' directly.
     if (!to.meta.roles.some(r => actsAs.has(r))) {
       if (canAccessOrders(role)) return '/orders/scan'
       if (canAccessInvoices(role)) return '/invoices/scan'

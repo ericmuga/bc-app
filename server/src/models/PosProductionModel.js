@@ -118,6 +118,16 @@ export async function createProductionOrder({ shopCode, company = null, location
   return getProductionOrder(prodOrderId);
 }
 
+/** All active POS items (itemNo, description, uom, isService) — for BOM/production pickers. */
+export async function listCatalogueItems() {
+  const pool = await appPool();
+  const hasSvc = await columnExists(pool, 'PosItem', 'IsService');
+  const r = await pool.request().query(`
+    SELECT [ItemNo], [Description], [UnitOfMeasure] AS Uom${hasSvc ? ', ISNULL([IsService],0) AS IsService' : ', CAST(0 AS BIT) AS IsService'}
+    FROM [dbo].[PosItem] WHERE [IsActive]=1 ORDER BY [Description],[ItemNo]`);
+  return r.recordset.map((x) => ({ itemNo: x.ItemNo, description: x.Description || x.ItemNo, uom: x.Uom || '', isService: !!x.IsService }));
+}
+
 /** Service/overhead items only (IsService=1) — for the production overhead picker. */
 export async function listServiceItems() {
   const pool = await appPool();

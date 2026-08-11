@@ -5,12 +5,16 @@ export const SHOP_ADMIN_ROLE = 'shop-admin'
 export const SALES_ADMIN_ROLE = 'sales-admin'
 export const CHEF_ROLE        = 'chef'
 
-const POS_ROLES         = ['admin', SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, POS_ROLE, CHEF_ROLE]
+const POS_ROLES         = ['admin', SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE, POS_ROLE]
 const POS_MANAGER_ROLES = ['admin', SHOP_ADMIN_ROLE, SALES_ADMIN_ROLE]
+// Recipes (BOM) + Production module — chef is limited to exactly these.
+const PRODUCTION_ROLES  = ['admin', SALES_ADMIN_ROLE, CHEF_ROLE]
 // Admin areas (Users, SMTP, scheduled reports, mgmt accounts) restricted to global admin only
 const GLOBAL_ADMIN_ROLES = ['admin']
 
 export const canAccessPos        = (role) => POS_ROLES.includes(normalizeRole(role))
+// Recipes (BOM) + Production module access (admin, sales-admin, chef)
+export const canAccessProduction = (role) => PRODUCTION_ROLES.includes(normalizeRole(role))
 // Manager actions: transfers, portionings, write-offs, master-data sync
 export const canManagePos        = (role) => POS_MANAGER_ROLES.includes(normalizeRole(role))
 // True only for the global admin role (used to hide non-POS admin sections from shop-admin)
