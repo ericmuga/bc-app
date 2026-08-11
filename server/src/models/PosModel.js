@@ -993,6 +993,35 @@ export async function saveReceiptBranding(body = {}) {
   return getReceiptBranding();
 }
 
+// ── Per-shop MPESA details (shown on that shop's receipts) ───────────────────
+// The MPESA till/paybill printed on the receipt is per shop; the global
+// branding.mpesaDetails is only a fallback for shops with none set.
+const shopMpesaKey = (shopCode) => `pos.mpesa.${String(shopCode || '').toUpperCase()}`;
+
+export async function getShopMpesa(shopCode) {
+  if (!shopCode) return { mpesaDetails: '' };
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('k', sql.NVarChar(100), shopMpesaKey(shopCode))
+    .query(`SELECT [SettingValue] FROM [dbo].[AppSettings] WHERE [SettingKey]=@k`);
+  return { mpesaDetails: r.recordset[0]?.SettingValue || '' };
+}
+
+export async function saveShopMpesa(shopCode, mpesaDetails) {
+  if (!shopCode) throw new Error('shopCode is required');
+  const pool = await appPool();
+  await pool.request()
+    .input('k', sql.NVarChar(100), shopMpesaKey(shopCode))
+    .input('v', sql.NVarChar(sql.MAX), String(mpesaDetails ?? ''))
+    .query(`
+      MERGE [dbo].[AppSettings] AS t
+      USING (SELECT @k AS K) AS s ON t.[SettingKey] = s.K
+      WHEN MATCHED THEN UPDATE SET [SettingValue]=@v,[UpdatedAt]=GETUTCDATE()
+      WHEN NOT MATCHED THEN INSERT([SettingKey],[SettingValue]) VALUES(@k,@v);
+    `);
+  return getShopMpesa(shopCode);
+}
+
 export async function saveEtimsConfig(shopCode, cfg) {
   const pool = await appPool();
   for (const f of ETIMS_FIELDS) {

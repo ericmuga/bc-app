@@ -312,6 +312,9 @@ export const posSetupApi = {
   // Receipt branding (logo, slogan, MPESA details, company header)
   getBranding:  ()      => api.get('/pos/setup/branding'),
   saveBranding: (body)  => api.put('/pos/setup/branding', body),
+  // Per-shop MPESA details on the receipt
+  getShopMpesa:  (shopCode) => api.get('/pos/setup/branding/mpesa', { params: { shopCode } }),
+  saveShopMpesa: (shopCode, mpesaDetails) => api.put('/pos/setup/branding/mpesa', { shopCode, mpesaDetails }),
 }
 
 // ── Production orders (build finished items from BOMs) ─────────────────────────

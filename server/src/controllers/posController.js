@@ -217,6 +217,14 @@ export async function saveBranding(req, res) {
   try { invalidatePrintCache(); ok(res, await Pos.saveReceiptBranding(req.body)); } catch (e) { err(res, e, 400); }
 }
 
+// Per-shop MPESA details (printed on that shop's receipts).
+export async function getShopMpesa(req, res) {
+  try { ok(res, await Pos.getShopMpesa(req.query.shopCode)); } catch (e) { err(res, e); }
+}
+export async function saveShopMpesa(req, res) {
+  try { ok(res, await Pos.saveShopMpesa(req.body?.shopCode, req.body?.mpesaDetails)); } catch (e) { err(res, e, 400); }
+}
+
 /** GET /pos/bc-sync/imported-sales — POS invoice lines mapped to BC's Imported SalesAL schema. */
 export async function exportImportedSales(req, res) {
   try {

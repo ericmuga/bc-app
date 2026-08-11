@@ -784,12 +784,32 @@ GROUP BY [G_L Account No_]</pre>
                   <div class="cf-field"><label>Company PIN</label><InputText v-model="branding.companyPin" fluid placeholder="KRA PIN (blank = use eTIMS PIN)" /></div>
                 </div>
                 <div class="cf-field" style="margin-top:8px">
-                  <label>MPESA Details (shown at top of receipt)</label>
+                  <label>MPESA Details — default (fallback for shops without their own)</label>
                   <Textarea v-model="branding.mpesaDetails" rows="2" auto-resize fluid
                             placeholder="e.g. LIPA NA MPESA — Till 123456  (Farmer's Choice)" />
                 </div>
                 <div class="schedule-actions" style="margin-top:10px">
                   <Button label="Save Branding" icon="pi pi-save" size="small" :loading="savingBranding" @click="saveBranding" />
+                </div>
+
+                <!-- Per-shop MPESA till (overrides the default above on that shop's receipts) -->
+                <div style="margin-top:14px;border-top:1px solid var(--bc-border,#e2e8f0);padding-top:12px">
+                  <h5 style="margin:0 0 6px">MPESA till per shop</h5>
+                  <p class="text-muted text-sm" style="margin:0 0 8px">Each shop prints its own MPESA till/paybill. Pick a shop, set its details, save.</p>
+                  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    <div class="cf-field" style="min-width:220px">
+                      <label>Shop</label>
+                      <Select v-model="mpesaShop" :options="posShopOptions" option-label="label" option-value="value"
+                              placeholder="Select shop…" show-clear filter @change="loadShopMpesa" />
+                    </div>
+                    <div class="cf-field" style="flex:1;min-width:260px">
+                      <label>MPESA Details for this shop</label>
+                      <Textarea v-model="shopMpesaText" rows="2" auto-resize fluid :disabled="!mpesaShop"
+                                placeholder="e.g. LIPA NA MPESA — Till 998877" />
+                    </div>
+                    <Button label="Save shop MPESA" icon="pi pi-save" size="small" :disabled="!mpesaShop"
+                            :loading="savingShopMpesa" @click="saveShopMpesa" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2741,8 +2761,11 @@ const brandLogoInput = ref(null)
 let   brandingLoaded = false
 async function onBrandingToggle(ev) {
   if (!ev.target.open || brandingLoaded) return
-  try { branding.value = { ...branding.value, ...(await posSetupApi.getBranding()).data }; brandingLoaded = true }
-  catch (e) { error.value = e.response?.data?.error || e.message }
+  try {
+    branding.value = { ...branding.value, ...(await posSetupApi.getBranding()).data }
+    await ensureShopsForMake()   // populate posShopOptions for the per-shop MPESA picker
+    brandingLoaded = true
+  } catch (e) { error.value = e.response?.data?.error || e.message }
 }
 function onBrandingLogo(ev) {
   const file = ev.target.files?.[0]; if (!file) return
@@ -2759,6 +2782,23 @@ async function saveBranding() {
     brandingLoaded = true
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally   { savingBranding.value = false }
+}
+
+// Per-shop MPESA till (overrides the default on that shop's receipts).
+const mpesaShop      = ref('')
+const shopMpesaText  = ref('')
+const savingShopMpesa = ref(false)
+async function loadShopMpesa() {
+  if (!mpesaShop.value) { shopMpesaText.value = ''; return }
+  try { shopMpesaText.value = (await posSetupApi.getShopMpesa(mpesaShop.value)).data?.mpesaDetails || '' }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function saveShopMpesa() {
+  if (!mpesaShop.value) return
+  savingShopMpesa.value = true
+  try { shopMpesaText.value = (await posSetupApi.saveShopMpesa(mpesaShop.value, shopMpesaText.value)).data?.mpesaDetails || '' }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingShopMpesa.value = false }
 }
 
 async function savePrintCfg() {
