@@ -203,6 +203,10 @@ export const stockApi = {
   harmonizeFromBc:(body = {})                 => api.post('/pos/stock/harmonize-from-bc', body),
   pushAllOrdersBc:(body = {})                 => api.post('/pos/stock/push-all-orders-bc', body),
   pullBcLedger:   (body = {})                 => api.post('/pos/stock/pull-bc-ledger', body),
+  bcPullConfig:   ()                          => api.get('/pos/stock/bc-pull-config'),
+  saveBcPullConfig:(body)                     => api.put('/pos/stock/bc-pull-config', body),
+  bcPullLog:      (limit = 100)               => api.get('/pos/stock/bc-pull-log', { params: { limit } }),
+  bcPullRunNow:   ()                          => api.post('/pos/stock/bc-pull-run'),
   bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
   loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),
 

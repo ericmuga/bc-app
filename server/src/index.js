@@ -14,6 +14,7 @@ import routes from './routes/index.js';
 import logger from './services/logger.js';
 import swaggerSpec from './docs/swagger.js';
 import { startReportScheduler } from './services/reportScheduler.js';
+import { startBcPullScheduler } from './services/bcPullScheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -333,6 +334,7 @@ async function start() {
   await db.connect();
   await ensurePosItemColumns();
   startReportScheduler();
+  startBcPullScheduler();
   app.listen(PORT, () => logger.info(`API listening on :${PORT}`));
 }
 

@@ -1725,6 +1725,81 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
   return { shopCode: code, locationCode: loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types, pulled };
 }
 
+// ── Automatic BC ledger pull: config + run log ───────────────────────────────
+// A background scheduler runs pullBcLedgerEntries periodically for every shop that
+// has a stock baseline (watermark). Config + a run log live here.
+const BC_PULL_KEY = 'pos.bcPull';
+
+export async function getBcPullConfig() {
+  const pool = await appPool();
+  const r = await pool.request().input('k', sql.NVarChar(100), BC_PULL_KEY)
+    .query(`SELECT [SettingValue] FROM [dbo].[AppSettings] WHERE [SettingKey]=@k`);
+  let s = {}; try { s = JSON.parse(r.recordset[0]?.SettingValue || '{}'); } catch { s = {}; }
+  return {
+    enabled: s.enabled === true,
+    intervalMinutes: Math.max(1, Number(s.intervalMinutes) || 10),
+    entryTypes: Array.isArray(s.entryTypes) && s.entryTypes.length ? s.entryTypes.map(Number) : [2, 3, 4],
+  };
+}
+
+export async function saveBcPullConfig(body = {}) {
+  const clean = {
+    enabled: body.enabled === true,
+    intervalMinutes: Math.max(1, Number(body.intervalMinutes) || 10),
+    entryTypes: Array.isArray(body.entryTypes) && body.entryTypes.length
+      ? [...new Set(body.entryTypes.map(Number))].filter((t) => [1, 2, 3, 4].includes(t))
+      : [2, 3, 4],
+  };
+  const pool = await appPool();
+  await pool.request().input('k', sql.NVarChar(100), BC_PULL_KEY).input('v', sql.NVarChar(sql.MAX), JSON.stringify(clean))
+    .query(`MERGE [dbo].[AppSettings] AS t USING (SELECT @k AS K) AS s ON t.[SettingKey]=s.K
+      WHEN MATCHED THEN UPDATE SET [SettingValue]=@v,[UpdatedAt]=GETUTCDATE()
+      WHEN NOT MATCHED THEN INSERT([SettingKey],[SettingValue]) VALUES(@k,@v);`);
+  return getBcPullConfig();
+}
+
+/** Shops that have a stock baseline (watermark) + a location — safe to auto-pull. */
+export async function shopsWithWatermark() {
+  const pool = await appPool();
+  const r = await pool.request().query(`
+    SELECT w.[ShopCode], w.[SourceCompany] AS Company, w.[LocationCode], w.[LastEntryNo]
+    FROM [dbo].[PosStockWatermark] w
+    JOIN [dbo].[PosShop] s ON s.[Code]=w.[ShopCode] AND s.[IsActive]=1
+    WHERE w.[LocationCode] IS NOT NULL AND w.[LocationCode] <> ''`);
+  return r.recordset.map((x) => ({ shopCode: x.ShopCode, company: x.Company || 'FCL', locationCode: x.LocationCode, lastEntryNo: Number(x.LastEntryNo || 0) }));
+}
+
+export async function logBcPullRun(row = {}) {
+  const pool = await appPool();
+  await pool.request()
+    .input('shop', sql.NVarChar(50), row.shopCode || null)
+    .input('co',   sql.NVarChar(20), row.company || null)
+    .input('loc',  sql.NVarChar(20), row.locationCode || null)
+    .input('frm',  sql.Int, row.fromEntryNo ?? null)
+    .input('to',   sql.Int, row.toEntryNo ?? null)
+    .input('ins',  sql.Int, row.inserted || 0)
+    .input('skip', sql.Int, row.skipped || 0)
+    .input('sks', sql.Int, row.skippedPosSales || 0)
+    .input('ok',   sql.Bit, row.ok === false ? 0 : 1)
+    .input('err',  sql.NVarChar(500), row.error ? String(row.error).slice(0, 500) : null)
+    .input('dur',  sql.Int, row.durationMs ?? null)
+    .input('by',   sql.NVarChar(50), row.triggeredBy || 'scheduler')
+    .query(`INSERT INTO [dbo].[PosBcPullLog]
+      ([ShopCode],[Company],[LocationCode],[FromEntryNo],[ToEntryNo],[Inserted],[Skipped],[SkippedPosSales],[Ok],[Error],[DurationMs],[TriggeredBy],[FinishedAt])
+      VALUES (@shop,@co,@loc,@frm,@to,@ins,@skip,@sks,@ok,@err,@dur,@by,GETUTCDATE())`);
+}
+
+export async function listBcPullRuns({ limit = 100 } = {}) {
+  const pool = await appPool();
+  const r = await pool.request().input('lim', sql.Int, Math.min(500, Math.max(1, Number(limit) || 100)))
+    .query(`SELECT TOP (@lim) * FROM [dbo].[PosBcPullLog] ORDER BY [StartedAt] DESC`);
+  return r.recordset.map((x) => ({
+    runId: x.RunId, startedAt: x.StartedAt, finishedAt: x.FinishedAt, shopCode: x.ShopCode, company: x.Company,
+    locationCode: x.LocationCode, fromEntryNo: x.FromEntryNo, toEntryNo: x.ToEntryNo, inserted: x.Inserted,
+    skipped: x.Skipped, skippedPosSales: x.SkippedPosSales, ok: !!x.Ok, error: x.Error || '', durationMs: x.DurationMs, triggeredBy: x.TriggeredBy || '',
+  }));
+}
+
 /**
  * Harmonize (reconcile) a terminal's POS on-hand to BC's on-hand at the terminal
  * location, with BC as the source of truth — WITHOUT deleting any history. Meant

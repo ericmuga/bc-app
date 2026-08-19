@@ -84,6 +84,41 @@
       </template>
     </section>
 
+    <!-- ── Automatic BC pull (background job) ──────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h3><i class="pi pi-clock" /> Automatic BC pull — background job</h3>
+        <div class="head-controls">
+          <div class="chk"><Checkbox v-model="pull.enabled" binary input-id="pull-en" /><label for="pull-en">Enabled</label></div>
+          <span class="lbl">Every</span>
+          <InputNumber v-model="pull.intervalMinutes" :min="1" :max="1440" show-buttons style="width:120px" /> <span class="lbl">min</span>
+        </div>
+      </div>
+      <p class="text-muted text-sm">Runs the same "Pull BC transfers/adjustments/sales" automatically for every shop that has a
+        baseline — importing new BC ledger entries as typed movements. Each run is logged below.</p>
+      <div class="chk-row">
+        <span class="lbl">Entry types:</span>
+        <label v-for="t in ENTRY_TYPES" :key="t.v" class="chk"><Checkbox v-model="pull.entryTypes" :value="t.v" />{{ t.label }}</label>
+      </div>
+      <div class="btn-grid" style="margin-top:10px">
+        <Button label="Save schedule" icon="pi pi-save" severity="secondary" :loading="pullSaving" @click="savePull" />
+        <Button label="Run now" icon="pi pi-play" :loading="pullRunning" @click="runPullNow" />
+        <Button label="Refresh log" icon="pi pi-refresh" text @click="loadPullLog" />
+      </div>
+
+      <DataTable :value="pullLog" size="small" :rows="15" paginator class="mt-2" v-if="pullLog.length">
+        <Column field="startedAt" header="When"><template #body="{data}">{{ fmtDt(data.startedAt) }}</template></Column>
+        <Column field="shopCode" header="Shop" style="width:90px" />
+        <Column field="company" header="Co" style="width:70px" />
+        <Column field="toEntryNo" header="→ Entry" style="width:100px;text-align:right" />
+        <Column field="inserted" header="Inserted" style="width:90px;text-align:right" />
+        <Column field="skipped" header="Skipped" style="width:90px;text-align:right" />
+        <Column field="ok" header="OK" style="width:60px"><template #body="{data}"><i :class="data.ok ? 'pi pi-check' : 'pi pi-times'" :style="{color: data.ok ? '#22c55e':'#f87171'}" /></template></Column>
+        <Column field="triggeredBy" header="By" style="width:90px" />
+        <Column field="error" header="Error"><template #body="{data}"><span style="color:#f87171">{{ data.error }}</span></template></Column>
+      </DataTable>
+    </section>
+
     <!-- ── Harmonize dialog (readiness-gated) ──────────────────────────────── -->
     <Dialog v-model:visible="harmonizeVisible" header="Harmonize with BC" :modal="true" :style="{ width:'560px' }" class="sync-dark-dialog">
       <Message severity="info" :closable="false" class="mb-3">
@@ -154,6 +189,7 @@ import Button       from 'primevue/button'
 import Select       from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Checkbox     from 'primevue/checkbox'
+import InputNumber  from 'primevue/inputnumber'
 import DatePicker   from 'primevue/datepicker'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
@@ -331,8 +367,41 @@ async function doLoad() {
 
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-KE') : '' }
 
+// ── Automatic BC pull (background job) ───────────────────────────────────────
+const ENTRY_TYPES = [
+  { v: 4, label: 'Transfers' }, { v: 2, label: '+ Adjustments' }, { v: 3, label: '− Adjustments' }, { v: 1, label: 'Non-POS Sales' },
+]
+const pull = ref({ enabled: false, intervalMinutes: 10, entryTypes: [2, 3, 4] })
+const pullSaving = ref(false)
+const pullRunning = ref(false)
+const pullLog = ref([])
+function fmtDt(v) { return v ? new Date(v).toLocaleString('en-KE') : '' }
+async function loadPull() {
+  try { pull.value = (await stockApi.bcPullConfig()).data } catch {}
+}
+async function loadPullLog() {
+  try { pullLog.value = (await stockApi.bcPullLog(100)).data } catch {}
+}
+async function savePull() {
+  pullSaving.value = true
+  try { pull.value = (await stockApi.saveBcPullConfig(pull.value)).data; toast.add({ severity: 'success', summary: 'Schedule saved', life: 3000 }) }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { pullSaving.value = false }
+}
+async function runPullNow() {
+  pullRunning.value = true
+  try {
+    const { data } = await stockApi.bcPullRunNow()
+    toast.add({ severity: 'success', summary: 'BC pull ran', detail: `${data.shops ?? 0} shop(s), inserted ${data.inserted ?? 0}${data.failed ? `, ${data.failed} failed` : ''}.`, life: 6000 })
+    await loadPullLog()
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { pullRunning.value = false }
+}
+
 onMounted(async () => {
   try { shops.value = (await posSetupApi.listShops()).data } catch (e) { error.value = e.response?.data?.error || e.message }
+  await loadPull()
+  await loadPullLog()
 })
 </script>
 
@@ -352,6 +421,8 @@ onMounted(async () => {
 .head-controls { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .head-controls .lbl { font-size:12px; color:#cbd5e1; font-weight:600; }
 .chk { display:flex; align-items:center; gap:6px; font-size:13px; }
+.chk-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-top:8px; }
+.chk-row .lbl { font-size:12px; color:#cbd5e1; font-weight:600; }
 
 .btn-grid { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .date-row { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-top:12px; }

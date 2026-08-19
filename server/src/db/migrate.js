@@ -1134,6 +1134,33 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[PosProductionLine] OK');
 
+  // ── [dbo].[PosBcPullLog] (auto BC ledger-pull run log) ──────────────────────
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosBcPullLog' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosBcPullLog] (
+      [RunId]        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [StartedAt]    DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+      [FinishedAt]   DATETIME2     NULL,
+      [ShopCode]     NVARCHAR(50)  NULL,
+      [Company]      NVARCHAR(20)  NULL,
+      [LocationCode] NVARCHAR(20)  NULL,
+      [FromEntryNo]  INT           NULL,
+      [ToEntryNo]    INT           NULL,
+      [Inserted]     INT           NOT NULL DEFAULT 0,
+      [Skipped]      INT           NOT NULL DEFAULT 0,
+      [SkippedPosSales] INT        NOT NULL DEFAULT 0,
+      [Ok]           BIT           NOT NULL DEFAULT 1,
+      [Error]        NVARCHAR(500) NULL,
+      [DurationMs]   INT           NULL,
+      [TriggeredBy]  NVARCHAR(50)  NULL
+    )
+  `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_PosBcPullLog_StartedAt' AND object_id=OBJECT_ID('[dbo].[PosBcPullLog]'))
+    CREATE INDEX [IX_PosBcPullLog_StartedAt] ON [dbo].[PosBcPullLog]([StartedAt] DESC)
+  `);
+  console.log('  [dbo].[PosBcPullLog] OK');
+
   // ── [dbo].[CustPostingGroupMap] ─────────────────────────────────────────────
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='CustPostingGroupMap' AND schema_id=SCHEMA_ID('dbo'))

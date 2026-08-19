@@ -242,6 +242,10 @@ router.post( '/pos/produce',                                   ...canPos, posCtr
 router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
 router.post( '/pos/stock/reset-from-bc',                       ...canPos, posStockCtrl.resetStockFromBc);
 router.post( '/pos/stock/pull-bc-ledger',                      ...canManage, posStockCtrl.pullBcLedger);
+router.get(  '/pos/stock/bc-pull-config',                      ...canManage, posStockCtrl.getBcPullConfig);
+router.put(  '/pos/stock/bc-pull-config',                      ...canManage, posStockCtrl.saveBcPullConfig);
+router.get(  '/pos/stock/bc-pull-log',                         ...canManage, posStockCtrl.getBcPullLog);
+router.post( '/pos/stock/bc-pull-run',                         ...canManage, posStockCtrl.runBcPullNow);
 router.get(  '/pos/stock/harmonize-readiness',                 ...canPos, posStockCtrl.harmonizeReadiness);
 router.post( '/pos/stock/push-all-orders-bc',                  ...canManage, posStockCtrl.pushAllStockRequestsToBc);
 router.post( '/pos/stock/harmonize-from-bc',                   ...canPos, posStockCtrl.harmonizeStockFromBc);

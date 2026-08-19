@@ -112,6 +112,20 @@ export async function pushAllStockRequestsToBc(req, res) {
   } catch (e) { err(res, e, e.code === 'ELEVATION' ? 403 : 500); }
 }
 
+// ── Automatic BC ledger pull (background scheduler) ──────────────────────────
+export async function getBcPullConfig(_req, res) {
+  try { ok(res, await Stock.getBcPullConfig()); } catch (e) { err(res, e); }
+}
+export async function saveBcPullConfig(req, res) {
+  try { ok(res, await Stock.saveBcPullConfig(req.body || {})); } catch (e) { err(res, e, 400); }
+}
+export async function getBcPullLog(req, res) {
+  try { ok(res, await Stock.listBcPullRuns({ limit: req.query.limit })); } catch (e) { err(res, e); }
+}
+export async function runBcPullNow(_req, res) {
+  try { const { runBcPullNow: run } = await import('../services/bcPullScheduler.js'); ok(res, await run()); } catch (e) { err(res, e); }
+}
+
 /**
  * POST /pos/stock/pull-bc-ledger — import BC ledger transactions (transfers,
  * adjustments, non-POS sales) that don't exist in POS yet, as typed movements.
