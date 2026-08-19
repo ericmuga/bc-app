@@ -58,7 +58,10 @@
     </div>
 
     <!-- Right: Order panel ──────────────────────────────────────── -->
-    <div class="pos-order-panel">
+    <div class="pos-order-panel" :style="{ '--order-w': orderPanelWidth + 'px' }">
+      <!-- Drag this left edge to widen/narrow the cart for more room -->
+      <div class="order-resize" @mousedown.prevent="startResize" @dblclick="resetOrderWidth"
+           title="Drag to resize the cart (double-click to reset)"></div>
       <div class="order-header">
         <div class="order-header-left">
           <span class="order-title">Current Order</span>
@@ -613,6 +616,28 @@ const vClickOutside = {
   },
   unmounted(el) { document.removeEventListener('mousedown', el._vClickOutside) },
 }
+
+// ── Resizable cart panel (drag its left edge to give the cart more room) ──────
+const ORDER_W_KEY = 'posOrderPanelWidth'
+const orderPanelWidth = ref(Number(localStorage.getItem(ORDER_W_KEY)) || 330)
+function clampOrderWidth(w) {
+  const max = Math.min(window.innerWidth - 320, 1000)
+  return Math.max(300, Math.min(max, w))
+}
+function startResize(e) {
+  const startX = e.clientX, startW = orderPanelWidth.value
+  document.body.classList.add('order-resizing')
+  const onMove = (ev) => { orderPanelWidth.value = clampOrderWidth(startW + (startX - ev.clientX)) }
+  const onUp = () => {
+    document.body.classList.remove('order-resizing')
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    try { localStorage.setItem(ORDER_W_KEY, String(orderPanelWidth.value)) } catch {}
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+function resetOrderWidth() { orderPanelWidth.value = 330; try { localStorage.setItem(ORDER_W_KEY, '330') } catch {} }
 
 // ── Catalogue state ───────────────────────────────────────────────
 const categories   = ref([])
@@ -1938,13 +1963,24 @@ function remainingClass(qty) {
 
 /* ── Order panel ─────────────────────────────────────────── */
 .pos-order-panel {
-  width: 330px;
+  width: var(--order-w, 330px);   /* resizable; the mobile media query overrides it */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: #ffffff;
   border-left: 2px solid #d0d5dd;
+  position: relative;
 }
+/* Left-edge drag handle to widen the cart into the catalogue */
+.order-resize {
+  position: absolute;
+  left: -3px; top: 0; bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 20;
+}
+.order-resize:hover { background: rgba(37, 99, 235, 0.35); }
+body.order-resizing { cursor: ew-resize; user-select: none; }
 
 .order-header {
   display: flex;
@@ -2004,9 +2040,10 @@ function remainingClass(qty) {
   font-size: 13px;
   font-weight: 600;
   color: #111827;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;        /* show the full item name — wrap instead of trimming */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
 }
 .line-unit-price { font-size: 11px; color: #6b7280; margin-top: 1px; }
 
