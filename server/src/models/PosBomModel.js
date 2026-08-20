@@ -103,14 +103,15 @@ export async function saveBom(body) {
   try {
     // Upsert header, capture BomId.
     const up = await new sql.Request(tx)
-      .input('itemNo',   sql.NVarChar(30),  itemNo)
-      .input('isActive', sql.Bit,           body?.isActive === false ? 0 : 1)
-      .input('notes',    sql.NVarChar(255), str(body?.notes, 255) || null)
+      .input('itemNo',    sql.NVarChar(30),  itemNo)
+      .input('isActive',  sql.Bit,           body?.isActive === false ? 0 : 1)
+      .input('notes',     sql.NVarChar(255), str(body?.notes, 255) || null)
+      .input('outputUom', sql.NVarChar(20),  str(body?.outputUom, 20) || null)
       .query(`
         MERGE [dbo].[PosBom] AS t
         USING (SELECT @itemNo AS ItemNo) AS s ON t.[ItemNo] = s.ItemNo
-        WHEN MATCHED THEN UPDATE SET [IsActive]=@isActive, [Notes]=@notes, [UpdatedAt]=GETUTCDATE()
-        WHEN NOT MATCHED THEN INSERT ([ItemNo],[IsActive],[Notes]) VALUES (@itemNo,@isActive,@notes)
+        WHEN MATCHED THEN UPDATE SET [IsActive]=@isActive, [Notes]=@notes, [OutputUom]=@outputUom, [UpdatedAt]=GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT ([ItemNo],[IsActive],[Notes],[OutputUom]) VALUES (@itemNo,@isActive,@notes,@outputUom)
         OUTPUT INSERTED.[BomId];
       `);
     const bomId = up.recordset[0].BomId;

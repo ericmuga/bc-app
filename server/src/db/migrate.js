@@ -1064,6 +1064,10 @@ async function migrate(companyId) {
       [UpdatedAt] DATETIME2        NOT NULL DEFAULT GETUTCDATE()
     )
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[PosBom]') AND name='OutputUom')
+      ALTER TABLE [dbo].[PosBom] ADD [OutputUom] NVARCHAR(20) NULL
+  `);
   console.log('  [dbo].[PosBom] OK');
 
   await run(`

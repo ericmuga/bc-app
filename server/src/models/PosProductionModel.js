@@ -85,7 +85,7 @@ export async function createProductionOrder({ shopCode, company = null, location
       .input('loc',      sql.NVarChar(20),  locationCode || null)
       .input('itemNo',   sql.NVarChar(30),  finished)
       .input('desc',     sql.NVarChar(200), fin.description || finished)
-      .input('uom',      sql.NVarChar(20),  fin.uom || null)
+      .input('uom',      sql.NVarChar(20),  bom.OutputUom || fin.uom || null)
       .input('qty',      sql.Decimal(18, 4), qty)
       .input('bomId',    sql.UniqueIdentifier, bom.BomId)
       .input('by',       sql.NVarChar(100), str(userName || userId, 100) || null)
@@ -122,17 +122,70 @@ export async function createProductionOrder({ shopCode, company = null, location
   return getProductionOrder(prodOrderId);
 }
 
-/** All active POS items (itemNo, description, uom, isService) — for BOM/production pickers. */
+// Build an item's valid UoM matrix from base/sales + factor (base units per sales
+// unit). Each entry: { code, factorToBase } — base is 1, sales is qtyPerSalesUnit.
+export function buildItemUoms(baseUom, salesUom, qtyPerSalesUnit) {
+  const base = String(baseUom || '').trim();
+  const sales = String(salesUom || '').trim();
+  const factor = Number(qtyPerSalesUnit) || 1;
+  const list = [];
+  if (base) list.push({ code: base, factorToBase: 1 });
+  if (sales && sales.toUpperCase() !== base.toUpperCase()) list.push({ code: sales, factorToBase: factor });
+  if (!list.length) list.push({ code: base || sales || '', factorToBase: 1 });
+  return list;
+}
+
+/** All active POS items with their UoM matrix (base/sales + factor) — for BOM/production pickers. */
 export async function listCatalogueItems() {
   const pool = await appPool();
   const hasSvc  = await columnExists(pool, 'PosItem', 'IsService');
   const hasBase = await columnExists(pool, 'PosItem', 'BaseUnitOfMeasure');
-  // Report the BASE unit of measure for BOM/production (falls back to sales UoM).
-  const uomExpr = hasBase ? `COALESCE(NULLIF([BaseUnitOfMeasure],''),[UnitOfMeasure])` : `[UnitOfMeasure]`;
+  const cols = hasBase
+    ? `[BaseUnitOfMeasure] AS BaseUom, [SalesUnitOfMeasure] AS SalesUom, ISNULL(NULLIF([QtyPerSalesUnit],0),1) AS QtyPerSalesUnit`
+    : `[UnitOfMeasure] AS BaseUom, CAST(NULL AS NVARCHAR(20)) AS SalesUom, CAST(1 AS DECIMAL(18,6)) AS QtyPerSalesUnit`;
   const r = await pool.request().query(`
-    SELECT [ItemNo], [Description], ${uomExpr} AS Uom${hasSvc ? ', ISNULL([IsService],0) AS IsService' : ', CAST(0 AS BIT) AS IsService'}
+    SELECT [ItemNo], [Description], [UnitOfMeasure] AS Uom, ${cols}${hasSvc ? ', ISNULL([IsService],0) AS IsService' : ', CAST(0 AS BIT) AS IsService'}
     FROM [dbo].[PosItem] WHERE [IsActive]=1 ORDER BY [Description],[ItemNo]`);
-  return r.recordset.map((x) => ({ itemNo: x.ItemNo, description: x.Description || x.ItemNo, uom: x.Uom || '', isService: !!x.IsService }));
+  return r.recordset.map((x) => {
+    const baseUom = (x.BaseUom || x.Uom || '').trim();
+    const salesUom = (x.SalesUom || '').trim();
+    const qtyPerSalesUnit = Number(x.QtyPerSalesUnit) || 1;
+    return {
+      itemNo: x.ItemNo, description: x.Description || x.ItemNo,
+      uom: baseUom, baseUom, salesUom, qtyPerSalesUnit,
+      uoms: buildItemUoms(baseUom, salesUom, qtyPerSalesUnit),
+      isService: !!x.IsService,
+    };
+  });
+}
+
+/** UoM matrix per item (base/sales + factor) for a set of item nos — for translation at post/push. */
+async function itemUomMatrix(pool, itemNos) {
+  const out = new Map();
+  const uniq = [...new Set(itemNos.map((n) => String(n || '').toUpperCase()).filter(Boolean))];
+  if (!uniq.length) return out;
+  const hasBase = await columnExists(pool, 'PosItem', 'BaseUnitOfMeasure');
+  const req = pool.request();
+  uniq.forEach((n, i) => req.input(`i${i}`, sql.NVarChar(30), n));
+  const cols = hasBase
+    ? `[BaseUnitOfMeasure] AS BaseUom, [SalesUnitOfMeasure] AS SalesUom, ISNULL(NULLIF([QtyPerSalesUnit],0),1) AS QtyPerSalesUnit`
+    : `[UnitOfMeasure] AS BaseUom, CAST(NULL AS NVARCHAR(20)) AS SalesUom, CAST(1 AS DECIMAL(18,6)) AS QtyPerSalesUnit`;
+  const r = await req.query(`SELECT UPPER([ItemNo]) AS ItemNo, [UnitOfMeasure] AS Uom, ${cols} FROM [dbo].[PosItem] WHERE UPPER([ItemNo]) IN (${uniq.map((_, i) => `@i${i}`).join(',')})`);
+  for (const x of r.recordset) {
+    const baseUom = (x.BaseUom || x.Uom || '').trim();
+    out.set(x.ItemNo, { baseUom, salesUom: (x.SalesUom || '').trim(), qtyPerSalesUnit: Number(x.QtyPerSalesUnit) || 1 });
+  }
+  return out;
+}
+
+// Factor to convert a quantity in `uom` to BASE units for a given item's matrix.
+function factorToBase(meta, uom) {
+  if (!meta) return { factor: 1, baseUom: uom || '' };
+  const u = String(uom || '').trim().toUpperCase();
+  if (meta.salesUom && u === meta.salesUom.toUpperCase() && meta.salesUom.toUpperCase() !== meta.baseUom.toUpperCase()) {
+    return { factor: meta.qtyPerSalesUnit, baseUom: meta.baseUom };
+  }
+  return { factor: 1, baseUom: meta.baseUom || uom || '' };
 }
 
 /** Service/overhead items only (IsService=1) — for the production overhead picker. */
@@ -266,15 +319,23 @@ export async function postProductionOrder(prodOrderId, { userId = null, userName
   const ref = order.orderNo;
   const common = { shopCode: order.shopCode, referenceType: 'production', referenceId: prodOrderId, referenceNo: ref, createdBy: userName || userId, movementDate: new Date() };
 
+  // Quantities on the order are in each line's chosen UoM; the stock ledger is in
+  // BASE units, so translate every posted qty via the item's UoM matrix.
+  const matrix = await itemUomMatrix(pool, [order.outputItemNo, ...order.lines.map((l) => l.itemNo)]);
+
   // Consume components (guarded against negative stock by postMovement).
   for (const l of order.lines) {
     if (l.lineType !== 'component' || l.isService) continue;
     const q = r4(l.actualQty);
     if (q <= 0) continue;
-    await postMovement({ ...common, itemNo: l.itemNo, description: l.description, movementType: 'consume-out', quantity: -q, notes: `Consumed for ${ref}` });
+    const { factor } = factorToBase(matrix.get(l.itemNo), l.uom);
+    const qBase = r4(q * factor);
+    await postMovement({ ...common, itemNo: l.itemNo, description: l.description, movementType: 'consume-out', quantity: -qBase, notes: `Consumed ${q} ${l.uom || ''} for ${ref}`.trim() });
   }
-  // Produce the finished good.
-  await postMovement({ ...common, itemNo: order.outputItemNo, description: order.outputDescription, movementType: 'produce-in', quantity: r4(order.outputQty), notes: `Produced by ${ref}` });
+  // Produce the finished good (translated to base units).
+  const outFactor = factorToBase(matrix.get(String(order.outputItemNo).toUpperCase()), order.outputUom);
+  const outBase = r4(Number(order.outputQty) * outFactor.factor);
+  await postMovement({ ...common, itemNo: order.outputItemNo, description: order.outputDescription, movementType: 'produce-in', quantity: outBase, notes: `Produced ${order.outputQty} ${order.outputUom || ''} by ${ref}`.trim() });
 
   await pool.request()
     .input('id', sql.UniqueIdentifier, prodOrderId)
@@ -283,6 +344,23 @@ export async function postProductionOrder(prodOrderId, { userId = null, userName
 
   logger.info('production order posted', { orderNo: ref, shopCode: order.shopCode, outputItemNo: order.outputItemNo, outputQty: order.outputQty });
   return getProductionOrder(prodOrderId);
+}
+
+/**
+ * Resolve an order's output + component quantities into BASE units and the base
+ * UoM, using each item's UoM matrix. Used by the BC push so BC posts base units.
+ */
+export async function resolveBaseQuantities(order) {
+  const pool = await appPool();
+  const matrix = await itemUomMatrix(pool, [order.outputItemNo, ...order.lines.map((l) => l.itemNo)]);
+  const out = factorToBase(matrix.get(String(order.outputItemNo).toUpperCase()), order.outputUom);
+  return {
+    output: { itemNo: order.outputItemNo, qtyBase: r4(Number(order.outputQty) * out.factor), baseUom: out.baseUom || order.outputUom || '' },
+    lines: order.lines.map((l) => {
+      const f = factorToBase(matrix.get(String(l.itemNo).toUpperCase()), l.uom);
+      return { ...l, qtyBase: r4(Number(l.actualQty) * f.factor), baseUom: f.baseUom || l.uom || '' };
+    }),
+  };
 }
 
 export async function cancelProductionOrder(prodOrderId) {

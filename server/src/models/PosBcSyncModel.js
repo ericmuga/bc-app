@@ -13,7 +13,7 @@ import { db as appDb, sql } from '../db/pool.js';
 import { bcDb, bcSql } from '../db/bcPool.js';
 import { bcTable } from '../services/bcTables.js';
 import { getStockRequest } from './PosStockModel.js';
-import { getProductionOrder, listProductionOrders } from './PosProductionModel.js';
+import { getProductionOrder, listProductionOrders, resolveBaseQuantities } from './PosProductionModel.js';
 import logger from '../services/logger.js';
 
 const toSuom = (u) => (/^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(u || '').trim().toUpperCase()) ? 'KG' : 'PC');
@@ -379,14 +379,16 @@ export async function pushProductionOrder({ prodOrderId }) {
   const jnlTable = bcTable(company, 'WMS Production Journal Line', { ext: true });
   const pool = await bcDb.getPool();
 
+  // Quantities are translated to BASE units + base UoM via the item UoM matrix,
+  // so BC's production journal posts in base units.
+  const base = await resolveBaseQuantities(order);
   // Journal rows: 1000 = output (EntryType 0); components 2000,2010,… (EntryType 1).
-  const rows = [{ lineNo: 1000, itemNo: order.outputItemNo, qty: Number(order.outputQty || 0), uom: order.outputUom, entryType: 0 }];
+  const rows = [{ lineNo: 1000, itemNo: base.output.itemNo, qty: base.output.qtyBase, uom: base.output.baseUom, entryType: 0 }];
   let ln = 2000;
-  for (const l of order.lines) {
+  for (const l of base.lines) {
     if (l.lineType !== 'component' || l.isService) continue;
-    const q = Number(l.actualQty || 0);
-    if (q <= 0) continue;
-    rows.push({ lineNo: ln, itemNo: l.itemNo, qty: q, uom: l.uom, entryType: 1 });
+    if (l.qtyBase <= 0) continue;
+    rows.push({ lineNo: ln, itemNo: l.itemNo, qty: l.qtyBase, uom: l.baseUom, entryType: 1 });
     ln += 10;
   }
 

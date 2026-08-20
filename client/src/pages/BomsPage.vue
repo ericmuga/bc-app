@@ -18,13 +18,17 @@
     <Dialog v-model:visible="editing" :header="form._existing ? 'Edit recipe' : 'New recipe'" :modal="true"
             :style="{ width:'820px' }" class="bom-dialog">
       <div class="new-row">
-        <div class="fld" style="flex:1;min-width:260px">
-          <label>Finished item</label>
+        <div class="fld" style="flex:1;min-width:240px">
+          <label>Finished item (output)</label>
           <Select v-model="form.itemNo" :options="finishedOptions" option-label="label" option-value="value"
                   filter placeholder="Select finished item…" :disabled="form._existing" @change="onFinishedChange" />
         </div>
+        <div class="fld" style="width:130px">
+          <label>Output UoM</label>
+          <Select v-model="form.outputUom" :options="uomsFor(form.itemNo)" option-label="code" option-value="code" placeholder="UoM" :disabled="!form.itemNo" />
+        </div>
         <div class="chk"><Checkbox v-model="form.isActive" binary input-id="bom-active" /><label for="bom-active">Active</label></div>
-        <div class="fld" style="flex:1;min-width:220px"><label>Notes</label><InputText v-model="form.notes" fluid placeholder="Optional" /></div>
+        <div class="fld" style="flex:1;min-width:180px"><label>Notes</label><InputText v-model="form.notes" fluid placeholder="Optional" /></div>
       </div>
 
       <div class="sub-row">
@@ -33,13 +37,13 @@
                 placeholder="Add component…" style="min-width:240px" @change="addComponent" />
       </div>
       <table class="lines">
-        <thead><tr><th>Item</th><th>Description</th><th class="r">Qty per unit</th><th>UoM</th><th></th></tr></thead>
+        <thead><tr><th>Item</th><th>Description</th><th class="r">Qty per output unit</th><th>UoM</th><th></th></tr></thead>
         <tbody>
           <tr v-for="(l,i) in form.lines" :key="i">
             <td>{{ l.componentItemNo }}</td>
             <td>{{ l.description }}</td>
-            <td class="r"><InputNumber v-model="l.qtyPer" :min="0" :maxFractionDigits="4" inputStyle="width:100px;text-align:right" /></td>
-            <td>{{ l.uom }}</td>
+            <td class="r"><InputNumber v-model="l.qtyPer" :min="0" :maxFractionDigits="4" inputStyle="width:110px;text-align:right" /></td>
+            <td><Select v-model="l.uom" :options="uomsFor(l.componentItemNo)" option-label="code" option-value="code" placeholder="UoM" style="width:110px" /></td>
             <td><Button icon="pi pi-trash" text severity="danger" size="small" @click="form.lines.splice(i,1)" /></td>
           </tr>
           <tr v-if="!form.lines.length"><td colspan="5" class="text-muted">Add at least one component.</td></tr>
@@ -104,7 +108,10 @@ const boms    = ref([])
 const items   = ref([])
 const editing = ref(false)
 const addComp = ref(null)
-const form    = ref({ itemNo: '', isActive: true, notes: '', lines: [], _existing: false })
+const form    = ref({ itemNo: '', outputUom: '', isActive: true, notes: '', lines: [], _existing: false })
+// The valid UoMs for an item (base + sales) — obeys the UoM translation matrix.
+function uomsFor(itemNo) { return items.value.find(i => i.itemNo === itemNo)?.uoms || [] }
+function baseUomFor(itemNo) { return items.value.find(i => i.itemNo === itemNo)?.baseUom || '' }
 
 const filters = ref({
   global:      { value: null, matchMode: 'contains' },
@@ -127,17 +134,18 @@ async function loadItems() {
 }
 
 function newBom() {
-  form.value = { itemNo: '', isActive: true, notes: '', lines: [], _existing: false }
+  form.value = { itemNo: '', outputUom: '', isActive: true, notes: '', lines: [], _existing: false }
   editing.value = true
 }
-function onFinishedChange() { /* description shown from list; nothing else needed */ }
+// Default the output UoM to the finished item's base unit when it's picked.
+function onFinishedChange() { form.value.outputUom = baseUomFor(form.value.itemNo) }
 
 async function editBom(row) {
   try {
     const { data } = await posApi.getBom(row.ItemNo)
     form.value = {
-      itemNo: data.ItemNo, isActive: !!data.IsActive, notes: data.Notes || '', _existing: true,
-      lines: (data.lines || []).map(l => ({ componentItemNo: l.ComponentItemNo, description: l.Description || '', qtyPer: Number(l.QtyPer || 0), uom: l.Uom || '', sortOrder: l.SortOrder })),
+      itemNo: data.ItemNo, outputUom: data.OutputUom || baseUomFor(data.ItemNo), isActive: !!data.IsActive, notes: data.Notes || '', _existing: true,
+      lines: (data.lines || []).map(l => ({ componentItemNo: l.ComponentItemNo, description: l.Description || '', qtyPer: Number(l.QtyPer || 0), uom: l.Uom || baseUomFor(l.ComponentItemNo), sortOrder: l.SortOrder })),
     }
     editing.value = true
   } catch (e) { error.value = e.response?.data?.error || e.message }
@@ -147,7 +155,7 @@ function addComponent() {
   const it = items.value.find(i => i.itemNo === addComp.value)
   if (!it) return
   if (form.value.lines.some(l => l.componentItemNo === it.itemNo)) { addComp.value = null; return }
-  form.value.lines.push({ componentItemNo: it.itemNo, description: it.description, qtyPer: 1, uom: it.uom || '', sortOrder: form.value.lines.length })
+  form.value.lines.push({ componentItemNo: it.itemNo, description: it.description, qtyPer: 1, uom: it.baseUom || it.uom || '', sortOrder: form.value.lines.length })
   addComp.value = null
 }
 
@@ -155,7 +163,7 @@ async function save() {
   saving.value = true; error.value = ''
   try {
     await posApi.saveBom({
-      itemNo: form.value.itemNo, isActive: form.value.isActive, notes: form.value.notes,
+      itemNo: form.value.itemNo, outputUom: form.value.outputUom, isActive: form.value.isActive, notes: form.value.notes,
       lines: form.value.lines.map((l, i) => ({ componentItemNo: l.componentItemNo, description: l.description, qtyPer: l.qtyPer, uom: l.uom, sortOrder: i })),
     })
     editing.value = false
