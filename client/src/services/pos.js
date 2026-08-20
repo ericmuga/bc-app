@@ -313,6 +313,13 @@ export const posSetupApi = {
   getInventoryConfig:  ()      => api.get('/pos/setup/inventory-config'),
   saveInventoryConfig: (body)  => api.post('/pos/setup/inventory-config', body),
 
+  // Inventory posting groups (which sync to shops) + BC Production BOM sync
+  invPostingGroups:   (company='FCL') => api.get('/pos/setup/inv-posting-groups', { params: { company } }),
+  saveInvPostingGroups:(groups)       => api.put('/pos/setup/inv-posting-groups', { groups }),
+  listBcBoms:         (company='FCL')  => api.get('/pos/bc-boms', { params: { company } }),
+  syncBcBom:          (company, bomNo) => api.post('/pos/bc-boms/sync', { company, bomNo }),
+  syncBcBomsAll:      (company='FCL')  => api.post('/pos/bc-boms/sync-all', { company }),
+
   // Receipt branding (logo, slogan, MPESA details, company header)
   getBranding:  ()      => api.get('/pos/setup/branding'),
   saveBranding: (body)  => api.put('/pos/setup/branding', body),

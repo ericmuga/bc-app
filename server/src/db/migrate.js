@@ -1068,7 +1068,23 @@ async function migrate(companyId) {
     IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[PosBom]') AND name='OutputUom')
       ALTER TABLE [dbo].[PosBom] ADD [OutputUom] NVARCHAR(20) NULL
   `);
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id=OBJECT_ID('[dbo].[PosBom]') AND name='Description')
+      ALTER TABLE [dbo].[PosBom] ADD [Description] NVARCHAR(200) NULL
+  `);
   console.log('  [dbo].[PosBom] OK');
+
+  // ── [dbo].[PosSyncInvPostingGroup] (which BC inventory posting groups sync to shops) ──
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosSyncInvPostingGroup' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[PosSyncInvPostingGroup] (
+      [Code]        NVARCHAR(50)  NOT NULL PRIMARY KEY,
+      [Description] NVARCHAR(200) NULL,
+      [SyncToShops] BIT           NOT NULL DEFAULT 0,
+      [UpdatedAt]   DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+    )
+  `);
+  console.log('  [dbo].[PosSyncInvPostingGroup] OK');
 
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosBomLine' AND schema_id=SCHEMA_ID('dbo'))

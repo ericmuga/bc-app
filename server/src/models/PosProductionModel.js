@@ -84,7 +84,7 @@ export async function createProductionOrder({ shopCode, company = null, location
       .input('company',  sql.NVarChar(20),  company ? String(company).toUpperCase() : null)
       .input('loc',      sql.NVarChar(20),  locationCode || null)
       .input('itemNo',   sql.NVarChar(30),  finished)
-      .input('desc',     sql.NVarChar(200), fin.description || finished)
+      .input('desc',     sql.NVarChar(200), bom.Description || fin.description || finished)
       .input('uom',      sql.NVarChar(20),  bom.OutputUom || fin.uom || null)
       .input('qty',      sql.Decimal(18, 4), qty)
       .input('bomId',    sql.UniqueIdentifier, bom.BomId)

@@ -30,6 +30,7 @@ import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 import * as posProdCtrl from '../controllers/posProductionController.js';
+import * as posBcBomCtrl from '../controllers/posBcBomController.js';
 
 const router = Router();
 const company = companyMiddleware();
@@ -229,6 +230,12 @@ router.get(  '/pos/boms/:itemNo',                              ...canBom, posCtr
 router.post( '/pos/boms',                                      ...canBom, posCtrl.saveBom);
 router.delete('/pos/boms/:itemNo',                             ...canBom, posCtrl.deleteBom);
 router.get(  '/pos/makeable-items',                            ...canPos, posCtrl.listMakeable);
+// Inventory posting groups (which sync to shops) + BC Production BOM sync
+router.get(  '/pos/setup/inv-posting-groups',                  ...canManage, posBcBomCtrl.getInvPostingGroups);
+router.put(  '/pos/setup/inv-posting-groups',                  ...canManage, posBcBomCtrl.saveInvPostingGroups);
+router.get(  '/pos/bc-boms',                                   ...canManage, posBcBomCtrl.listBcBoms);
+router.post( '/pos/bc-boms/sync',                              ...canManage, posBcBomCtrl.syncBcBom);
+router.post( '/pos/bc-boms/sync-all',                          ...canManage, posBcBomCtrl.syncBcBomsAll);
 router.get(  '/pos/setup/branding',                            ...canManage, posCtrl.getBranding);
 router.put(  '/pos/setup/branding',                            ...canManage, posCtrl.saveBranding);
 router.get(  '/pos/setup/branding/mpesa',                      ...canManage, posCtrl.getShopMpesa);

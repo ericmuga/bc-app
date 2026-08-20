@@ -40,6 +40,38 @@
       </div>
     </section>
 
+    <!-- ── Inventory posting groups + BC BOMs (source of truth) ─────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h3><i class="pi pi-sitemap" /> Posting groups &amp; BC BOMs — {{ company }}</h3>
+        <Button label="Load / refresh" icon="pi pi-refresh" text @click="loadBomStuff" :loading="bomBusy==='load'" />
+      </div>
+      <p class="text-muted text-sm">Tick which BC <strong>Inventory Posting Groups</strong> belong in shops, then sync the
+        BC <strong>Production BOMs</strong> for those groups — the recipe and its items land in POS and ride the inventory refresh jobs.</p>
+
+      <div v-if="invGroups.length" class="chk-row" style="max-height:150px;overflow:auto;align-items:flex-start">
+        <label v-for="g in invGroups" :key="g.code" class="chk" style="min-width:220px">
+          <Checkbox v-model="g.syncToShops" binary /> {{ g.code }} <span class="text-muted">— {{ g.description }}</span>
+        </label>
+      </div>
+      <div class="btn-grid" style="margin-top:8px">
+        <Button label="Save posting groups" icon="pi pi-save" severity="secondary" :loading="bomBusy==='saveGroups'" @click="saveGroups" :disabled="!invGroups.length" />
+        <Button label="Sync all BOMs for ticked groups" icon="pi pi-sitemap" severity="success" :loading="bomBusy==='syncAll'" @click="syncAllBoms" />
+        <span class="chk"><InputText v-model="oneBom" placeholder="BOM No (e.g. JC0000015)" style="width:170px" />
+          <Button label="Sync this BOM" icon="pi pi-download" :loading="bomBusy==='syncOne'" :disabled="!oneBom" @click="syncOneBom" /></span>
+      </div>
+      <div v-if="bomResult" class="result"><strong>{{ bomResult.label }}:</strong> {{ bomResult.summary }}</div>
+
+      <DataTable v-if="bcBoms.length" :value="bcBoms" size="small" :rows="12" paginator class="mt-2">
+        <Column field="bomNo" header="BOM" style="width:120px" />
+        <Column field="finishedItemNo" header="Finished item" style="width:130px" />
+        <Column field="finishedDesc" header="Description" />
+        <Column field="ipg" header="Posting group" style="width:120px" />
+        <Column field="lineCount" header="Lines" style="width:70px;text-align:right" />
+        <Column header="" style="width:80px"><template #body="{data}"><Button icon="pi pi-download" text size="small" :loading="bomBusy==='row'+data.bomNo" @click="syncRow(data)" /></template></Column>
+      </DataTable>
+    </section>
+
     <!-- ── Transactional (POS ↔ BC), per shop ──────────────────────────────── -->
     <section class="card">
       <div class="card-head">
@@ -189,6 +221,7 @@ import Button       from 'primevue/button'
 import Select       from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Checkbox     from 'primevue/checkbox'
+import InputText    from 'primevue/inputtext'
 import InputNumber  from 'primevue/inputnumber'
 import DatePicker   from 'primevue/datepicker'
 import DataTable    from 'primevue/datatable'
@@ -366,6 +399,46 @@ async function doLoad() {
 }
 
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-KE') : '' }
+
+// ── Posting groups + BC BOMs ─────────────────────────────────────────────────
+const invGroups = ref([])
+const bcBoms    = ref([])
+const oneBom    = ref('')
+const bomBusy   = ref('')
+const bomResult = ref(null)
+async function loadBomStuff() {
+  bomBusy.value = 'load'; bomResult.value = null; error.value = ''
+  try {
+    invGroups.value = (await posSetupApi.invPostingGroups(company.value)).data || []
+    bcBoms.value = (await posSetupApi.listBcBoms(company.value)).data || []
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { bomBusy.value = '' }
+}
+async function saveGroups() {
+  bomBusy.value = 'saveGroups'
+  try { invGroups.value = (await posSetupApi.saveInvPostingGroups(invGroups.value)).data; bcBoms.value = (await posSetupApi.listBcBoms(company.value)).data || [] }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { bomBusy.value = '' }
+}
+async function syncAllBoms() {
+  bomBusy.value = 'syncAll'; bomResult.value = null
+  try { const { data } = await posSetupApi.syncBcBomsAll(company.value); bomResult.value = { label: 'Sync all BOMs', summary: `${data.synced}/${data.boms} BOM(s), ${data.itemsUpserted} item(s) upserted.` } }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { bomBusy.value = '' }
+}
+async function syncOneBom() {
+  if (!oneBom.value) return
+  bomBusy.value = 'syncOne'; bomResult.value = null
+  try { const { data } = await posSetupApi.syncBcBom(company.value, oneBom.value.trim()); bomResult.value = { label: `Sync ${data.bomNo}`, summary: `finished ${data.finishedItemNo}, ${data.itemsUpserted} item(s), ${data.lines} line(s).` } }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { bomBusy.value = '' }
+}
+async function syncRow(row) {
+  bomBusy.value = 'row' + row.bomNo; bomResult.value = null
+  try { const { data } = await posSetupApi.syncBcBom(company.value, row.bomNo); bomResult.value = { label: `Sync ${data.bomNo}`, summary: `finished ${data.finishedItemNo}, ${data.itemsUpserted} item(s), ${data.lines} line(s).` } }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { bomBusy.value = '' }
+}
 
 // ── Automatic BC pull (background job) ───────────────────────────────────────
 const ENTRY_TYPES = [
