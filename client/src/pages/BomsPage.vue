@@ -71,8 +71,8 @@
         <Column field="Description" header="Description" sortable :showFilterMenu="false">
           <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Description" style="width:100%" /></template>
         </Column>
-        <Column field="LineCount" header="Components" sortable style="text-align:right">
-          <template #body="{data}">{{ data.LineCount ?? '—' }}</template>
+        <Column field="ComponentCount" header="Components" sortable style="text-align:right">
+          <template #body="{data}">{{ data.ComponentCount ?? '—' }}</template>
         </Column>
         <Column field="IsActive" header="Active" sortable>
           <template #body="{data}"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>

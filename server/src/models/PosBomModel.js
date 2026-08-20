@@ -23,9 +23,11 @@ async function pool() { return appDb.getPool(); }
 export async function listBoms() {
   const p = await pool();
   const r = await p.request().query(`
-    SELECT b.[BomId], b.[ItemNo], b.[IsActive], b.[Notes], b.[UpdatedAt],
+    SELECT b.[BomId], b.[ItemNo], b.[IsActive], b.[Notes], b.[OutputUom], b.[UpdatedAt],
+           COALESCE(NULLIF(b.[Description], N''), i.[Description], b.[ItemNo]) AS Description,
            (SELECT COUNT(*) FROM [dbo].[PosBomLine] l WHERE l.[BomId] = b.[BomId]) AS ComponentCount
     FROM [dbo].[PosBom] b
+    LEFT JOIN [dbo].[PosItem] i ON i.[ItemNo] = b.[ItemNo]
     ORDER BY b.[ItemNo]
   `);
   return r.recordset;
@@ -107,11 +109,14 @@ export async function saveBom(body) {
       .input('isActive',  sql.Bit,           body?.isActive === false ? 0 : 1)
       .input('notes',     sql.NVarChar(255), str(body?.notes, 255) || null)
       .input('outputUom', sql.NVarChar(20),  str(body?.outputUom, 20) || null)
+      .input('desc',      sql.NVarChar(200), str(body?.description, 200) || null)
       .query(`
         MERGE [dbo].[PosBom] AS t
         USING (SELECT @itemNo AS ItemNo) AS s ON t.[ItemNo] = s.ItemNo
-        WHEN MATCHED THEN UPDATE SET [IsActive]=@isActive, [Notes]=@notes, [OutputUom]=@outputUom, [UpdatedAt]=GETUTCDATE()
-        WHEN NOT MATCHED THEN INSERT ([ItemNo],[IsActive],[Notes],[OutputUom]) VALUES (@itemNo,@isActive,@notes,@outputUom)
+        WHEN MATCHED THEN UPDATE SET [IsActive]=@isActive, [Notes]=@notes, [OutputUom]=@outputUom,
+             [Description]=COALESCE(@desc, t.[Description]), [UpdatedAt]=GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT ([ItemNo],[IsActive],[Notes],[OutputUom],[Description])
+             VALUES (@itemNo,@isActive,@notes,@outputUom,@desc)
         OUTPUT INSERTED.[BomId];
       `);
     const bomId = up.recordset[0].BomId;
