@@ -8,6 +8,7 @@
 import { db as appDb, sql } from '../db/pool.js';
 import { bcDb } from '../db/bcPool.js';
 import { bcTable } from '../services/bcTables.js';
+import { backfillLedgerForNewItems } from './PosStockModel.js';
 import logger from '../services/logger.js';
 
 const appPool = () => appDb.getPool();
@@ -221,8 +222,16 @@ export async function syncBcBom(company, bomNo) {
     await tx.commit();
   } catch (e) { await tx.rollback(); throw e; }
 
-  logger.info('syncBcBom', { company, bomNo, finishedItemNo: finishedNo, itemsUpserted, lines: bom.lines.length });
-  return { bomNo, finishedItemNo: finishedNo, itemsUpserted, lines: bom.lines.length };
+  // 3) Self-heal inventory: any BC ledger entries for the newly-synced items that
+  //    were skipped (before they were POS items) get backfilled now, for every
+  //    shop with a stock baseline — but only for items with no movement yet, so a
+  //    live shop's tracked stock is never double-counted.
+  let backfill = { inserted: 0, byShop: [] };
+  try { backfill = await backfillLedgerForNewItems({ itemNos: relatedNos }); }
+  catch (e) { logger.warn('syncBcBom backfill failed', { bomNo, error: e.message }); }
+
+  logger.info('syncBcBom', { company, bomNo, finishedItemNo: finishedNo, itemsUpserted, lines: bom.lines.length, backfilled: backfill.inserted });
+  return { bomNo, finishedItemNo: finishedNo, itemsUpserted, lines: bom.lines.length, backfilled: backfill.inserted, backfillByShop: backfill.byShop };
 }
 
 /** Sync every BC BOM whose finished item is in an enabled posting group. */

@@ -1725,6 +1725,106 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
   return { shopCode: code, locationCode: loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types, pulled };
 }
 
+/**
+ * Self-healing backfill for items that only just became POS items (e.g. after a
+ * BC BOM sync brings in raw-material components). The normal watermark pull skips
+ * BC ledger entries whose item isn't yet a POS item and then advances past them,
+ * stranding those entries below the watermark forever. This re-scans the FULL BC
+ * ledger history for the given items — ignoring the watermark — but ONLY for
+ * items with NO existing POS movement at that shop, so items already tracked
+ * (with a stock baseline) can never be double-counted. The watermark is left
+ * untouched; inserts are idempotent by BC Entry No.
+ *
+ * @param {object} p { itemNos:string[], entryTypes?:number[] }
+ * @returns {Promise<{inserted:number, byShop:Array}>}
+ */
+export async function backfillLedgerForNewItems({ itemNos, entryTypes = [2, 3, 4] }) {
+  const wanted = [...new Set((itemNos || []).map((n) => str(n, 30).toUpperCase()).filter(Boolean))];
+  const types = [...new Set((entryTypes || []).map(Number))].filter((t) => [1, 2, 3, 4].includes(t));
+  if (!wanted.length || !types.length) return { inserted: 0, byShop: [] };
+
+  const pool = await appPool();
+  const descByItem = await posItemDescriptions(pool);
+  const marks = await pool.request().query(
+    `SELECT [ShopCode],[LocationCode],[SourceCompany] FROM [dbo].[PosStockWatermark] WHERE [LocationCode] IS NOT NULL`
+  );
+
+  let insertedTotal = 0;
+  const byShop = [];
+  for (const wm of marks.recordset) {
+    const code = String(wm.ShopCode).toUpperCase();
+    const loc  = String(wm.LocationCode || '').trim();
+    const co   = String(wm.SourceCompany || 'FCL').toUpperCase();
+    if (!loc) continue;
+
+    // Only items that are (a) known POS items and (b) NET-NEW at this shop
+    // (no existing movement of any kind). This is the safety gate for live shops.
+    const candidates = wanted.filter((n) => descByItem.has(n));
+    if (!candidates.length) continue;
+    const movR = pool.request().input('code', sql.NVarChar(50), code);
+    candidates.forEach((n, i) => movR.input(`m${i}`, sql.NVarChar(30), n));
+    const existingMov = await movR.query(
+      `SELECT DISTINCT UPPER([ItemNo]) AS ItemNo FROM [dbo].[PosStockMovement]
+       WHERE [ShopCode]=@code AND UPPER([ItemNo]) IN (${candidates.map((_, i) => `@m${i}`).join(',')})`
+    );
+    const hasMov = new Set(existingMov.recordset.map((r) => String(r.ItemNo).toUpperCase()));
+    const fresh = candidates.filter((n) => !hasMov.has(n));
+    if (!fresh.length) continue;
+
+    // Pull every BC ledger entry for these fresh items at the shop's location.
+    const { table } = ledgerTable(co);
+    const bcPool = await bcDb.getPool();
+    const bcR = bcPool.request().input('loc', sql.NVarChar(20), str(loc, 20));
+    fresh.forEach((n, i) => bcR.input(`f${i}`, sql.NVarChar(30), n));
+    const bce = await bcR.query(`
+      SELECT [Entry No_] AS EntryNo, UPPER(LTRIM(RTRIM([Item No_]))) AS ItemNo,
+             [Quantity] AS Qty, [Entry Type] AS EType, RTRIM([Document No_]) AS Doc,
+             CAST([Posting Date] AS DATE) AS PDate
+      FROM   ${table}
+      WHERE  [Location Code]=@loc
+        AND  UPPER(LTRIM(RTRIM([Item No_]))) IN (${fresh.map((_, i) => `@f${i}`).join(',')})
+        AND  [Entry Type] IN (${types.join(',')})
+      ORDER BY [Entry No_]`);
+    if (!bce.recordset.length) continue;
+
+    // Idempotency: skip entries already imported for this shop.
+    const existed = await pool.request().input('code', sql.NVarChar(50), code)
+      .query(`SELECT [ReferenceNo] FROM [dbo].[PosStockMovement]
+              WHERE [ShopCode]=@code AND [ReferenceType]='bc-ledger' AND [ReferenceNo] IS NOT NULL`);
+    const seen = new Set(existed.recordset.map((r) => String(r.ReferenceNo)));
+
+    let inserted = 0;
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    try {
+      for (const e of bce.recordset) {
+        const ref = String(e.EntryNo);
+        if (seen.has(ref)) continue;
+        const mt = LEDGER_TYPE_MOVEMENT[Number(e.EType)] || 'positive-adj';
+        await new sql.Request(tx)
+          .input('shopCode',    sql.NVarChar(50),   code)
+          .input('itemNo',      sql.NVarChar(30),   e.ItemNo)
+          .input('description', sql.NVarChar(200),  descByItem.get(e.ItemNo) || null)
+          .input('mt',          sql.NVarChar(30),   mt)
+          .input('qty',         sql.Decimal(18, 4), Number(e.Qty || 0))
+          .input('refno',       sql.NVarChar(30),   ref)
+          .input('mdate',       sql.Date,           e.PDate || new Date())
+          .input('notes',       sql.NVarChar(500),  `BC ${LEDGER_TYPE_NAME[Number(e.EType)] || ('type ' + e.EType)} ${e.Doc || ''} (ILE ${ref}) @ ${loc} [new-item backfill]`.slice(0, 500))
+          .input('by',          sql.NVarChar(100),  'backfill:bom-sync')
+          .query(`INSERT INTO [dbo].[PosStockMovement]
+            ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+            VALUES (@shopCode,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
+        inserted++;
+      }
+      await tx.commit();
+    } catch (err) { await tx.rollback(); throw err; }
+
+    if (inserted) { insertedTotal += inserted; byShop.push({ shopCode: code, locationCode: loc, items: fresh, inserted }); }
+  }
+  if (insertedTotal) logger.info('backfillLedgerForNewItems', { items: wanted, inserted: insertedTotal, byShop });
+  return { inserted: insertedTotal, byShop };
+}
+
 // ── Automatic BC ledger pull: config + run log ───────────────────────────────
 // A background scheduler runs pullBcLedgerEntries periodically for every shop that
 // has a stock baseline (watermark). Config + a run log live here.
