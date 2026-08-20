@@ -1278,7 +1278,10 @@ GROUP BY [G_L Account No_]</pre>
               <h4>Payment Methods</h4>
               <Button icon="pi pi-plus" text size="small" v-tooltip="'New payment method'" @click="newPosPayType" />
             </div>
-            <div v-if="editingPosPayType" class="builder-form" style="max-width:700px">
+            <Dialog v-model:visible="editingPosPayType" modal
+              :header="posPayTypeForm.typeId ? `Edit payment method — ${posPayTypeForm.name || posPayTypeForm.code}` : 'New payment method'"
+              :style="{ width: '760px' }" class="paytype-dialog">
+              <div class="builder-form">
               <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 80px 80px;gap:8px;align-items:center">
                 <InputText v-model="posPayTypeForm.code" placeholder="Code (e.g. MPESA)" />
                 <InputText v-model="posPayTypeForm.name" placeholder="Display name" />
@@ -1362,20 +1365,25 @@ GROUP BY [G_L Account No_]</pre>
                   </p>
                 </div>
               </details>
-
-              <div class="schedule-actions" style="margin-top:10px">
-                <Button label="Save" icon="pi pi-save" size="small" @click="savePosPayType" :loading="savingPosPayType" />
-                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosPayType=false" />
               </div>
-            </div>
+              <template #footer>
+                <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosPayType=false" />
+                <Button label="Save" icon="pi pi-save" size="small" @click="savePosPayType" :loading="savingPosPayType" />
+              </template>
+            </Dialog>
             <DataTable :value="posPaymentTypes" dataKey="TypeId" size="small" removableSort>
               <Column field="Code"         header="Code"  sortable style="width:100px" />
               <Column field="Name"         header="Name"  sortable style="min-width:160px" />
               <Column field="ShopCode"     header="Shop"  sortable style="width:90px" />
               <Column field="PaymentClass" header="Class" sortable style="width:110px" />
               <Column field="SortOrder"    header="Sort"  sortable style="width:55px" />
-              <Column field="IsActive" header="Active" sortable style="width:70px">
-                <template #body="{ data }"><i :class="data.IsActive ? 'pi pi-check text-success' : 'pi pi-times text-muted'" /></template>
+              <Column field="IsActive" header="Active" sortable style="width:90px">
+                <template #body="{ data }">
+                  <Button :icon="data.IsActive ? 'pi pi-check' : 'pi pi-times'" text size="small"
+                    :severity="data.IsActive ? 'success' : 'secondary'" :loading="togglingPayType === data.TypeId"
+                    v-tooltip="data.IsActive ? 'Shown at POS — click to hide' : 'Hidden from POS — click to show'"
+                    @click="togglePayTypeActive(data)" />
+                </template>
               </Column>
               <Column header="" style="width:80px">
                 <template #body="{ data }">
@@ -2380,6 +2388,7 @@ async function importBcItems() {
 // payment types
 const editingPosPayType  = ref(false)
 const savingPosPayType   = ref(false)
+const togglingPayType    = ref(null)
 const posPayTypeForm     = ref({
   typeId: null, code: '', shopCode: null, name: '',
   paymentClass: 'Cash', isActive: true, sortOrder: 0, description: '',
@@ -2415,6 +2424,24 @@ function editPosPayType(d){
     paymentFetchUrl: d.PaymentFetchUrl||'',
   }
   editingPosPayType.value = true
+}
+// Quick show/hide at POS without opening the editor (re-saves the row with IsActive flipped).
+async function togglePayTypeActive(d) {
+  togglingPayType.value = d.TypeId
+  try {
+    await posSetupApi.savePaymentType({
+      typeId: d.TypeId, code: d.Code, shopCode: d.ShopCode || null, name: d.Name,
+      paymentClass: d.PaymentClass, isActive: !d.IsActive, sortOrder: d.SortOrder, description: d.Description || '',
+      useApiEndpoint: Boolean(d.UseApiEndpoint), apiEndpoint: d.ApiEndpoint || '', apiKey: d.ApiKey || '',
+      consumerKey: d.ConsumerKey || '', consumerSecret: d.ConsumerSecret || '',
+      shortCode: d.ShortCode || '', passkey: d.Passkey || '',
+      transactionType: d.TransactionType || 'CustomerPayBillOnline',
+      callbackUrl: d.CallbackUrl || '', accountReference: d.AccountReference || '',
+      paymentFetchUrl: d.PaymentFetchUrl || '',
+    })
+    await loadPosSetup()
+  } catch (e) { toast.add({ severity: 'error', summary: 'Could not update', detail: e.response?.data?.error || e.message, life: 4000 }) }
+  finally { togglingPayType.value = null }
 }
 
 // Special prices CRUD
