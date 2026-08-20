@@ -105,7 +105,7 @@ export async function createProductionOrder({ shopCode, company = null, location
         .input('type', sql.NVarChar(20),  'component')
         .input('itemNo', sql.NVarChar(30), String(l.ComponentItemNo).toUpperCase())
         .input('desc', sql.NVarChar(200), l.Description || m.description || null)
-        .input('uom',  sql.NVarChar(20),  l.Uom || m.uom || null)
+        .input('uom',  sql.NVarChar(20),  l.Uom || bom.OutputUom || fin.uom || null)
         .input('std',  sql.Decimal(18, 4), std)
         .input('act',  sql.Decimal(18, 4), std)
         .input('svc',  sql.Bit,           m.isService ? 1 : 0)
@@ -319,21 +319,23 @@ export async function postProductionOrder(prodOrderId, { userId = null, userName
   const ref = order.orderNo;
   const common = { shopCode: order.shopCode, referenceType: 'production', referenceId: prodOrderId, referenceNo: ref, createdBy: userName || userId, movementDate: new Date() };
 
-  // Quantities on the order are in each line's chosen UoM; the stock ledger is in
-  // BASE units, so translate every posted qty via the item's UoM matrix.
-  const matrix = await itemUomMatrix(pool, [order.outputItemNo, ...order.lines.map((l) => l.itemNo)]);
+  // UoMs on both the output and the components are picked from the FINISHED item's
+  // UoM matrix, and the stock ledger is in BASE units — so translate every posted
+  // qty via the finished item's matrix factor (base units per chosen unit).
+  const matrix = await itemUomMatrix(pool, [order.outputItemNo]);
+  const outMeta = matrix.get(String(order.outputItemNo).toUpperCase());
 
   // Consume components (guarded against negative stock by postMovement).
   for (const l of order.lines) {
     if (l.lineType !== 'component' || l.isService) continue;
     const q = r4(l.actualQty);
     if (q <= 0) continue;
-    const { factor } = factorToBase(matrix.get(l.itemNo), l.uom);
+    const { factor } = factorToBase(outMeta, l.uom);
     const qBase = r4(q * factor);
     await postMovement({ ...common, itemNo: l.itemNo, description: l.description, movementType: 'consume-out', quantity: -qBase, notes: `Consumed ${q} ${l.uom || ''} for ${ref}`.trim() });
   }
   // Produce the finished good (translated to base units).
-  const outFactor = factorToBase(matrix.get(String(order.outputItemNo).toUpperCase()), order.outputUom);
+  const outFactor = factorToBase(outMeta, order.outputUom);
   const outBase = r4(Number(order.outputQty) * outFactor.factor);
   await postMovement({ ...common, itemNo: order.outputItemNo, description: order.outputDescription, movementType: 'produce-in', quantity: outBase, notes: `Produced ${order.outputQty} ${order.outputUom || ''} by ${ref}`.trim() });
 
@@ -352,12 +354,14 @@ export async function postProductionOrder(prodOrderId, { userId = null, userName
  */
 export async function resolveBaseQuantities(order) {
   const pool = await appPool();
-  const matrix = await itemUomMatrix(pool, [order.outputItemNo, ...order.lines.map((l) => l.itemNo)]);
-  const out = factorToBase(matrix.get(String(order.outputItemNo).toUpperCase()), order.outputUom);
+  // All UoMs (output + components) come from the finished item's matrix.
+  const matrix = await itemUomMatrix(pool, [order.outputItemNo]);
+  const outMeta = matrix.get(String(order.outputItemNo).toUpperCase());
+  const out = factorToBase(outMeta, order.outputUom);
   return {
     output: { itemNo: order.outputItemNo, qtyBase: r4(Number(order.outputQty) * out.factor), baseUom: out.baseUom || order.outputUom || '' },
     lines: order.lines.map((l) => {
-      const f = factorToBase(matrix.get(String(l.itemNo).toUpperCase()), l.uom);
+      const f = factorToBase(outMeta, l.uom);
       return { ...l, qtyBase: r4(Number(l.actualQty) * f.factor), baseUom: f.baseUom || l.uom || '' };
     }),
   };

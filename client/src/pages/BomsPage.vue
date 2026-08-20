@@ -43,7 +43,7 @@
             <td>{{ l.componentItemNo }}</td>
             <td>{{ l.description }}</td>
             <td class="r"><InputNumber v-model="l.qtyPer" :min="0" :maxFractionDigits="4" inputStyle="width:110px;text-align:right" /></td>
-            <td><Select v-model="l.uom" :options="uomsFor(l.componentItemNo)" option-label="code" option-value="code" placeholder="UoM" style="width:110px" /></td>
+            <td><Select v-model="l.uom" :options="uomsFor(form.itemNo)" option-label="code" option-value="code" placeholder="UoM" style="width:110px" /></td>
             <td><Button icon="pi pi-trash" text severity="danger" size="small" @click="form.lines.splice(i,1)" /></td>
           </tr>
           <tr v-if="!form.lines.length"><td colspan="5" class="text-muted">Add at least one component.</td></tr>
@@ -145,7 +145,7 @@ async function editBom(row) {
     const { data } = await posApi.getBom(row.ItemNo)
     form.value = {
       itemNo: data.ItemNo, outputUom: data.OutputUom || baseUomFor(data.ItemNo), isActive: !!data.IsActive, notes: data.Notes || '', _existing: true,
-      lines: (data.lines || []).map(l => ({ componentItemNo: l.ComponentItemNo, description: l.Description || '', qtyPer: Number(l.QtyPer || 0), uom: l.Uom || baseUomFor(l.ComponentItemNo), sortOrder: l.SortOrder })),
+      lines: (data.lines || []).map(l => ({ componentItemNo: l.ComponentItemNo, description: l.Description || '', qtyPer: Number(l.QtyPer || 0), uom: l.Uom || baseUomFor(data.ItemNo), sortOrder: l.SortOrder })),
     }
     editing.value = true
   } catch (e) { error.value = e.response?.data?.error || e.message }
@@ -155,7 +155,8 @@ function addComponent() {
   const it = items.value.find(i => i.itemNo === addComp.value)
   if (!it) return
   if (form.value.lines.some(l => l.componentItemNo === it.itemNo)) { addComp.value = null; return }
-  form.value.lines.push({ componentItemNo: it.itemNo, description: it.description, qtyPer: 1, uom: it.baseUom || it.uom || '', sortOrder: form.value.lines.length })
+  // Component UoM is picked from the FINISHED item's matrix (default = its base unit).
+  form.value.lines.push({ componentItemNo: it.itemNo, description: it.description, qtyPer: 1, uom: baseUomFor(form.value.itemNo) || '', sortOrder: form.value.lines.length })
   addComp.value = null
 }
 
