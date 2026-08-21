@@ -105,6 +105,7 @@ export const posApi = {
   deleteBom:      (itemNo)     => api.delete(`/pos/boms/${encodeURIComponent(itemNo)}`),
   completeOrder:  (id)         => api.post(`/pos/orders/${id}/complete`),
   cancelOrder:    (id)         => api.post(`/pos/orders/${id}/cancel`),
+  reopenOrder:    (id)         => api.post(`/pos/orders/${id}/reopen`),
   saveCart:       (id, label)  => api.post(`/pos/orders/${id}/save`,   { label }),
   resumeCart:     (id)         => api.post(`/pos/orders/${id}/resume`),
   confirmPayment: (pid, ref)   => api.post(`/pos/payments/${pid}/confirm`, { reference: ref }),

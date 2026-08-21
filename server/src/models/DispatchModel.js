@@ -122,6 +122,31 @@ export async function createForOrder(order) {
   }
 }
 
+/**
+ * Remove the dispatch order for a POS order — only when it is still 'pending'
+ * (not yet confirmed/assigned/picked). Used when a paid POS order is reopened so
+ * a fresh dispatch order is created on re-checkout. No-op if none / already started.
+ */
+export async function deleteForOrder(sourceOrderId) {
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('sid', sql.UniqueIdentifier, sourceOrderId)
+    .query(`SELECT [DispatchOrderId],[Status] FROM [dbo].[DispatchOrder] WHERE [SourceOrderId]=@sid`);
+  if (!r.recordset.length) return { deleted: 0 };
+  const { DispatchOrderId, Status } = r.recordset[0];
+  if (Status !== 'pending') return { deleted: 0, skipped: true, status: Status };
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    for (const t of ['DispatchOrderPart', 'DispatchOrderLine', 'DispatchOrder']) {
+      await new sql.Request(tx).input('id', sql.UniqueIdentifier, DispatchOrderId)
+        .query(`DELETE FROM [dbo].[${t}] WHERE [DispatchOrderId]=@id`);
+    }
+    await tx.commit();
+  } catch (e) { try { await tx.rollback(); } catch { /* noop */ } throw e; }
+  return { deleted: 1 };
+}
+
 // ── Reads ────────────────────────────────────────────────────────────────────
 /** Full dispatch order: header + lines + the 4 parts. */
 export async function getDispatchOrder(dispatchOrderId) {

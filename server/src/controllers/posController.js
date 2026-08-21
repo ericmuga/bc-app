@@ -843,6 +843,15 @@ export async function cancelOrder(req, res) {
   } catch (e) { err(res, e, e.message.includes('not found') ? 404 : 400); }
 }
 
+export async function reopenOrder(req, res) {
+  try {
+    const r = await Pos.reopenPaidOrder(req.params.orderId, {
+      userId: req.user?.userId, userName: req.user?.userName,
+    });
+    ok(res, r);
+  } catch (e) { err(res, e, e.message.includes('not found') ? 404 : 400); }
+}
+
 export async function setOrderContact(req, res) {
   try {
     const { contactNo, contactName, contactPhone, contactPin } = req.body;

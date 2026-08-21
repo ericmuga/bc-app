@@ -187,6 +187,8 @@ router.post('/pos/orders/:orderId/checkout-multi', ...canPos, posCtrl.checkoutMu
 router.post('/pos/orders/:orderId/complete',       ...canPos, posCtrl.completeOrder);
 router.patch('/pos/orders/:orderId/contact',       ...canPos, posCtrl.setOrderContact);
 router.post('/pos/orders/:orderId/cancel',         ...canPos, posCtrl.cancelOrder);
+// Reopen an accidentally-paid order (manager only; refused once posted/signed).
+router.post('/pos/orders/:orderId/reopen',         ...canManage, posCtrl.reopenOrder);
 router.post('/pos/orders/:orderId/save',           ...canPos, posCtrl.saveCart);
 router.post('/pos/orders/:orderId/resume',         ...canPos, posCtrl.resumeCart);
 router.post('/pos/orders/:orderId/reprint',        ...canPos, posCtrl.reprintOrder);

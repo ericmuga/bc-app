@@ -104,6 +104,13 @@
               @click.stop="signOrder(data)"
             />
             <Button
+              v-if="data.Status === 'paid' && !data.EtimsInvoiceNo && !data.Posted && isManager"
+              icon="pi pi-history" size="small" severity="warn" text rounded
+              v-tooltip.top="'Reopen — revert to an open cart (only if never posted/signed)'"
+              :loading="reopening[data.OrderId]"
+              @click.stop="reopenOrder(data)"
+            />
+            <Button
               v-if="data.Status === 'paid' && data.EtimsInvoiceNo && isAdmin"
               icon="pi pi-undo" size="small" severity="danger" text rounded
               v-tooltip.top="'Sign eTIMS credit memo'"
@@ -330,6 +337,7 @@ import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
+const isManager = computed(() => ['admin', 'shop-admin', 'sales-admin'].includes(auth.user?.role))
 const orders        = ref([])
 const orderFilters  = ref({
   global:      { value: null, matchMode: 'contains' },
@@ -346,6 +354,7 @@ const completing    = reactive({})
 const reprinting    = reactive({})
 const signing       = reactive({})
 const crediting     = reactive({})
+const reopening     = reactive({})
 const creditMemo = reactive({
   visible: false,
   processing: false,
@@ -439,6 +448,20 @@ async function signOrder(row) {
     error.value = e.response?.data?.error ?? e.message
   } finally {
     signing[id] = false
+  }
+}
+
+async function reopenOrder(row) {
+  const id = row.OrderId || row.orderId
+  if (!window.confirm(`Reopen order ${row.OrderNo || ''}?\n\nThis reverts it to an open cart so it can be checked out again. Only possible because it was never posted to inventory or signed. Any payment recorded against it will be cleared.`)) return
+  reopening[id] = true; error.value = ''
+  try {
+    await posApi.reopenOrder(id)
+    await load()
+  } catch (e) {
+    error.value = e.response?.data?.error ?? e.message
+  } finally {
+    reopening[id] = false
   }
 }
 

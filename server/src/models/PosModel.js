@@ -2456,13 +2456,16 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
 
   const r = await req.query(`
     SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[TotalAmount],
-           o.[EtimsInvoiceNo],
+           o.[EtimsInvoiceNo],o.[SignedAt],
            o.[CreatedAt],o.[UpdatedAt],
-           COUNT(l.[LineId]) AS LineCount
+           COUNT(l.[LineId]) AS LineCount,
+           CAST(CASE WHEN EXISTS (SELECT 1 FROM [dbo].[PosStockMovement] m
+                                  WHERE m.[ReferenceType]='order' AND m.[ReferenceId]=o.[OrderId])
+                     THEN 1 ELSE 0 END AS bit) AS Posted
     FROM [dbo].[PosOrder] o
     LEFT JOIN [dbo].[PosOrderLine] l ON l.[OrderId]=o.[OrderId]
     ${where}
-    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[EtimsInvoiceNo],
+    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[EtimsInvoiceNo],o.[SignedAt],
              o.[TotalAmount],o.[CreatedAt],o.[UpdatedAt]
     ORDER BY o.[CreatedAt] DESC
   `);
@@ -2869,6 +2872,56 @@ export async function cancelOrder(orderId) {
   await pool.request()
     .input('orderId', sql.UniqueIdentifier, orderId)
     .query(`UPDATE [dbo].[PosOrder] SET [Status]='cancelled',[UpdatedAt]=GETUTCDATE() WHERE [OrderId]=@orderId`);
+}
+
+/**
+ * Reopen a paid order back to 'open' so it can be re-checked-out — for the case
+ * where an order was marked paid ACCIDENTALLY and never completed downstream.
+ *
+ * Only allowed when the sale never actually posted: NOT signed with eTIMS and NO
+ * stock movements posted to the ledger. If either happened the order was genuinely
+ * checked out and reopening is refused (use an eTIMS credit memo / stock adjustment
+ * instead). Clears the payment rows and any pending dispatch order so re-checkout
+ * starts clean.
+ */
+export async function reopenPaidOrder(orderId, { userId = null, userName = null } = {}) {
+  const pool = await appPool();
+  const info = await pool.request()
+    .input('id', sql.UniqueIdentifier, orderId)
+    .query(`SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[Status],o.[EtimsInvoiceNo],o.[SignedAt],
+                   (SELECT COUNT(*) FROM [dbo].[PosStockMovement] m
+                    WHERE m.[ReferenceType]='order' AND m.[ReferenceId]=o.[OrderId]) AS MovCount
+            FROM [dbo].[PosOrder] o WHERE o.[OrderId]=@id`);
+  if (!info.recordset.length) throw new Error('Order not found');
+  const o = info.recordset[0];
+  if (o.Status !== 'paid') throw new Error(`Only a paid order can be reopened (this one is '${o.Status}')`);
+  if (o.EtimsInvoiceNo || o.SignedAt) {
+    throw new Error('This order was already signed with eTIMS — it cannot be reopened. Sign an eTIMS credit memo instead.');
+  }
+  if (Number(o.MovCount) > 0) {
+    throw new Error('This order already posted to inventory (stock was deducted) — it cannot be reopened. Reverse it with a stock adjustment / credit memo instead.');
+  }
+
+  // Best-effort: drop the un-started dispatch order so re-checkout recreates a fresh one.
+  try { const Dispatch = await import('./DispatchModel.js'); await Dispatch.deleteForOrder(orderId); }
+  catch (e) { logger.warn('reopen: dispatch cleanup failed', { orderId, error: e.message }); }
+
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId)
+      .query(`DELETE FROM [dbo].[PosPayment] WHERE [OrderId]=@id`);
+    const upd = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId)
+      .query(`UPDATE [dbo].[PosOrder]
+              SET [Status]='open',[EtimsInvoiceNo]=NULL,[CuSerialNo]=NULL,[QrUrl]=NULL,[SignedAt]=NULL,
+                  [UpdatedAt]=GETUTCDATE()
+              WHERE [OrderId]=@id AND [Status]='paid'`);
+    if (!upd.rowsAffected[0]) throw new Error('Order changed state — reopen aborted, please refresh');
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+
+  logger.info('paid order reopened', { orderNo: o.OrderNo, orderId, shopCode: o.ShopCode, by: userName || userId });
+  return { orderId, orderNo: o.OrderNo, status: 'open' };
 }
 
 export async function completeOrder(orderId) {
