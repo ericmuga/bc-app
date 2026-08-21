@@ -20,13 +20,27 @@ function yyyymmdd(d = new Date()) {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 }
 
-async function nextProdOrderNo(pool) {
-  const day = yyyymmdd();
+// Sanitize a shop code for use inside an order number (mirrors the sales-order rule).
+// Capped to 5 chars so the full production number stays within BC's 20-char No_ limit.
+function shopToken(shopCode) {
+  const raw = String(shopCode || 'POS').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (raw || 'POS').slice(0, 5);
+}
+
+// Production order number: PRD-{SHOP}-{YYMMDD}-{seq}. The PRD- prefix keeps it
+// distinct from sales orders ({SHOP}-{YYYYMMDD}-{seq}); the sequence runs per shop
+// per day. Kept to ≤20 chars (max: PRD- 4 + shop 5 + - 1 + YYMMDD 6 + - 1 + seq 3 = 20)
+// for BC's Production Order No_ field. MAX-based so deletes don't cause a collision.
+async function nextProdOrderNo(pool, shopCode = null) {
+  const day = yyyymmdd().slice(2);           // YYMMDD
+  const prefix = `PRD-${shopToken(shopCode)}-${day}-`;
   const r = await pool.request()
-    .input('like', sql.NVarChar(30), `PRD-${day}-%`)
-    .query(`SELECT COUNT(*) AS N FROM [dbo].[PosProductionOrder] WHERE [OrderNo] LIKE @like`);
-  const seq = Number(r.recordset[0]?.N || 0) + 1;
-  return `PRD-${day}-${String(seq).padStart(3, '0')}`;
+    .input('like', sql.NVarChar(30), `${prefix}%`)
+    .query(`SELECT TOP 1 [OrderNo] FROM [dbo].[PosProductionOrder]
+            WHERE [OrderNo] LIKE @like ORDER BY [OrderNo] DESC`);
+  if (!r.recordset.length) return `${prefix}001`;
+  const seq = parseInt(String(r.recordset[0].OrderNo).slice(-3), 10) + 1;
+  return `${prefix}${String(seq).padStart(3, '0')}`;
 }
 
 /** Item master lookups (description, uom, service flag) for a set of item nos. */
@@ -72,7 +86,7 @@ export async function createProductionOrder({ shopCode, company = null, location
   const metaNos = [finished, ...bom.lines.map((l) => l.ComponentItemNo)];
   const meta = await itemMeta(pool, metaNos);
   const fin = meta.get(finished) || {};
-  const orderNo = await nextProdOrderNo(pool);
+  const orderNo = await nextProdOrderNo(pool, shopCode);
 
   const tx = new sql.Transaction(pool);
   await tx.begin();
