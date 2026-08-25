@@ -9,6 +9,7 @@ import * as Pos from '../models/PosModel.js';
 import * as Stock from '../models/PosStockModel.js';
 import * as Bom from '../models/PosBomModel.js';
 import * as BcSync from '../models/PosBcSyncModel.js';
+import * as Prod from '../models/PosProductionModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import { signPosOrder, signOrderNow, signOrderBg, signPosCreditMemo, printPosOrder, printConfirmationReceipt, sendStkPush, listInstalledPrinters,
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
@@ -285,13 +286,30 @@ export async function productionPlan(req, res) {
   } catch (e) { err(res, e, 400); }
 }
 
-/** POST /pos/produce — make finished goods from BOM (knock off components). */
+/**
+ * POST /pos/produce — make finished goods from their recipe when a sale is short
+ * on finished stock. Each item now creates AND posts a real production order
+ * (PRD-…) — consuming raw materials and producing the finished good in the POS
+ * ledger, giving an auditable record + BC WMS push — instead of loose movements.
+ */
 export async function produce(req, res) {
   try {
-    const { shopCode, orderId, orderNo } = await resolveShopAndLines(req);
+    const { shopCode } = await resolveShopAndLines(req);
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'items[] required' });
-    ok(res, await Bom.produceItems({ shopCode, items, orderId, referenceNo: orderNo, userId: req.user.userId }));
+    const produced = [];
+    for (const it of items) {
+      const qty = Number(it.qty) || 0;
+      if (!it.itemNo || qty <= 0) continue;
+      const order = await Prod.createProductionOrder({
+        shopCode, outputItemNo: it.itemNo, outputQty: qty,
+        userId: req.user.userId, userName: req.user.userName,
+      });
+      await Prod.postProductionOrder(order.prodOrderId, { userId: req.user.userId, userName: req.user.userName });
+      BcSync.pushProductionOrderBg(order.prodOrderId);   // non-blocking BC WMS push
+      produced.push({ prodOrderId: order.prodOrderId, orderNo: order.orderNo, itemNo: it.itemNo, qty });
+    }
+    ok(res, { produced });
   } catch (e) { err(res, e, e.code === 'NO_BOM' ? 404 : 400); }
 }
 

@@ -80,6 +80,16 @@ export async function createProductionOrder({ shopCode, company = null, location
   if (!finished) throw new Error('outputItemNo is required');
   if (qty <= 0) throw new Error('outputQty must be positive');
 
+  // Resolve company/location from the shop's stock baseline when not supplied
+  // (e.g. auto-production at sale time), so the order can push to BC WMS later.
+  if (!company || !locationCode) {
+    const wm = await pool.request().input('s', sql.NVarChar(50), String(shopCode || '').toUpperCase())
+      .query(`SELECT TOP 1 [SourceCompany],[LocationCode] FROM [dbo].[PosStockWatermark] WHERE [ShopCode]=@s`);
+    const w = wm.recordset[0] || {};
+    company = company || w.SourceCompany || 'FCL';
+    locationCode = locationCode || w.LocationCode || null;
+  }
+
   const bom = await getBom(finished);
   if (!bom || !bom.IsActive) { const e = new Error(`No active BOM/recipe for ${finished}`); e.code = 'NO_BOM'; throw e; }
 
