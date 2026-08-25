@@ -46,10 +46,17 @@ export const invoicesApi = {
   list:        (params) => api.get('/invoices', { params }),
   get:         (no)     => api.get(`/invoices/${no}`),
   getByQRCode: (url)    => api.get('/invoices/by-qrcode', { params: { url } }),
+  getByBarcode:(code)   => api.get(`/invoices/by-barcode/${encodeURIComponent(code)}`),
   confirm:     (no)     => api.post(`/invoices/${no}/confirm`),
   audit:       (no)     => api.get(`/invoices/${no}/audit`),
   summary:     (params) => api.get('/invoices/summary', { params }),
   exportLines: (params) => api.get('/invoices/lines', { params }),
+  confirmations:(params)=> api.get('/invoices/confirmations', { params }),
+  // BC invoice import job
+  importConfig:    ()      => api.get('/invoices/import/config'),
+  saveImportConfig:(body)  => api.put('/invoices/import/config', body),
+  importLog:       (limit=100) => api.get('/invoices/import/log', { params: { limit } }),
+  importRun:       (body={})=> api.post('/invoices/import/run', body),
 }
 
 export const adminApi = {

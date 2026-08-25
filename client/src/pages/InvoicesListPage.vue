@@ -20,7 +20,44 @@
       <Button label="Clear"  icon="pi pi-times"  text @click="list.reset()" />
       <Button icon="pi pi-download" text severity="secondary" @click="doExport" v-tooltip="'Export to CSV'" />
       <Button icon="pi pi-file-excel" text severity="secondary" @click="doExportXlsx" :loading="xlsxLoading" v-tooltip="'Export to Excel'" />
+      <Button label="Confirmations PDF" icon="pi pi-file-pdf" size="small" severity="secondary" outlined
+        @click="exportConfirmations('pdf')" :loading="confLoading" v-tooltip="'Who confirmed each invoice + when (PDF)'" />
+      <Button label="Confirmations Excel" icon="pi pi-verified" size="small" severity="secondary" outlined
+        @click="exportConfirmations('xlsx')" :loading="confLoading" v-tooltip="'Who confirmed each invoice + when (Excel)'" />
     </div>
+
+    <!-- Admin: BC invoice import background job -->
+    <details v-if="isAdmin" class="bc-card import-panel">
+      <summary><i class="pi pi-cloud-download" /> BC invoice import — background job (barcoded invoices due for scanning)</summary>
+      <div class="imp-body">
+        <div class="imp-row">
+          <label class="imp-chk"><Checkbox v-model="imp.enabled" binary /> Enabled</label>
+          <label>Every <InputNumber v-model="imp.intervalMinutes" :min="1" :max="1440" showButtons style="width:110px" /> min</label>
+          <label>Look back <InputNumber v-model="imp.lookbackDays" :min="0" :max="30" showButtons style="width:110px" /> day(s)</label>
+          <span class="imp-cos">
+            <label v-for="c in ALL_COMPANIES" :key="c" class="imp-chk"><Checkbox v-model="imp.companies" :value="c" /> {{ c }}</label>
+          </span>
+        </div>
+        <div class="imp-row">
+          <Button label="Save schedule" icon="pi pi-save" size="small" @click="saveImp" :loading="impBusy" />
+          <Button label="Run now" icon="pi pi-play" size="small" severity="secondary" @click="runImp" :loading="impRunning" />
+          <Button label="Refresh log" icon="pi pi-refresh" size="small" text @click="loadImpLog" />
+          <span v-if="impResult" class="text-sm text-muted">{{ impResult }}</span>
+        </div>
+        <DataTable :value="impLog" size="small" class="mt-2" paginator :rows="10">
+          <Column header="When"><template #body="{data}">{{ fmtTime(data.startedAt) }}</template></Column>
+          <Column field="company" header="Co" style="width:60px" />
+          <Column field="dateFrom" header="From" style="width:100px" />
+          <Column field="dateTo" header="To" style="width:100px" />
+          <Column field="scanned" header="Scanned" style="width:80px" />
+          <Column field="imported" header="Imported" style="width:80px" />
+          <Column field="skipped" header="Skipped" style="width:80px" />
+          <Column header="OK" style="width:50px"><template #body="{data}"><i :class="data.ok ? 'pi pi-check text-success' : 'pi pi-times text-danger'" /></template></Column>
+          <Column field="triggeredBy" header="By" style="width:90px" />
+          <Column field="error" header="Error" />
+        </DataTable>
+      </div>
+    </details>
 
     <!-- Totals strip -->
     <div class="totals-strip" v-if="list.rows.length">
@@ -122,6 +159,12 @@ import { useDocumentList } from '@/composables/useDocumentList.js'
 import { watchDebounced }  from '@/composables/useDebounce.js'
 import { exportCsv, todayStr } from '@/utils/exportCsv.js'
 import { exportXlsx, INVOICE_HEADER_COLS, INVOICE_LINE_COLS } from '@/utils/exportXlsx.js'
+import { jsPDF } from 'jspdf'
+import 'jspdf-autotable'
+import Checkbox    from 'primevue/checkbox'
+import InputNumber from 'primevue/inputnumber'
+import { useAuthStore } from '@/stores/auth.js'
+import { useToast } from 'primevue/usetoast'
 
 const router = useRouter()
 const list   = useDocumentList(invoicesApi.list)
@@ -171,6 +214,73 @@ async function doExportXlsx() {
     xlsxLoading.value = false
   }
 }
+
+// ── Confirmations export (who confirmed + when) — PDF + Excel ────────────────
+const CONF_COLS = [
+  ['InvoiceNo', 'Invoice No'], ['Barcode', 'Barcode'], ['CustomerName', 'Customer'],
+  ['RouteCode', 'Route'], ['InvoicedAt', 'Invoiced At'], ['Status', 'Status'],
+  ['ConfirmedBy', 'Confirmed By'], ['ConfirmedAt', 'Confirmed At'],
+]
+function iso(d) { return d instanceof Date ? d.toISOString().slice(0, 10) : (d || undefined) }
+function fmtTime(v) { return v ? new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '' }
+function confCell(key, v) { return (key === 'ConfirmedAt' || key === 'InvoicedAt') && v ? fmtTime(v) : (v ?? '') }
+const confLoading = ref(false)
+async function exportConfirmations(kind) {
+  confLoading.value = true
+  try {
+    const params = { dateFrom: iso(list.filters.dateFrom), dateTo: iso(list.filters.dateTo), status: list.filters.status || undefined }
+    const { data } = await invoicesApi.confirmations(params)
+    if (!data.length) { toast.add({ severity: 'info', summary: 'No invoices', detail: 'Nothing in this filter to export.', life: 3000 }); return }
+    if (kind === 'pdf') {
+      const pdf = new jsPDF('l', 'mm', 'a4')
+      pdf.setFontSize(14); pdf.text('Invoice Confirmations', 14, 14)
+      pdf.setFontSize(9); pdf.text(`${params.dateFrom || '…'} → ${params.dateTo || '…'}  ·  ${data.length} invoices`, 14, 20)
+      pdf.autoTable({
+        head: [CONF_COLS.map(c => c[1])],
+        body: data.map(r => CONF_COLS.map(c => confCell(c[0], r[c[0]]))),
+        startY: 24, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] },
+      })
+      pdf.save(`invoice-confirmations-${todayStr()}.pdf`)
+    } else {
+      exportXlsx(`invoice-confirmations-${todayStr()}.xlsx`, [{
+        name: 'Confirmations',
+        rows: data.map(r => ({ ...r, InvoicedAt: fmtTime(r.InvoicedAt), ConfirmedAt: fmtTime(r.ConfirmedAt) })),
+        columns: CONF_COLS.map(c => ({ key: c[0], label: c[1] })),
+      }])
+    }
+  } catch (e) { toast.add({ severity: 'error', summary: 'Export failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
+  finally { confLoading.value = false }
+}
+
+// ── Admin: BC invoice import job ─────────────────────────────────────────────
+const auth = useAuthStore()
+const toast = useToast()
+const isAdmin = computed(() => auth.user?.role === 'admin')
+const ALL_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
+const imp = ref({ enabled: false, intervalMinutes: 15, lookbackDays: 1, companies: [...ALL_COMPANIES] })
+const impLog = ref([]); const impBusy = ref(false); const impRunning = ref(false); const impResult = ref('')
+async function loadImp() {
+  try { imp.value = (await invoicesApi.importConfig()).data } catch { /* non-admin / not set */ }
+}
+async function loadImpLog() {
+  try { impLog.value = (await invoicesApi.importLog(50)).data } catch { /* ignore */ }
+}
+async function saveImp() {
+  impBusy.value = true
+  try { imp.value = (await invoicesApi.saveImportConfig(imp.value)).data; toast.add({ severity: 'success', summary: 'Schedule saved', life: 2500 }) }
+  catch (e) { toast.add({ severity: 'error', summary: 'Save failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
+  finally { impBusy.value = false }
+}
+async function runImp() {
+  impRunning.value = true; impResult.value = ''
+  try {
+    const { data } = await invoicesApi.importRun({})
+    impResult.value = `Imported ${data.totalImported} of ${data.totalScanned} scanned (${data.from} → ${data.to}).`
+    await loadImpLog()
+  } catch (e) { toast.add({ severity: 'error', summary: 'Run failed', detail: e.response?.data?.error || e.message, life: 5000 }) }
+  finally { impRunning.value = false }
+}
+if (isAdmin.value) { loadImp(); loadImpLog() }
 
 // Grand totals are computed from header rows (no line detail needed in list)
 const grandQty     = computed(() => list.rows.reduce((s, r) => s + (+r.TotalQuantity     || 0), 0))
@@ -229,4 +339,11 @@ const fmtDate     = (v) => v ? new Date(v).toLocaleString('en-KE') : '—'
 .total-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--bc-text-muted); }
 .total-val   { font-size: 20px; font-weight: 700; color: var(--bc-text); }
 .total-box.highlight .total-val { color: var(--bc-primary-light); }
+.import-panel { margin-top: 12px; padding: 10px 14px; }
+.import-panel > summary { cursor: pointer; font-weight: 600; }
+.import-panel .imp-body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.import-panel .imp-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.import-panel .imp-chk { display: inline-flex; align-items: center; gap: 6px; }
+.import-panel .imp-cos { display: inline-flex; gap: 12px; align-items: center; }
+.text-success { color: #16a34a; } .text-danger { color: #dc2626; }
 </style>

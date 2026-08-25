@@ -157,10 +157,13 @@ async function lookup() {
   doc.value       = null
   reset()
   try {
+    // Scanning uses the invoice BARCODE (BC 'Invoice Barcode No_', e.g. FCL-IN00978660).
+    // by-barcode matches Barcode OR InvoiceNo, so a plain invoice number still works.
+    // A scanned QR URL (legacy) still resolves via the QR endpoint.
     const isUrl = raw.startsWith('http')
     const { data } = isUrl
       ? await invoicesApi.getByQRCode(raw)
-      : await invoicesApi.get(raw)
+      : await invoicesApi.getByBarcode(raw)
     doc.value = data
     await loadAudit(data.header.InvoiceNo)
   } catch (e) {
