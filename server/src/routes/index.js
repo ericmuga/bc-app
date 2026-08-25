@@ -69,6 +69,12 @@ router.get( '/invoices/summary',           authMiddleware, requireRole(...REPORT
 router.get( '/invoices/lines',             authMiddleware, requireRole(...REPORT_ROLES), company, invoiceCtrl.exportInvoiceLines);
 router.get( '/invoices/by-qrcode',         authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getByQRCode);
 router.get( '/invoices/by-barcode/:code',  authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getByBarcode);
+router.get( '/invoices/confirmations',     authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.invoiceConfirmations);
+// BC invoice import job (barcoded, rolling window). Config is admin-only; run/log are admin+security.
+router.get( '/invoices/import/config',     authMiddleware, requireRole(...ADMIN_ROLES),   invoiceCtrl.getImportConfig);
+router.put( '/invoices/import/config',     authMiddleware, requireRole(...ADMIN_ROLES),   invoiceCtrl.saveImportConfig);
+router.get( '/invoices/import/log',        authMiddleware, requireRole(...INVOICE_ROLES), invoiceCtrl.getImportLog);
+router.post('/invoices/import/run',        authMiddleware, requireRole(...INVOICE_ROLES), invoiceCtrl.runImportNow);
 router.get( '/invoices/:invoiceNo',        authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getInvoice);
 router.post('/invoices/:invoiceNo/confirm',authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.confirmInvoice);
 router.get( '/invoices/:invoiceNo/audit',  authMiddleware, requireRole(...INVOICE_ROLES), company, invoiceCtrl.getInvoiceAudit);

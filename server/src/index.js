@@ -15,6 +15,7 @@ import logger from './services/logger.js';
 import swaggerSpec from './docs/swagger.js';
 import { startReportScheduler } from './services/reportScheduler.js';
 import { startBcPullScheduler } from './services/bcPullScheduler.js';
+import { startInvoiceImportScheduler } from './services/invoiceImportScheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -133,6 +134,19 @@ async function ensurePosItemColumns() {
       IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AuditLog_UserId_OccurredAt'
                      AND object_id=OBJECT_ID('[dbo].[AuditLog]'))
         CREATE INDEX [IX_AuditLog_UserId_OccurredAt] ON [dbo].[AuditLog]([UserId],[OccurredAt] DESC)
+    `);
+
+    // InvoiceImportLog — run log for the BC invoice import job
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='InvoiceImportLog' AND schema_id=SCHEMA_ID('dbo'))
+      CREATE TABLE [dbo].[InvoiceImportLog] (
+        [RunId] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        [StartedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        [FinishedAt] DATETIME2 NULL,
+        [Company] NVARCHAR(20) NULL, [DateFrom] NVARCHAR(20) NULL, [DateTo] NVARCHAR(20) NULL,
+        [Scanned] INT NULL, [Imported] INT NULL, [Skipped] INT NULL,
+        [Ok] BIT NULL, [Error] NVARCHAR(500) NULL, [DurationMs] INT NULL, [TriggeredBy] NVARCHAR(100) NULL
+      )
     `);
 
     // 2. Single-column adds (idempotent)
@@ -335,6 +349,7 @@ async function start() {
   await ensurePosItemColumns();
   startReportScheduler();
   startBcPullScheduler();
+  startInvoiceImportScheduler();
   app.listen(PORT, () => logger.info(`API listening on :${PORT}`));
 }
 

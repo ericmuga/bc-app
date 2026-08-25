@@ -5,6 +5,8 @@ import Invoice from '../models/Invoice.js';
 import Order from '../models/Order.js';
 import logger from '../services/logger.js';
 import { getOrSet } from '../services/reportCache.js';
+import * as InvoiceImport from '../models/InvoiceImportModel.js';
+import { runInvoiceImportNow } from '../services/invoiceImportScheduler.js';
 
 /** POST /api/webhook/invoices  – called by Business Central with ETIMS data */
 export async function receiveInvoice(req, res) {
@@ -163,6 +165,35 @@ export async function exportInvoiceLines(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+/** GET /api/invoices/confirmations?dateFrom=&dateTo=&status= — who confirmed + when. */
+export async function invoiceConfirmations(req, res) {
+  try {
+    const { dateFrom, dateTo, status } = req.query;
+    return res.json(await Invoice.confirmations(req.companyId, { dateFrom, dateTo, status }));
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+}
+
+// ── BC invoice import job (Sync-Center-style) ────────────────────────────────
+export async function getImportConfig(_req, res) {
+  try { return res.json(await InvoiceImport.getInvoiceImportConfig()); }
+  catch (err) { return res.status(500).json({ error: err.message }); }
+}
+export async function saveImportConfig(req, res) {
+  try { return res.json(await InvoiceImport.saveInvoiceImportConfig(req.body || {})); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+}
+export async function getImportLog(req, res) {
+  try { return res.json(await InvoiceImport.listInvoiceImportRuns({ limit: req.query.limit })); }
+  catch (err) { return res.status(500).json({ error: err.message }); }
+}
+export async function runImportNow(req, res) {
+  try {
+    const { companies, dateFrom, dateTo } = req.body || {};
+    const r = await runInvoiceImportNow({ companies, dateFrom, dateTo });
+    return res.json(r);
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 }
 
 /** GET /api/invoices/summary?groupBy=&dateFrom=&dateTo= */

@@ -93,6 +93,13 @@ export class Invoice extends BaseDocument {
       const transaction = new sql.Transaction(pool);
       await transaction.begin();
       try {
+        // Idempotency: if the invoice already exists, do nothing (prevents both a
+        // duplicate header AND duplicate lines on a re-delivered webhook / re-import).
+        const exists = await new sql.Request(transaction)
+          .input('InvoiceNo', sql.NVarChar(30), invoiceData.invoiceNo)
+          .query(`SELECT 1 FROM ${schema}.[InvoiceHeader] WHERE [InvoiceNo] = @InvoiceNo`);
+        if (exists.recordset.length) { await transaction.commit(); return false; }
+
         const ih = new sql.Request(transaction);
         ih.input('InvoiceNo',       sql.NVarChar(30),      invoiceData.invoiceNo);
         ih.input('CustomerNo',      sql.NVarChar(30),      invoiceData.customerNo      || '');
@@ -210,6 +217,28 @@ export class Invoice extends BaseDocument {
         `SELECT * FROM ${schema}.[InvoiceLine] WHERE [InvoiceNo] = @DocNo ORDER BY [LineNo]`
       );
       return { header: headerResult.recordset[0], lines: linesResult.recordset };
+    });
+  }
+
+  /**
+   * Invoices with their confirmation status — who confirmed and when. Basis for
+   * the security "confirmations" PDF/Excel export. Filter by InvoicedAt window +
+   * status ('Confirmed' / 'Invoiced').
+   */
+  async confirmations(companyId, { dateFrom, dateTo, status } = {}) {
+    return db.query(companyId, async (pool, schema) => {
+      const req = pool.request();
+      const conds = ['1=1'];
+      if (dateFrom) { req.input('df', sql.Date, new Date(dateFrom)); conds.push('CAST(h.[InvoicedAt] AS DATE) >= @df'); }
+      if (dateTo)   { req.input('dt', sql.Date, new Date(dateTo));   conds.push('CAST(h.[InvoicedAt] AS DATE) <= @dt'); }
+      if (status)   { req.input('st', sql.NVarChar(20), status);     conds.push('h.[Status] = @st'); }
+      const r = await req.query(`
+        SELECT h.[InvoiceNo], h.[Barcode], h.[CustomerNo], h.[CustomerName], h.[RouteCode],
+               h.[PostingDate], h.[InvoicedAt], h.[Status], h.[ConfirmedBy], h.[ConfirmedAt]
+        FROM ${schema}.[InvoiceHeader] h
+        WHERE ${conds.join(' AND ')}
+        ORDER BY h.[ConfirmedAt] DESC, h.[InvoicedAt] DESC`);
+      return r.recordset;
     });
   }
 
