@@ -71,6 +71,7 @@ async function bcItemsByNos(company, itemNos) {
     SELECT b.[No_] AS ItemNo, b.[Description] AS Description, b.[Inventory Posting Group] AS InvPostingGroup,
            b.[VAT Prod_ Posting Group] AS VatPostingGroup, ISNULL(b.[Price Includes VAT],0) AS PriceIncludesVat,
            b.[Unit Price] AS UnitPrice,
+           COALESCE(NULLIF(b.[Unit Cost],0), NULLIF(b.[Last Direct Cost],0), 0) AS UnitCost,
            COALESCE(NULLIF(LTRIM(RTRIM(b.[Sales Unit of Measure])),''), b.[Base Unit of Measure]) AS UnitOfMeasure,
            b.[Base Unit of Measure] AS BaseUnitOfMeasure, b.[Sales Unit of Measure] AS SalesUnitOfMeasure,
            ISNULL(NULLIF(ium.[Qty_ per Unit of Measure],0),1) AS QtyPerSalesUnit
@@ -92,11 +93,13 @@ async function upsertPosItems(company, rows) {
     const taxType = vpg === 'VAT16' ? 'B' : 'A';
     const price = Number(it.UnitPrice || 0);
     const finalPrice = it.PriceIncludesVat ? price : Math.round(price * (1 + ratePct / 100) * 10000) / 10000;
+    const unitCost = Number(it.UnitCost || 0);   // BC net unit cost (Unit Cost, else Last Direct Cost)
     await pool.request()
       .input('itemNo', sql.NVarChar(30), itemNo)
       .input('description', sql.NVarChar(200), up(it.Description))
       .input('categoryCode', sql.NVarChar(50), up(it.InvPostingGroup).toUpperCase() || null)
       .input('unitPrice', sql.Decimal(18, 4), finalPrice)
+      .input('unitCost', sql.Decimal(18, 4), unitCost)
       .input('unitOfMeasure', sql.NVarChar(20), up(it.UnitOfMeasure) || null)
       .input('baseUom', sql.NVarChar(20), up(it.BaseUnitOfMeasure) || null)
       .input('salesUom', sql.NVarChar(20), up(it.SalesUnitOfMeasure) || null)
@@ -110,14 +113,15 @@ async function upsertPosItems(company, rows) {
         WHEN MATCHED THEN UPDATE SET
           [Description]=@description, [CategoryCode]=COALESCE(@categoryCode,[CategoryCode]),
           [UnitPrice]=CASE WHEN @unitPrice>0 THEN @unitPrice ELSE [UnitPrice] END,
+          [UnitCost]=CASE WHEN @unitCost>0 THEN @unitCost ELSE [UnitCost] END,
           [UnitOfMeasure]=COALESCE(@unitOfMeasure,[UnitOfMeasure]),
           [BaseUnitOfMeasure]=@baseUom, [SalesUnitOfMeasure]=@salesUom, [QtyPerSalesUnit]=@qtyPer,
           [VatPostingGroup]=@vpg, [PriceIncludesVat]=1, [VatPercent]=@vatPct, [TaxType]=@taxType,
           [SourceCompany]=@company, [UpdatedAt]=GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT
-          ([ItemNo],[Description],[CategoryCode],[UnitPrice],[UnitOfMeasure],[BaseUnitOfMeasure],[SalesUnitOfMeasure],[QtyPerSalesUnit],
+          ([ItemNo],[Description],[CategoryCode],[UnitPrice],[UnitCost],[UnitOfMeasure],[BaseUnitOfMeasure],[SalesUnitOfMeasure],[QtyPerSalesUnit],
            [VatPostingGroup],[PriceIncludesVat],[VatPercent],[TaxType],[SourceCompany],[IsActive])
-          VALUES (@itemNo,@description,@categoryCode,@unitPrice,@unitOfMeasure,@baseUom,@salesUom,@qtyPer,
+          VALUES (@itemNo,@description,@categoryCode,@unitPrice,@unitCost,@unitOfMeasure,@baseUom,@salesUom,@qtyPer,
                   @vpg,1,@vatPct,@taxType,@company,1);`);
     count++;
   }

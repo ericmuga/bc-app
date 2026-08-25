@@ -496,6 +496,8 @@ async function migrate(companyId) {
     ['BaseUnitOfMeasure',  'NVARCHAR(20)  NULL'],
     ['SalesUnitOfMeasure', 'NVARCHAR(20)  NULL'],
     ['QtyPerSalesUnit',    'DECIMAL(18,6) NOT NULL DEFAULT 1'],
+    // BC net unit cost (Unit Cost / Last Direct Cost) — used for chef profitability.
+    ['UnitCost',           'DECIMAL(18,4) NOT NULL DEFAULT 0'],
   ]) {
     await run(`
       IF NOT EXISTS (SELECT * FROM sys.columns
