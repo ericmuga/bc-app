@@ -218,6 +218,14 @@ export const stockApi = {
   dailyReportCsv: (params)                    => api.get('/pos/stock/daily-movements.csv', { params, responseType: 'blob' }),
   itemTxns:       (params)                    => api.get('/pos/stock/item-transactions', { params }),
 
+  // Chef: weekly material requisition + reports
+  explodeRecipes: (items)                     => api.post('/pos/requisition/explode', { items }),
+  pushRequestBc:  (id)                        => api.post(`/pos/stock-requests/${id}/push-bc`),
+  chefConsumption:    (params)                => api.get('/pos/reports/chef/consumption', { params }),
+  chefConsumptionCsv: (params)                => api.get('/pos/reports/chef/consumption', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
+  chefProductProfit:    (params)              => api.get('/pos/reports/chef/product-profit', { params }),
+  chefProductProfitCsv: (params)              => api.get('/pos/reports/chef/product-profit', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
+
   // Stock take
   listTakes:      ()                          => api.get('/pos/stock-takes'),
   getTake:        (id)                        => api.get(`/pos/stock-takes/${id}`),

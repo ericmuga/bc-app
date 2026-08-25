@@ -194,6 +194,18 @@
             <i class="pi pi-cog" />
             <span>Production Orders</span>
           </RouterLink>
+          <RouterLink to="/pos/requisition" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-list-check" />
+            <span>Material Requisition</span>
+          </RouterLink>
+          <RouterLink to="/pos/chef-stock-take" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-check-square" />
+            <span>Stock Take</span>
+          </RouterLink>
+          <RouterLink to="/pos/chef-reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-chart-bar" />
+            <span>Kitchen Reports</span>
+          </RouterLink>
         </details>
 
         <details v-if="isAdmin" class="nav-section" :open="navOpen.admin" @toggle="onNavToggle('admin', $event)">
