@@ -107,7 +107,7 @@ export class Invoice extends BaseDocument {
         ih.input('CustomerPin',     sql.NVarChar(50),      invoiceData.customerPin     || null);
         ih.input('SalespersonCode', sql.NVarChar(20),      invoiceData.salespersonCode || null);
         ih.input('SalespersonName', sql.NVarChar(200),     invoiceData.salespersonName || null);
-        ih.input('RouteCode',       sql.NVarChar(20),      invoiceData.routeCode       || null);
+        ih.input('RouteCode',       sql.NVarChar(100),     invoiceData.routeCode       || null);
         ih.input('SectorCode',      sql.NVarChar(20),      invoiceData.sectorCode      || null);
         ih.input('ShipToName',      sql.NVarChar(200),     invoiceData.shipToName      || null);
         ih.input('ShipmentMethod',  sql.NVarChar(30),      invoiceData.shipmentMethod  || null);

@@ -1544,7 +1544,7 @@ async function migrate(companyId) {
       [CustomerNo]      NVARCHAR(30)     NOT NULL,
       [CustomerName]    NVARCHAR(200)    NOT NULL,
       [SalespersonCode] NVARCHAR(20)     NULL,
-      [RouteCode]       NVARCHAR(20)     NULL,
+      [RouteCode]       NVARCHAR(100)    NULL,   -- some companies store the full route description here
       [SectorCode]      NVARCHAR(20)     NULL,
       [ShipmentDate]    DATE             NULL,
       [ShipToCode]      NVARCHAR(20)     NULL,
