@@ -293,3 +293,40 @@ export async function produceItems({ shopCode, items, orderId, referenceNo, user
 }
 
 function round4(n) { return Math.round((Number(n) || 0) * 10000) / 10000; }
+
+/**
+ * Explode a set of finished (cooked) products + planned quantities into an
+ * aggregated raw-material requirement — the basis of the chef's weekly material
+ * requisition. items: [{ itemNo, qty }].
+ * Returns { materials:[{ itemNo, description, uom, qty }], recipes:[{ itemNo, qty,
+ * hasBom, components }] } where each material qty = Σ(component QtyPer × planned qty).
+ */
+export async function explodeRecipesToMaterials(items) {
+  const plan = new Map();
+  for (const it of items || []) {
+    const k = String(it.itemNo || '').toUpperCase();
+    const q = num(it.qty);
+    if (!k || q <= 0) continue;
+    plan.set(k, (plan.get(k) || 0) + q);
+  }
+  if (!plan.size) return { materials: [], recipes: [] };
+
+  const boms = await activeBomsFor([...plan.keys()]);
+  const agg = new Map();
+  const recipes = [];
+  for (const [finished, qty] of plan) {
+    const bom = boms.get(finished);
+    if (!bom) { recipes.push({ itemNo: finished, qty, hasBom: false, components: 0 }); continue; }
+    recipes.push({ itemNo: finished, qty, hasBom: true, components: bom.lines.length });
+    for (const l of bom.lines) {
+      const need = round4((Number(l.qtyPer) || 0) * qty);
+      if (need <= 0) continue;
+      const cur = agg.get(l.componentItemNo) ||
+        { itemNo: l.componentItemNo, description: l.description, uom: l.uom || '', qty: 0 };
+      cur.qty = round4(cur.qty + need);
+      agg.set(l.componentItemNo, cur);
+    }
+  }
+  const materials = [...agg.values()].sort((a, b) => a.itemNo.localeCompare(b.itemNo));
+  return { materials, recipes };
+}

@@ -35,6 +35,11 @@ export const BOM_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLE
 // Manager-level POS actions: transfers, portioning, write-offs, master-data sync.
 // Shop-admin sees POS setup but NOT global admin areas (users, SMTP, finance, etc.)
 export const POS_MANAGER_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN];
+// Store operations the chef shares with POS staff: material requisitions + stock
+// takes for raw materials / finished cooked products (POS_ROLES + chef).
+export const STORE_OPS_ROLES = [...POS_ROLES, ROLES.CHEF];
+// Chef-facing production/consumption/profitability reports.
+export const CHEF_REPORT_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.CHEF];
 
 // ── Dispatch / pick-and-pack fulfilment ─────────────────────────────────────
 // Module access (any dispatch role) + per-stage guards.

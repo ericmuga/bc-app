@@ -369,6 +369,40 @@ export async function reportSalesByContact(req, res) {
   } catch (e) { err(res, e, 400); }
 }
 
+// ── Chef reports (material consumption + cooked-product profitability) ─────────
+function chefShopCode(req) {
+  const isMgr = ['admin', 'shop-admin', 'sales-admin'].includes(req.user.role);
+  return req.query.shopCode || (isMgr ? null : Pos.getUserShopCode(req.user.userId));
+}
+export async function reportChefConsumption(req, res) {
+  try {
+    const shopCode = await chefShopCode(req);
+    const data = await Stock.chefConsumptionReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
+    if (req.query.format === 'csv') {
+      const csv = csvBlob(['ItemNo','Description','Uom','QtyConsumed','UnitCost','CostValue'],
+                          data.rows.map(r => [r.itemNo, r.description, r.uom, r.qtyConsumed, r.unitCost, r.costValue]));
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="material-consumption-${req.query.dateFrom}_${req.query.dateTo}.csv"`);
+      return res.send(csv);
+    }
+    ok(res, data);
+  } catch (e) { err(res, e, 400); }
+}
+export async function reportChefProductProfit(req, res) {
+  try {
+    const shopCode = await chefShopCode(req);
+    const data = await Stock.chefProductProfitReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
+    if (req.query.format === 'csv') {
+      const csv = csvBlob(['ItemNo','Description','QtySold','Revenue','StdUnitCost','MaterialCost','Margin','MarginPct'],
+                          data.rows.map(r => [r.itemNo, r.description, r.qtySold, r.revenue, r.stdUnitCost, r.materialCost, r.margin, r.marginPct]));
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="product-profitability-${req.query.dateFrom}_${req.query.dateTo}.csv"`);
+      return res.send(csv);
+    }
+    ok(res, data);
+  } catch (e) { err(res, e, 400); }
+}
+
 export async function reportShopComparison(req, res) {
   try {
     const data = await Stock.shopComparisonReport({ dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
@@ -509,6 +543,7 @@ export async function createTake(req, res) {
       dateTo:    req.body.dateTo,
       countedBy: req.user.userName,
       notes:     req.body.notes || null,
+      itemScope: req.body.itemScope === 'bom' ? 'bom' : 'all',
     });
     ok(res, result);
   } catch (e) { err(res, e); }

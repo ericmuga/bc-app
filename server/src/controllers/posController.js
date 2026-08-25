@@ -295,6 +295,14 @@ export async function produce(req, res) {
   } catch (e) { err(res, e, e.code === 'NO_BOM' ? 404 : 400); }
 }
 
+/** POST /pos/requisition/explode — BOM-explode cooked products into raw materials. */
+export async function explodeRecipes(req, res) {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    ok(res, await Bom.explodeRecipesToMaterials(items));
+  } catch (e) { err(res, e, 400); }
+}
+
 export async function printConfirmation(req, res) {
   try {
     const order = await Pos.getOrder(req.params.orderId);

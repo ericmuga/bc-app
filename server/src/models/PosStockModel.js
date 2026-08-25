@@ -17,6 +17,7 @@ import logger from '../services/logger.js';
 
 function str(v, max = 200) { return String(v ?? '').trim().slice(0, max); }
 function num(v) { return isNaN(Number(v)) ? 0 : Number(v); }
+function round4(n) { return Math.round((Number(n) || 0) * 10000) / 10000; }
 
 async function appPool() { return appDb.getPool(); }
 
@@ -885,8 +886,9 @@ export async function getStockTake(stockTakeId) {
  * Create a stock take for a date range. Auto-populates lines for every item
  * the shop has had any movement on, with opening + period totals + expected stock.
  */
-export async function createStockTake({ shopCode, dateFrom, dateTo, countedBy, notes }) {
+export async function createStockTake({ shopCode, dateFrom, dateTo, countedBy, notes, itemScope = 'all' }) {
   const pool = await appPool();
+  const bomOnly = String(itemScope) === 'bom';
   const stockTakeNo = await nextNo(pool, 'ST', 'PosStockTake', 'StockTakeNo');
   const headerRes = await pool.request()
     .input('stockTakeNo', sql.NVarChar(30), stockTakeNo)
@@ -908,11 +910,15 @@ export async function createStockTake({ shopCode, dateFrom, dateTo, countedBy, n
     .input('dateFrom', sql.Date,         dateFrom)
     .input('dateTo',   sql.Date,         dateTo)
     .query(`
-      WITH AllItems AS (
+      ${bomOnly ? `WITH BomItems AS (
+        SELECT [ItemNo] AS ItemNo FROM [dbo].[PosBom]
+        UNION SELECT [ComponentItemNo] FROM [dbo].[PosBomLine]
+      ),
+      AllItems AS ( SELECT ItemNo FROM BomItems ),` : `WITH AllItems AS (
         SELECT DISTINCT [ItemNo]
         FROM [dbo].[PosStockMovement]
         WHERE [ShopCode]=@shopCode
-      ),
+      ),`}
       Opening AS (
         SELECT [ItemNo], ISNULL(SUM([Quantity]),0) AS Opening
         FROM [dbo].[PosStockMovement]
@@ -1314,6 +1320,99 @@ export async function salesByItemReport({ shopCode = null, dateFrom, dateTo } = 
       qtyKg,
     };
   });
+}
+
+/**
+ * Chef material-consumption report: raw materials (BOM components) actually
+ * consumed (consume-out movements) in the period, valued at PosItem.UnitCost.
+ * Returns { rows:[{itemNo, description, uom, qtyConsumed, unitCost, costValue}], totalCost }.
+ */
+export async function chefConsumptionReport({ shopCode = null, dateFrom, dateTo } = {}) {
+  if (!dateFrom || !dateTo) throw new Error('dateFrom, dateTo required');
+  const pool = await appPool();
+  const req = pool.request().input('df', sql.Date, dateFrom).input('dt', sql.Date, dateTo);
+  const shopFilter = shopCode ? 'AND m.[ShopCode]=@shop' : '';
+  if (shopCode) req.input('shop', sql.NVarChar(50), shopCode.toUpperCase());
+  const r = await req.query(`
+    SELECT m.[ItemNo],
+           ISNULL(pi.[Description], m.[ItemNo]) AS Description,
+           ISNULL(pi.[BaseUnitOfMeasure], pi.[UnitOfMeasure]) AS Uom,
+           SUM(ABS(m.[Quantity])) AS QtyConsumed,
+           ISNULL(pi.[UnitCost], 0) AS UnitCost
+    FROM   [dbo].[PosStockMovement] m
+    LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = m.[ItemNo]
+    WHERE  m.[MovementType] = 'consume-out'
+      AND  CAST(m.[MovementDate] AS DATE) BETWEEN @df AND @dt
+      AND  m.[ItemNo] IN (SELECT [ComponentItemNo] FROM [dbo].[PosBomLine])
+      ${shopFilter}
+    GROUP BY m.[ItemNo], pi.[Description], pi.[BaseUnitOfMeasure], pi.[UnitOfMeasure], pi.[UnitCost]
+    HAVING SUM(ABS(m.[Quantity])) <> 0
+    ORDER BY SUM(ABS(m.[Quantity])) * ISNULL(pi.[UnitCost],0) DESC
+  `);
+  let totalCost = 0;
+  const rows = r.recordset.map((x) => {
+    const qtyConsumed = Number(x.QtyConsumed || 0);
+    const unitCost = Number(x.UnitCost || 0);
+    const costValue = round4(qtyConsumed * unitCost);
+    totalCost += costValue;
+    return { itemNo: x.ItemNo, description: x.Description || '', uom: x.Uom || '', qtyConsumed, unitCost, costValue };
+  });
+  return { rows, totalCost: round4(totalCost) };
+}
+
+/**
+ * Chef cooked-product sales + tentative profitability. For each finished cooked
+ * product (a PosBom output) sold in the period: qty + revenue from POS order lines,
+ * a standard unit material cost rolled up from its recipe (Σ component QtyPer ×
+ * component UnitCost), estimated material cost, margin and margin %.
+ * Tentative — standard recipe cost, not actual consumption.
+ * Returns { rows:[...], totals:{revenue, materialCost, margin} }.
+ */
+export async function chefProductProfitReport({ shopCode = null, dateFrom, dateTo } = {}) {
+  if (!dateFrom || !dateTo) throw new Error('dateFrom, dateTo required');
+  const pool = await appPool();
+  const req = pool.request().input('df', sql.Date, dateFrom).input('dt', sql.Date, dateTo);
+  const shopFilter = shopCode ? 'AND o.[ShopCode]=@shop' : '';
+  if (shopCode) req.input('shop', sql.NVarChar(50), shopCode.toUpperCase());
+  const r = await req.query(`
+    WITH StdCost AS (
+      SELECT b.[ItemNo],
+             SUM(l.[QtyPer] * ISNULL(ci.[UnitCost], 0)) AS StdUnitCost
+      FROM   [dbo].[PosBom] b
+      JOIN   [dbo].[PosBomLine] l ON l.[BomId] = b.[BomId]
+      LEFT JOIN [dbo].[PosItem] ci ON ci.[ItemNo] = l.[ComponentItemNo]
+      GROUP BY b.[ItemNo]
+    ),
+    Sold AS (
+      SELECT ol.[ItemNo], MAX(ol.[Description]) AS Description,
+             SUM(ol.[Quantity]) AS QtySold, SUM(ol.[LineAmount]) AS Revenue
+      FROM   [dbo].[PosOrderLine] ol
+      JOIN   [dbo].[PosOrder] o ON o.[OrderId] = ol.[OrderId]
+      WHERE  o.[Status] = 'paid'
+        AND  CAST(o.[CreatedAt] AS DATE) BETWEEN @df AND @dt
+        AND  ol.[ItemNo] IN (SELECT [ItemNo] FROM [dbo].[PosBom])
+        ${shopFilter}
+      GROUP BY ol.[ItemNo]
+    )
+    SELECT s.[ItemNo], s.[Description], s.[QtySold], s.[Revenue],
+           ISNULL(sc.[StdUnitCost], 0) AS StdUnitCost
+    FROM   Sold s
+    LEFT JOIN StdCost sc ON sc.[ItemNo] = s.[ItemNo]
+    ORDER BY s.[Revenue] DESC
+  `);
+  const totals = { revenue: 0, materialCost: 0, margin: 0 };
+  const rows = r.recordset.map((x) => {
+    const qtySold = Number(x.QtySold || 0);
+    const revenue = round4(Number(x.Revenue || 0));
+    const stdUnitCost = Number(x.StdUnitCost || 0);
+    const materialCost = round4(qtySold * stdUnitCost);
+    const margin = round4(revenue - materialCost);
+    const marginPct = revenue > 0 ? round4((margin / revenue) * 100) : null;
+    totals.revenue += revenue; totals.materialCost += materialCost; totals.margin += margin;
+    return { itemNo: x.ItemNo, description: x.Description || '', qtySold, revenue, stdUnitCost, materialCost, margin, marginPct };
+  });
+  totals.revenue = round4(totals.revenue); totals.materialCost = round4(totals.materialCost); totals.margin = round4(totals.margin);
+  return { rows, totals };
 }
 
 /** Sales by contact — POS-paid orders only (manual sales have no contact). */

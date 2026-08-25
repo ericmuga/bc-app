@@ -28,6 +28,7 @@ import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
+  STORE_OPS_ROLES, CHEF_REPORT_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 import * as posProdCtrl from '../controllers/posProductionController.js';
 import * as posBcBomCtrl from '../controllers/posBcBomController.js';
@@ -157,10 +158,13 @@ const canPos    = [authMiddleware, requireRole(...POS_ROLES)];
 const canManage = [authMiddleware, requireRole(...POS_MANAGER_ROLES)];
 const canProdOrder = [authMiddleware, requireRole(...PRODUCTION_ORDER_ROLES)];
 const canBom       = [authMiddleware, requireRole(...BOM_ROLES)];
-router.get( '/pos/items',                          ...canPos, posCtrl.getItems);
+// Store ops (requisitions + stock takes) shared with the chef; chef reports.
+const canStoreOps  = [authMiddleware, requireRole(...STORE_OPS_ROLES)];
+const canChefRpt   = [authMiddleware, requireRole(...CHEF_REPORT_ROLES)];
+router.get( '/pos/items',                          ...canStoreOps, posCtrl.getItems);
 router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
-router.get( '/pos/my-shop',                        ...canPos, posCtrl.getMyShop);
-router.get( '/pos/my-shops',                       ...canPos, posCtrl.getMyShops);
+router.get( '/pos/my-shop',                        ...canStoreOps, posCtrl.getMyShop);
+router.get( '/pos/my-shops',                       ...canStoreOps, posCtrl.getMyShops);
 
 // ── Production orders (build finished items from BOMs) ───────────────────────
 router.get(  '/pos/production/makeable',           ...canProdOrder, posProdCtrl.listMakeable);
@@ -215,23 +219,23 @@ router.get( '/pos/price-list/pdf',                 ...canPos, posCtrl.getPriceLi
 router.post('/pos/payments/:paymentId/confirm',    ...canPos, posCtrl.confirmPayment);
 
 // ── POS Stock: requests, daily report, stock take ───────────────────────────
-router.get(  '/pos/stock-requests',                            ...canPos, posStockCtrl.listRequests);
-router.post( '/pos/stock-requests',                            ...canPos, posStockCtrl.createRequest);
-router.get(  '/pos/stock-requests/:requestId',                 ...canPos, posStockCtrl.getRequest);
-router.put(  '/pos/stock-requests/:requestId/lines',           ...canPos, posStockCtrl.setRequestLines);
-router.post( '/pos/stock-requests/:requestId/submit',          ...canPos, posStockCtrl.submitRequest);
+router.get(  '/pos/stock-requests',                            ...canStoreOps, posStockCtrl.listRequests);
+router.post( '/pos/stock-requests',                            ...canStoreOps, posStockCtrl.createRequest);
+router.get(  '/pos/stock-requests/:requestId',                 ...canStoreOps, posStockCtrl.getRequest);
+router.put(  '/pos/stock-requests/:requestId/lines',           ...canStoreOps, posStockCtrl.setRequestLines);
+router.post( '/pos/stock-requests/:requestId/submit',          ...canStoreOps, posStockCtrl.submitRequest);
 router.post( '/pos/stock-requests/:requestId/approve',         ...adminOnly, posStockCtrl.approveRequest);
 router.post( '/pos/stock-requests/:requestId/push-bc',         ...canManage, posStockCtrl.pushRequestToBc);
-router.post( '/pos/stock-requests/:requestId/cancel',          ...canPos, posStockCtrl.cancelRequest);
-router.post( '/pos/stock-requests/:requestId/complete',        ...canPos, posStockCtrl.completeRequest);
-router.get(  '/pos/stock-request-lines',                       ...canPos, posStockCtrl.listRequestLines);
+router.post( '/pos/stock-requests/:requestId/cancel',          ...canStoreOps, posStockCtrl.cancelRequest);
+router.post( '/pos/stock-requests/:requestId/complete',        ...canStoreOps, posStockCtrl.completeRequest);
+router.get(  '/pos/stock-request-lines',                       ...canStoreOps, posStockCtrl.listRequestLines);
 
 // ── POS make-to-order: BOM (recipes) + production plan/produce ──────────────
 router.get(  '/pos/boms',                                      ...canBom, posCtrl.listBoms);
 router.get(  '/pos/boms/:itemNo',                              ...canBom, posCtrl.getBom);
 router.post( '/pos/boms',                                      ...canBom, posCtrl.saveBom);
 router.delete('/pos/boms/:itemNo',                             ...canBom, posCtrl.deleteBom);
-router.get(  '/pos/makeable-items',                            ...canPos, posCtrl.listMakeable);
+router.get(  '/pos/makeable-items',                            ...canStoreOps, posCtrl.listMakeable);
 // Inventory posting groups (which sync to shops) + BC Production BOM sync
 router.get(  '/pos/setup/inv-posting-groups',                  ...canManage, posBcBomCtrl.getInvPostingGroups);
 router.put(  '/pos/setup/inv-posting-groups',                  ...canManage, posBcBomCtrl.saveInvPostingGroups);
@@ -246,6 +250,8 @@ router.get(  '/pos/bc-sync/imported-sales',                    ...canManage, pos
 router.post( '/pos/bc-sync/imported-sales/push',               ...canManage, posCtrl.pushImportedSales);
 router.post( '/pos/production-plan',                           ...canPos, posCtrl.productionPlan);
 router.post( '/pos/produce',                                   ...canPos, posCtrl.produce);
+// Chef weekly requisition: explode cooked products into aggregated raw materials.
+router.post( '/pos/requisition/explode',                       ...canStoreOps, posCtrl.explodeRecipes);
 
 // BC stock baseline (reset from BC on-hand) + incremental ledger loads
 router.get(  '/pos/stock/bc-watermark',                        ...canPos, posStockCtrl.bcStockWatermark);
@@ -274,9 +280,12 @@ router.get(  '/pos/reports/stock-position',                    ...canPos,    pos
 router.get(  '/pos/reports/sales-by-item',                     ...canPos,    posStockCtrl.reportSalesByItem);
 router.get(  '/pos/reports/sales-by-contact',                  ...canPos,    posStockCtrl.reportSalesByContact);
 router.get(  '/pos/reports/shop-comparison',                   ...canManage, posStockCtrl.reportShopComparison);
+// Chef reports: raw-material consumption (at cost) + cooked-product profitability.
+router.get(  '/pos/reports/chef/consumption',                  ...canChefRpt, posStockCtrl.reportChefConsumption);
+router.get(  '/pos/reports/chef/product-profit',               ...canChefRpt, posStockCtrl.reportChefProductProfit);
 router.get(  '/pos/reports/cash-movement',                     ...canPos,    posTillCtrl.reportCashMovement);
 router.get(  '/pos/stock/daily-movements.csv',                 ...canPos, posStockCtrl.dailyReportCsv);
-router.get(  '/pos/stock/item-transactions',                   ...canPos, posStockCtrl.itemTransactions);
+router.get(  '/pos/stock/item-transactions',                   ...canStoreOps, posStockCtrl.itemTransactions);
 
 // ── POS Till (cash sessions, transactions, cash report) ────────────────────
 router.get(  '/pos/till/current',                              ...canPos, posTillCtrl.currentSession);
@@ -340,12 +349,12 @@ router.get(  '/audit',          ...auditOnly, auditCtrl.listEntries);
 router.get(  '/audit/by-user',  ...auditOnly, auditCtrl.listByUser);
 router.get(  '/audit.csv',      ...auditOnly, auditCtrl.exportCsv);
 
-router.get(  '/pos/stock-takes',                               ...canPos, posStockCtrl.listTakes);
-router.post( '/pos/stock-takes',                               ...canPos, posStockCtrl.createTake);
-router.get(  '/pos/stock-takes/:stockTakeId',                  ...canPos, posStockCtrl.getTake);
-router.patch('/pos/stock-takes/:stockTakeId/lines/:lineId',    ...canPos, posStockCtrl.updateTakeLine);
-router.post( '/pos/stock-takes/:stockTakeId/complete',         ...canPos, posStockCtrl.completeTake);
-router.post( '/pos/stock-takes/:stockTakeId/submit',           ...canPos,    posStockCtrl.submitTake);
+router.get(  '/pos/stock-takes',                               ...canStoreOps, posStockCtrl.listTakes);
+router.post( '/pos/stock-takes',                               ...canStoreOps, posStockCtrl.createTake);
+router.get(  '/pos/stock-takes/:stockTakeId',                  ...canStoreOps, posStockCtrl.getTake);
+router.patch('/pos/stock-takes/:stockTakeId/lines/:lineId',    ...canStoreOps, posStockCtrl.updateTakeLine);
+router.post( '/pos/stock-takes/:stockTakeId/complete',         ...canStoreOps, posStockCtrl.completeTake);
+router.post( '/pos/stock-takes/:stockTakeId/submit',           ...canStoreOps,    posStockCtrl.submitTake);
 router.post( '/pos/stock-takes/:stockTakeId/approve',          ...canManage, posStockCtrl.approveTake);
 router.get(  '/pos/stock-takes/:stockTakeId/bc-journal.csv',   ...canManage, posStockCtrl.exportTakeBcJournal);
 router.get(  '/pos/stock-requests/:requestId/bc-journal.csv',  ...canManage, posStockCtrl.exportRequestBcJournal);
