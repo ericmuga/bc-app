@@ -41,8 +41,8 @@
         <div v-if="editable" class="plan-box">
           <h4>1 · Plan cooked products</h4>
           <div class="plan-add">
-            <Select v-model="pickItem" :options="makeable" option-label="label" option-value="ItemNo" filter
-                    placeholder="Cooked product…" style="flex:2" />
+            <Select v-model="pickItem" :options="makeable" option-label="label" option-value="itemNo" filter
+                    placeholder="Cooked product (synced BOM)…" style="flex:2" />
             <InputNumber v-model="pickQty" :min="0" :minFractionDigits="0" :maxFractionDigits="3" placeholder="Qty" style="flex:1" />
             <Button label="Add" icon="pi pi-plus" @click="addPlan" :disabled="!pickItem || !(pickQty>0)" />
           </div>
@@ -122,8 +122,11 @@ async function load() {
   finally  { loading.value = false }
 }
 async function loadMakeable() {
+  // Same source as the production order: finished items that have an active
+  // (synced) POS BOM. Response shape is { itemNo, description }.
   try {
-    makeable.value = (await posProdApi.makeable()).data.map(x => ({ ...x, label: `${x.ItemNo} — ${x.Description}` }))
+    makeable.value = (await posProdApi.makeable()).data
+      .map(m => ({ itemNo: m.itemNo, description: m.description, label: `${m.itemNo} — ${m.description}` }))
   } catch { /* non-fatal */ }
 }
 async function newRequisition() {
@@ -146,11 +149,11 @@ async function openById(id) {
   editorVisible.value = true
 }
 function addPlan() {
-  const it = makeable.value.find(m => m.ItemNo === pickItem.value)
+  const it = makeable.value.find(m => m.itemNo === pickItem.value)
   if (!it) return
-  const existing = plan.value.find(p => p.itemNo === it.ItemNo)
+  const existing = plan.value.find(p => p.itemNo === it.itemNo)
   if (existing) existing.qty = Number(existing.qty) + Number(pickQty.value)
-  else plan.value.push({ itemNo: it.ItemNo, description: it.Description, qty: Number(pickQty.value) })
+  else plan.value.push({ itemNo: it.itemNo, description: it.description, qty: Number(pickQty.value) })
   pickItem.value = null; pickQty.value = 1
 }
 async function explode() {
