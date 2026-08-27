@@ -1988,6 +1988,7 @@ export async function listShops({ activeOnly = false } = {}) {
   const where = activeOnly ? 'WHERE [IsActive]=1' : '';
   const r = await pool.request().query(`
     SELECT [ShopId],[Code],[Name],[LocationCode],[SalespersonCode],[WalkInCustomerNo],
+           [FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],
            [CurrentRoute],[TptLocationCode],
            [IsActive],[SortOrder],[CreatedAt],[UpdatedAt]
     FROM [dbo].[PosShop]
@@ -1998,8 +1999,12 @@ export async function listShops({ activeOnly = false } = {}) {
 }
 
 export async function saveShop({ shopId, code, name, locationCode = null, salespersonCode = null,
-                                 currentRoute = null, tptLocationCode = null, isActive = true, sortOrder = 0 }) {
+                                 currentRoute = null, tptLocationCode = null,
+                                 fclCustomerNo = null, cmCustomerNo = null, rmkCustomerNo = null,
+                                 flmCustomerNo = null, walkInCustomerNo = null,
+                                 isActive = true, sortOrder = 0 }) {
   const pool = await appPool();
+  const cust = (v) => str(v, 20) || null;   // BC customer no (kept as entered, no upper-casing)
   const req = pool.request()
     .input('code',            sql.NVarChar(50),  str(code, 50).toUpperCase())
     .input('name',            sql.NVarChar(200), str(name))
@@ -2007,6 +2012,11 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
     .input('salespersonCode', sql.NVarChar(20),  str(salespersonCode, 20).toUpperCase() || null)
     .input('currentRoute',    sql.NVarChar(200), str(currentRoute, 200) || null)
     .input('tptLocationCode', sql.NVarChar(200), str(tptLocationCode, 200) || null)
+    .input('fclCustomerNo',   sql.NVarChar(20),  cust(fclCustomerNo))
+    .input('cmCustomerNo',    sql.NVarChar(20),  cust(cmCustomerNo))
+    .input('rmkCustomerNo',   sql.NVarChar(20),  cust(rmkCustomerNo))
+    .input('flmCustomerNo',   sql.NVarChar(20),  cust(flmCustomerNo))
+    .input('walkInCustomerNo',sql.NVarChar(20),  cust(walkInCustomerNo))
     .input('isActive',        sql.Bit,           bool(isActive) ? 1 : 0)
     .input('sortOrder',       sql.Int,           num(sortOrder));
   if (shopId) {
@@ -2016,15 +2026,20 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
       SET [Code]=@code,[Name]=@name,[LocationCode]=@locationCode,
           [SalespersonCode]=@salespersonCode,
           [CurrentRoute]=@currentRoute,[TptLocationCode]=@tptLocationCode,
+          [FclCustomerNo]=@fclCustomerNo,[CmCustomerNo]=@cmCustomerNo,
+          [RmkCustomerNo]=@rmkCustomerNo,[FlmCustomerNo]=@flmCustomerNo,
+          [WalkInCustomerNo]=@walkInCustomerNo,
           [IsActive]=@isActive,[SortOrder]=@sortOrder,[UpdatedAt]=GETUTCDATE()
       WHERE [ShopId]=@shopId
     `);
     return shopId;
   }
   const result = await req.query(`
-    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[CurrentRoute],[TptLocationCode],[IsActive],[SortOrder])
+    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[CurrentRoute],[TptLocationCode],
+      [FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],[WalkInCustomerNo],[IsActive],[SortOrder])
     OUTPUT INSERTED.[ShopId]
-    VALUES(@code,@name,@locationCode,@salespersonCode,@currentRoute,@tptLocationCode,@isActive,@sortOrder)
+    VALUES(@code,@name,@locationCode,@salespersonCode,@currentRoute,@tptLocationCode,
+      @fclCustomerNo,@cmCustomerNo,@rmkCustomerNo,@flmCustomerNo,@walkInCustomerNo,@isActive,@sortOrder)
   `);
   return result.recordset[0].ShopId;
 }

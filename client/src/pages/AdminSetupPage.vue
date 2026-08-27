@@ -962,6 +962,18 @@ GROUP BY [G_L Account No_]</pre>
                   <label for="pos-shop-active">Active</label>
                 </div>
               </div>
+              <!-- BC customer mapping (Sell-to per company). The first company with a
+                   value is used as the shop's BC customer for POS→BC sales. -->
+              <div style="margin-top:8px">
+                <label class="ig-label">BC Customer No (Sell-to, per company)</label>
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:4px">
+                  <InputText v-model="posShopForm.fclCustomerNo"    placeholder="FCL customer" />
+                  <InputText v-model="posShopForm.cmCustomerNo"     placeholder="CM customer" />
+                  <InputText v-model="posShopForm.rmkCustomerNo"    placeholder="RMK customer" />
+                  <InputText v-model="posShopForm.flmCustomerNo"    placeholder="FLM customer" />
+                  <InputText v-model="posShopForm.walkInCustomerNo" placeholder="Walk-in customer" />
+                </div>
+              </div>
               <div class="schedule-actions" style="margin-top:6px">
                 <Button label="Save" icon="pi pi-save" size="small" @click="savePosShop" :loading="savingPosShop" />
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosShop=false" />
@@ -972,6 +984,9 @@ GROUP BY [G_L Account No_]</pre>
               <Column field="Name"            header="Name"        style="min-width:160px" />
               <Column field="LocationCode"    header="Location"    style="width:100px" />
               <Column field="SalespersonCode" header="Salesperson" style="width:110px" />
+              <Column header="BC Customer" style="width:110px">
+                <template #body="{ data }">{{ data.FclCustomerNo || data.CmCustomerNo || data.RmkCustomerNo || data.FlmCustomerNo || '—' }}</template>
+              </Column>
               <Column field="CurrentRoute"    header="Route"       style="width:120px">
                 <template #body="{ data }">{{ data.CurrentRoute || '—' }}</template>
               </Column>
@@ -2244,7 +2259,8 @@ const posShopOptions     = computed(() => [
 // shops
 const editingPosShop = ref(false)
 const savingPosShop  = ref(false)
-const posShopForm    = ref({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', isActive: true, sortOrder: 0 })
+const emptyShopForm = () => ({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', fclCustomerNo: '', cmCustomerNo: '', rmkCustomerNo: '', flmCustomerNo: '', walkInCustomerNo: '', isActive: true, sortOrder: 0 })
+const posShopForm    = ref(emptyShopForm())
 
 // BC Salespersons — read-only reference table for the terminals section
 const bcSalespersons = ref([])
@@ -2257,8 +2273,8 @@ async function loadBcSalespersons() {
   finally { loadingBcSp.value = false }
 }
 
-function newPosShop()  { posShopForm.value = { shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', isActive: true, sortOrder: 0 }; editingPosShop.value = true }
-function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
+function newPosShop()  { posShopForm.value = emptyShopForm(); editingPosShop.value = true }
+function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', fclCustomerNo: d.FclCustomerNo||'', cmCustomerNo: d.CmCustomerNo||'', rmkCustomerNo: d.RmkCustomerNo||'', flmCustomerNo: d.FlmCustomerNo||'', walkInCustomerNo: d.WalkInCustomerNo||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
 
 async function savePosShop() {
   savingPosShop.value = true
