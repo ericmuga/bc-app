@@ -1,3 +1,6 @@
 
 .restart.log
 .restart.err
+
+.boot.log
+.boot.err
