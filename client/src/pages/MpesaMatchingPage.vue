@@ -71,7 +71,7 @@ import Column from 'primevue/column'
 import Message from 'primevue/message'
 import SelectButton from 'primevue/selectbutton'
 import InputText from 'primevue/inputtext'
-import { posSetupApi } from '@/services/pos.js'
+import { posApi } from '@/services/pos.js'
 
 const views = [
   { label: 'Invoice → Payments', value: 'invoice' },
@@ -100,8 +100,8 @@ async function load() {
   try {
     const params = { from: filter.from || undefined, to: filter.to || undefined }
     const res = view.value === 'invoice'
-      ? await posSetupApi.mpesaInvoiceReport(params)
-      : await posSetupApi.mpesaPaymentReport(params)
+      ? await posApi.mpesaInvoiceReport(params)
+      : await posApi.mpesaPaymentReport(params)
     // rowGroup needs a stable key per row for the invoice view
     rows.value = (res.data || []).map((r, i) => ({ ...r, _k: `${r.OrderNo || r.MpesaCode}-${i}` }))
   } catch (e) { error.value = e.response?.data?.error || e.message }

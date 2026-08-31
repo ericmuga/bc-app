@@ -10,6 +10,8 @@
 
     <!-- Filters -->
     <div class="bc-card filters-bar">
+      <Select v-model="companyId" :options="companyOptions" placeholder="Company" style="width:120px" @change="onCompanyChange"
+        v-tooltip="'Which company\'s invoices to view'" />
       <InputText v-model="list.filters.q" placeholder="Search…" style="flex:1;min-width:180px" @keyup.enter="list.load()" />
       <DatePicker v-model="list.filters.dateFrom" placeholder="From" date-format="yy-mm-dd" show-icon />
       <DatePicker v-model="list.filters.dateTo"   placeholder="To"   date-format="yy-mm-dd" show-icon />
@@ -119,9 +121,19 @@
         <Column field="Status" header="Status" style="width:120px">
           <template #body="{ data }"><StatusBadge :status="data.Status" /></template>
         </Column>
-        <Column header="" style="width:90px">
+        <Column header="Confirmed" style="width:160px">
           <template #body="{ data }">
-            <Button icon="pi pi-list" label="Lines" text size="small" @click="toggleLines(data.InvoiceNo)" />
+            <div v-if="data.ConfirmedBy" class="text-sm">
+              <div>{{ data.ConfirmedBy }}</div>
+              <div class="text-muted">{{ fmtDate(data.ConfirmedAt) }}</div>
+            </div>
+            <span v-else class="text-muted text-sm">— not yet —</span>
+          </template>
+        </Column>
+        <Column header="" style="width:170px">
+          <template #body="{ data }">
+            <Button icon="pi pi-qrcode" label="Scan / Confirm" text size="small" @click="openScan(data.InvoiceNo)" />
+            <Button icon="pi pi-list" label="Details" text size="small" @click="toggleLines(data.InvoiceNo)" />
           </template>
         </Column>
       </DataTable>
@@ -165,6 +177,13 @@ import Checkbox    from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import { useAuthStore } from '@/stores/auth.js'
 import { useToast } from 'primevue/usetoast'
+
+import { useCompanyStore } from '@/stores/company.js'
+const companyStore = useCompanyStore()
+const INVOICE_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
+const companyOptions = computed(() => (companyStore.companies.length ? companyStore.companies.map(c => c.CompanyId) : INVOICE_COMPANIES))
+const companyId = ref(companyStore.currentCompanyId || 'FCL')
+function onCompanyChange() { companyStore.switchCompany(companyId.value); list.load() }
 
 const router = useRouter()
 const list   = useDocumentList(invoicesApi.list)

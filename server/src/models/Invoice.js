@@ -55,29 +55,29 @@ export class Invoice extends BaseDocument {
       }
       if (postingGroup) {
         req.input('PostingGroup', sql.NVarChar(50), postingGroup);
-        conditions.push('l.[PostingGroup] = @PostingGroup');
+        conditions.push(`EXISTS (SELECT 1 FROM ${schema}.[InvoiceLine] pl WHERE pl.[InvoiceNo]=h.[InvoiceNo] AND pl.[PostingGroup]=@PostingGroup)`);
       }
 
+      // Aggregate lines in a subquery so the header select needs no GROUP BY — this
+      // keeps SELECT h.* robust when new header columns (e.g. Barcode) are added.
       const result = await req.query(`
         SELECT
           h.*,
-          COALESCE(SUM(l.[Quantity]),          0) AS TotalQuantity,
-          COALESCE(SUM(l.[QuantityBase]),      0) AS TotalQuantityBase,
-          COALESCE(SUM(l.[LineAmount]),        0) AS TotalLineAmount,
-          COALESCE(SUM(l.[LineAmountInclVat]), 0) AS TotalInclVat
+          COALESCE(agg.[TotalQuantity],     0) AS TotalQuantity,
+          COALESCE(agg.[TotalQuantityBase], 0) AS TotalQuantityBase,
+          COALESCE(agg.[TotalLineAmount],   0) AS TotalLineAmount,
+          COALESCE(agg.[TotalInclVat],      0) AS TotalInclVat
         FROM ${schema}.[InvoiceHeader] h
-        LEFT JOIN ${schema}.[InvoiceLine] l ON l.[InvoiceNo] = h.[InvoiceNo]
+        LEFT JOIN (
+          SELECT [InvoiceNo],
+                 SUM([Quantity])          AS TotalQuantity,
+                 SUM([QuantityBase])      AS TotalQuantityBase,
+                 SUM([LineAmount])        AS TotalLineAmount,
+                 SUM([LineAmountInclVat]) AS TotalInclVat
+          FROM ${schema}.[InvoiceLine]
+          GROUP BY [InvoiceNo]
+        ) agg ON agg.[InvoiceNo] = h.[InvoiceNo]
         WHERE ${conditions.join(' AND ')}
-        GROUP BY
-          h.[Id], h.[InvoiceNo], h.[OriginalOrderNo], h.[CustomerNo], h.[CustomerName],
-          h.[CustomerPin], h.[SalespersonCode], h.[SalespersonName],
-          h.[RouteCode], h.[SectorCode],
-          h.[ShipToName], h.[ShipmentMethod], h.[PaymentTerms], h.[ExternalDocNo],
-          h.[CompanyName], h.[CompanyPin], h.[CompanyEmail], h.[CompanyVatReg],
-          h.[OrderDate], h.[PostingDate],
-          h.[InvoicedAt], h.[PrintingDatetime], h.[BCUserId], h.[NoPrinted],
-          h.[ETIMSInvoiceNo], h.[ETIMSData], h.[QRCodeUrl], h.[Status],
-          h.[ConfirmedAt], h.[ConfirmedBy], h.[CreatedAt], h.[UpdatedAt]
         ORDER BY h.[CreatedAt] DESC
       `);
       return result.recordset;
