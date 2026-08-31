@@ -52,7 +52,10 @@
           <div>
             <div class="doc-no mono">{{ doc.header.InvoiceNo }}</div>
             <div class="text-muted text-sm">
-              Original order: <span class="mono">{{ doc.header.OriginalOrderNo }}</span>
+              Barcode: <span class="mono">{{ doc.header.Barcode || '—' }}</span>
+            </div>
+            <div class="text-muted text-sm">
+              External doc: <span class="mono">{{ doc.header.ExternalDocNo || '—' }}</span>
             </div>
             <div class="doc-customer">{{ doc.header.CustomerName }}</div>
             <div class="text-muted text-sm">{{ doc.header.CustomerNo }}</div>

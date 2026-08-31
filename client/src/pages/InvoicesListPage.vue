@@ -100,12 +100,16 @@
             <span class="mono link" @click="openScan(data.InvoiceNo)">{{ data.InvoiceNo }}</span>
           </template>
         </Column>
-        <Column field="OriginalOrderNo" header="Order No" style="width:140px">
-          <template #body="{ data }">
-            <span class="mono text-muted">{{ data.OriginalOrderNo }}</span>
-          </template>
+        <Column field="Barcode" header="Barcode" style="width:160px">
+          <template #body="{ data }"><span class="mono text-sm">{{ data.Barcode || '—' }}</span></template>
         </Column>
         <Column field="CustomerName"    header="Customer" />
+        <Column field="ExternalDocNo" header="External Doc No" style="width:150px">
+          <template #body="{ data }"><span class="mono text-sm">{{ data.ExternalDocNo || '—' }}</span></template>
+        </Column>
+        <Column field="OriginalOrderNo" header="Order No" style="width:130px">
+          <template #body="{ data }"><span class="mono text-muted">{{ data.OriginalOrderNo || '—' }}</span></template>
+        </Column>
         <Column field="ETIMSInvoiceNo"  header="E-TIMS No" style="width:130px">
           <template #body="{ data }">
             <span class="mono text-sm">{{ data.ETIMSInvoiceNo || '—' }}</span>
@@ -145,7 +149,15 @@
         <Skeleton height="20px" class="mb-2" v-for="i in 4" :key="i" />
       </div>
       <template v-else>
-        <DocumentLines :lines="drawerLines" />
+        <div v-if="drawerHeader" class="inv-info">
+          <div class="inv-info-row"><span class="k">Invoice No</span><span class="v mono">{{ drawerHeader.InvoiceNo }}</span></div>
+          <div class="inv-info-row"><span class="k">Barcode</span><span class="v mono">{{ drawerHeader.Barcode || '—' }}</span></div>
+          <div class="inv-info-row"><span class="k">Customer</span><span class="v">{{ drawerHeader.CustomerNo }} — {{ drawerHeader.CustomerName }}</span></div>
+          <div class="inv-info-row"><span class="k">External Doc No</span><span class="v mono">{{ drawerHeader.ExternalDocNo || '—' }}</span></div>
+          <div class="inv-info-row"><span class="k">Status</span><span class="v"><StatusBadge :status="drawerHeader.Status" /></span></div>
+          <div class="inv-info-row" v-if="drawerHeader.ConfirmedBy"><span class="k">Confirmed by</span><span class="v">{{ drawerHeader.ConfirmedBy }} · {{ fmtDate(drawerHeader.ConfirmedAt) }}</span></div>
+        </div>
+        <DocumentLines :lines="drawerLines" class="mt-4" />
         <AuditLog :log="drawerAudit" class="mt-4" />
       </template>
     </Drawer>
@@ -308,22 +320,25 @@ const grandAmount  = computed(() => list.rows.reduce((s, r) => s + (+r.TotalLine
 
 // Drawer
 const drawerVisible = ref(false)
+const drawerHeader  = ref(null)
 const drawerLines   = ref([])
 const drawerAudit   = ref([])
 const drawerTitle   = ref('')
 const drawerLoading = ref(false)
 
 async function toggleLines(invoiceNo) {
-  drawerTitle.value   = `Lines — ${invoiceNo}`
+  drawerTitle.value   = `Invoice ${invoiceNo}`
   drawerVisible.value = true
   drawerLoading.value = true
+  drawerHeader.value  = null
   try {
     const [docRes, auditRes] = await Promise.all([
       invoicesApi.get(invoiceNo),
       invoicesApi.audit(invoiceNo),
     ])
-    drawerLines.value = docRes.data.lines
-    drawerAudit.value = auditRes.data
+    drawerHeader.value = docRes.data.header
+    drawerLines.value  = docRes.data.lines
+    drawerAudit.value  = auditRes.data
   } finally {
     drawerLoading.value = false
   }
@@ -365,4 +380,8 @@ const fmtDate     = (v) => v ? new Date(v).toLocaleString('en-KE') : '—'
 .import-panel .imp-chk { display: inline-flex; align-items: center; gap: 6px; }
 .import-panel .imp-cos { display: inline-flex; gap: 12px; align-items: center; }
 .text-success { color: #16a34a; } .text-danger { color: #dc2626; }
+.inv-info { border:1px solid var(--bc-border, #e2e8f0); border-radius:8px; padding:10px 12px; background:var(--bc-surface, #f8fafc); }
+.inv-info-row { display:flex; gap:10px; padding:3px 0; font-size:13px; }
+.inv-info-row .k { flex:0 0 130px; color:var(--bc-text-muted, #64748b); font-weight:600; }
+.inv-info-row .v { flex:1; color:var(--bc-text, #0f172a); }
 </style>
