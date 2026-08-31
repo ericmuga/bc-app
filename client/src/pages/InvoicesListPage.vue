@@ -192,8 +192,8 @@ import { useToast } from 'primevue/usetoast'
 
 import { useCompanyStore } from '@/stores/company.js'
 const companyStore = useCompanyStore()
-const INVOICE_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
-const companyOptions = computed(() => (companyStore.companies.length ? companyStore.companies.map(c => c.CompanyId) : INVOICE_COMPANIES))
+// Invoices exist only in these four company schemas — fixed list, not the global company set.
+const companyOptions = ['FCL', 'CM', 'FLM', 'RMK']
 const companyId = ref(companyStore.currentCompanyId || 'FCL')
 function onCompanyChange() { companyStore.switchCompany(companyId.value); list.load() }
 
