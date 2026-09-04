@@ -4,7 +4,6 @@ export const ROLES = {
   DISPATCH: 'dispatch',
   SECURITY: 'security',
   ANALYST: 'analyst',
-  DATA_ANALYST: 'data-analyst', // Reporting → Legacy Downloads (read-only exports)
   FINANCE: 'finance',
   SHOP: 'shop',
   SHOP_ADMIN: 'shop-admin',
@@ -20,9 +19,9 @@ export const ROLES = {
   LOADER: 'loader',
 };
 
-export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.SALES_ADMIN];
+export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.SALES_ADMIN, ROLES.FINANCE];
 // Reporting → Legacy Downloads (read-only exports over legacy BC databases).
-export const REPORTING_ROLES = [ROLES.ADMIN, ROLES.DATA_ANALYST];
+export const REPORTING_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.ANALYST];
 export const ORDER_ROLES = [ROLES.ADMIN, ROLES.DISPATCH];
 export const INVOICE_ROLES = [ROLES.ADMIN, ROLES.SECURITY];
 export const ADMIN_ROLES = [ROLES.ADMIN];

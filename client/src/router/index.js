@@ -10,11 +10,11 @@ import { canAccessDispatch, canDispatchAssign } from '@/lib/dispatchAccess.js'
 // the POS / Finance fall-throughs (so shop-admin / shop / finance roles get
 // bounced to /login from the home redirect). Keeping it here avoids editing
 // access.js, whose folder is owned by a different account on this host.
-// data-analyst is a lightweight role that only sees Reporting → Legacy Downloads.
+// Reporting → Legacy Downloads: admin, finance, analyst.
 // (lib/access.js can't be edited on this host — its folder is owned by another
 // account — so the role is matched by string here, as the router already does
 // for sales-admin / chef / dispatch-* roles.)
-const REPORTING_ROLES = ['admin', 'data-analyst']
+const REPORTING_ROLES = ['admin', 'finance', 'analyst']
 const canAccessReporting = (r) => REPORTING_ROLES.includes(normalizeRole(r))
 
 function defaultRouteForRole(role) {
@@ -44,9 +44,9 @@ const routes = [
       { path: 'invoices/scan',  name: 'InvoiceScan',  component: () => import('@/pages/InvoiceScanPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
       { path: 'invoices',       name: 'Invoices',     component: () => import('@/pages/InvoicesListPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
-      { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
+      { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.FINANCE] } },
       { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
-      { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'data-analyst'] } },
+      { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'finance', 'analyst'] } },
       { path: 'finance',        name: 'Finance',      component: () => import('@/pages/FinanceReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'costing',        name: 'Costing',      component: () => import('@/pages/CostingPage.vue'), props: { company: 'FCL' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
       { path: 'costing/cm',     name: 'CostingCM',    component: () => import('@/pages/CostingPage.vue'), props: { company: 'CM' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },

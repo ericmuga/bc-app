@@ -309,7 +309,7 @@ const isFullAdmin   = computed(() => isGlobalAdmin(role.value))
 const canViewOrders = computed(() => canAccessOrders(role.value))
 const canViewInvoices = computed(() => canAccessInvoices(role.value))
 // sales-admin gets the reports section too (lib/access grants it server-side/route-side)
-const canViewReports = computed(() => canAccessReports(role.value) || String(role.value || '').toLowerCase() === 'sales-admin')
+const canViewReports = computed(() => canAccessReports(role.value) || ['sales-admin', 'finance'].includes(String(role.value || '').toLowerCase()))
 const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
 const canViewCosting = computed(() => canAccessCosting(role.value))
@@ -317,9 +317,9 @@ const canViewCosting = computed(() => canAccessCosting(role.value))
 const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
 const canViewDispatch = computed(() => canAccessDispatch(role.value))
 const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.value || '').toLowerCase()))
-// Reporting → Legacy Downloads — admin + data-analyst (string-matched here;
+// Reporting → Legacy Downloads — admin, finance, analyst (string-matched here;
 // lib/access.js is owned by another account on this host and can't be edited).
-const canViewReporting = computed(() => ['admin', 'data-analyst'].includes(String(role.value || '').toLowerCase()))
+const canViewReporting = computed(() => ['admin', 'finance', 'analyst'].includes(String(role.value || '').toLowerCase()))
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 const canDispAssemble = computed(() => canDispatchAssemble(role.value))
@@ -337,7 +337,6 @@ const roleOptions = [
   { label: 'security',        value: 'security' },
   { label: 'sales',           value: 'sales' },
   { label: 'analyst',         value: 'analyst' },
-  { label: 'data-analyst',    value: 'data-analyst' },
   { label: 'finance',         value: 'finance' },
   { label: 'costing',         value: 'costing' },
   { label: 'dispatch-registry',   value: 'dispatch-registry' },
