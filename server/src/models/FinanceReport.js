@@ -58,7 +58,9 @@ export async function getTrialBalance({ companies, dateFrom, dateTo }) {
         ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS ClosingBalance
       FROM ${acct} a
       LEFT JOIN ${entry} e ON e.[G_L Account No_] = a.[No_]
-      WHERE a.[Account Type] = 0 AND a.[Blocked] = 0
+      -- Include blocked accounts: they can still carry a balance/movement, and
+      -- excluding them unbalances the TB (movement + closing must net to zero).
+      WHERE a.[Account Type] = 0
       GROUP BY a.[No_], a.[Name], a.[Account Type], a.[Account Category], a.[Income_Balance]
       HAVING
         ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Debit Amount]  ELSE 0 END), 0) <> 0
