@@ -132,6 +132,11 @@
           <Column field="AccountName" header="Account Name" sortable frozen style="min-width:240px" />
           <Column field="Company" header="Company" sortable style="min-width:80px" v-if="multiCompany" />
           <Column field="AccountCategoryLabel" header="Category" sortable style="min-width:120px" />
+          <Column header="Opening Balance" class="num-col" style="min-width:150px" sortable field="OpeningBalance">
+            <template #body="{ data }">
+              <span :class="data._isTotalRow ? 'total-num' : signClass(data.OpeningBalance)">{{ fmtAmt(data.OpeningBalance) }}</span>
+            </template>
+          </Column>
           <Column header="Period Debit" class="num-col" style="min-width:140px" sortable field="PeriodDebit">
             <template #body="{ data }">
               <span v-if="data._isTotalRow" class="total-num">{{ fmtAmt(data.PeriodDebit) }}</span>
@@ -605,16 +610,18 @@ const signClass = (v) => Number(v) >= 0 ? 'positive' : 'negative'
 // ── Trial Balance computed ───────────────────────────────────────────────────
 // Totals computed from raw rows (avoids circular dependency with tbRows)
 const tbTotals = computed(() => rows.value.reduce((acc, r) => {
+  const opening = Number(r.OpeningBalance) || 0
   const debit  = Number(r.PeriodDebit)    || 0
   const credit = Number(r.PeriodCredit)   || 0
   const bal    = Number(r.ClosingBalance) || 0
   return {
+    OpeningBalance:  acc.OpeningBalance  + opening,
     PeriodDebit:     acc.PeriodDebit     + debit,
     PeriodCredit:    acc.PeriodCredit    + credit,
     NetChange:       acc.NetChange       + (debit - credit),
     ClosingBalance:  acc.ClosingBalance  + bal,
   }
-}, { PeriodDebit: 0, PeriodCredit: 0, NetChange: 0, ClosingBalance: 0 }))
+}, { OpeningBalance: 0, PeriodDebit: 0, PeriodCredit: 0, NetChange: 0, ClosingBalance: 0 }))
 
 // Is the trial balance balanced? Allow a tiny floating-point tolerance
 const tbIsBalanced = computed(() => Math.abs(tbTotals.value.ClosingBalance) < 0.01)
@@ -632,6 +639,7 @@ const tbRows = computed(() => {
     AccountName: 'TOTAL',
     AccountCategoryLabel: '',
     Company: '',
+    OpeningBalance: tbTotals.value.OpeningBalance,
     PeriodDebit:    tbTotals.value.PeriodDebit,
     PeriodCredit:   tbTotals.value.PeriodCredit,
     NetChange:      tbTotals.value.NetChange,
@@ -910,7 +918,7 @@ function exportExcel() {
   if (isTB.value) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tbRows.value.map(r => ({
       Company: r.Company, AccountNo: r.AccountNo, AccountName: r.AccountName,
-      Category: r.AccountCategoryLabel,
+      Category: r.AccountCategoryLabel, OpeningBalance: r.OpeningBalance,
       PeriodDebit: r.PeriodDebit, PeriodCredit: r.PeriodCredit,
       NetChange: r.NetChange, ClosingBalance: r.ClosingBalance,
     }))), 'Trial Balance')

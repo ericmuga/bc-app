@@ -52,6 +52,7 @@ export async function getTrialBalance({ companies, dateFrom, dateTo }) {
         a.[Account Type]      AS AccountType,
         a.[Account Category]  AS AccountCategory,
         a.[Income_Balance]    AS IncomeBalance,
+        ISNULL(SUM(CASE WHEN e.[Posting Date] < @dateFrom THEN e.[Amount] ELSE 0 END), 0) AS OpeningBalance,
         ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Debit Amount]  ELSE 0 END), 0) AS PeriodDebit,
         ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Credit Amount] ELSE 0 END), 0) AS PeriodCredit,
         ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS ClosingBalance
