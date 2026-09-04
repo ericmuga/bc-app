@@ -7,7 +7,7 @@
 // xlsx-js-style is a drop-in community fork of SheetJS that CAN write cell
 // styles. Imported here ONLY for the Legacy Downloads export so the header row
 // can be bold + shaded. Other pages keep using plain `xlsx` (unstyled).
-import * as XLSX from 'xlsx-js-style';
+import XLSX from 'xlsx-js-style';   // CJS module — default export holds .utils/.write
 import * as Legacy from '../models/LegacyReportModel.js';
 import { catalogue } from '../services/legacyReports.js';
 import logger from '../services/logger.js';
