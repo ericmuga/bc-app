@@ -166,7 +166,7 @@
           e.g. {{ plData.overlaps.slice(0,3).map(o => o.account + ' → ' + o.lines.join('/')).join(', ') }}.
           Fix in the P&L mapping.
         </Message>
-        <DataTable :value="plData.rows" show-gridlines size="small" scrollable scroll-height="flex"
+        <DataTable :value="plData.rows" show-gridlines size="small" scrollable scroll-height="flex" class="pls-table"
           :row-class="(r) => (r.kind === 'subtotal' ? 'pls-subtotal' : (r.kind === 'tax' ? 'pls-tax' : ''))">
           <Column field="label" header="Line" frozen style="min-width:300px" />
           <Column header="Amount" class="num-col" style="min-width:180px">
@@ -192,7 +192,7 @@
             <Button icon="pi pi-download" label="Excel" text size="small" :disabled="!plDrawer.accounts.length" @click="exportPlLine" />
           </div>
         </div>
-        <DataTable :value="plDrawer.accounts" show-gridlines size="small" scrollable scroll-height="flex">
+        <DataTable :value="plDrawer.accounts" show-gridlines size="small" scrollable scroll-height="flex" class="pls-drawer">
           <Column field="accountNo" header="Account" style="min-width:100px" />
           <Column field="name" header="Name" style="min-width:220px" />
           <Column header="Amount" class="num-col" style="min-width:140px">
@@ -1024,22 +1024,28 @@ onMounted(async () => {
 .bs-total-row { grid-template-columns: 120px 260px 160px; }
 .sticky-total-key { min-width:120px; }
 .subtotal-val { font-weight:700; }
-.pls-title { font-size:16px; font-weight:800; padding:2px 2px 8px; }
-.pls-spec { font-family:monospace; font-size:11px; color:var(--bc-text-muted,#64748b); }
-.pls-note { font-size:12px; color:var(--bc-text-muted,#64748b); margin-top:6px; }
-:deep(.pls-subtotal) { background:var(--bc-surface-2,#f1f5f9); font-weight:800; }
-:deep(.pls-tax) { font-style:italic; }
+.pls-title { font-size:16px; font-weight:800; padding:2px 2px 8px; color:#f8fafc; }
+.pls-spec { font-family:monospace; font-size:11px; color:#94a3b8; }
+.pls-note { font-size:12px; color:#94a3b8; margin-top:6px; }
+:deep(.pls-subtotal > td) { background:#243247 !important; color:#fff !important; font-weight:800 !important; }
+:deep(.pls-tax > td) { font-style:italic; }
 
 /* ── Positive / Negative ─────────────────────────────────────── */
-.positive { color:#0d5f2a; }
-.negative { color:#9b1c1c; }
+.positive { color:#4ade80; }
+.negative { color:#f87171; }
 .total-num { font-weight:800; }
 .balanced-num   { color:#bbf7d0; }
 .unbalanced-num { color:#fecaca; }
 
-/* ── Deep PrimeVue overrides ─────────────────────────────────── */
-:deep(.p-datatable-tbody > tr > td) { color:#101828 !important; background:#fff !important; padding:6px 10px !important; border-color:#e4e7ec !important; }
-:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:#f8fafc !important; }
+/* ── Deep PrimeVue overrides — dark navy tables (match Sales Reports) ───────── */
+:deep(.p-datatable),
+:deep(.p-datatable-table-container),
+:deep(.p-datatable-table),
+:deep(.p-datatable-tbody > tr) { background:#1b2233 !important; }
+:deep(.p-datatable-tbody > tr > td) { color:#f8fafc !important; background:transparent !important; padding:6px 10px !important; border-color:#324256 !important; }
+:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:rgba(255,255,255,0.035) !important; }
+:deep(.p-datatable-tbody > tr:hover > td) { background:rgba(255,255,255,0.06) !important; }
+:deep(.p-paginator) { background:#1b2233 !important; color:#f8fafc !important; border-color:#324256 !important; }
 :deep(.p-datatable-thead > tr > th) { background:#243247 !important; color:#f8fafc !important; font-size:11px !important; font-weight:700 !important; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px !important; border-color:#324256 !important; }
 :deep(.num-col) { text-align:right !important; }
 
@@ -1105,4 +1111,20 @@ onMounted(async () => {
   .filter-toggle-label { display:none; }
   .tb-total-row { grid-template-columns: 120px 1fr 140px 140px 140px 150px; }
 }
+</style>
+
+<!-- Unscoped: the P&L account drawer teleports to <body>, so scoped :deep can't
+     reach it. Dark navy table to match the Sales Reports theme. Scoped to .pls-drawer. -->
+<style>
+.p-drawer:has(.pls-drawer) { background:#151b28 !important; color:#f8fafc !important; }
+.p-drawer:has(.pls-drawer) .p-drawer-header { background:#1b2233 !important; color:#f8fafc !important; border-bottom:1px solid #324256; }
+.pls-drawer.p-datatable,
+.pls-drawer .p-datatable-table-container,
+.pls-drawer .p-datatable-table,
+.pls-drawer .p-datatable-tbody > tr { background:#1b2233 !important; }
+.pls-drawer .p-datatable-tbody > tr > td { color:#f8fafc !important; background:transparent !important; border-color:#324256 !important; }
+.pls-drawer .p-datatable-tbody > tr:nth-child(even) > td { background:rgba(255,255,255,0.035) !important; }
+.pls-drawer .p-datatable-thead > tr > th { background:#243247 !important; color:#f8fafc !important; border-color:#324256 !important; }
+.pls-drawer .positive { color:#4ade80 !important; }
+.pls-drawer .negative { color:#f87171 !important; }
 </style>
