@@ -10,6 +10,7 @@ import * as companyCtrl from '../controllers/companyController.js';
 
 import * as authCtrl    from '../controllers/authController.js';
 import * as reportCtrl  from '../controllers/reportController.js';
+import * as legacyReportCtrl from '../controllers/legacyReportController.js';
 import * as adminCtrl   from '../controllers/adminController.js';
 import * as financeCtrl from '../controllers/financeController.js';
 import * as mgmtCtrl    from '../controllers/mgmtController.js';
@@ -27,7 +28,7 @@ import * as productionCtrl from '../controllers/productionController.js';
 import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
-import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
+import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, REPORTING_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
   STORE_OPS_ROLES, CHEF_REPORT_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 import * as posProdCtrl from '../controllers/posProductionController.js';
@@ -119,6 +120,12 @@ router.post('/admin/report-schedules',       ...adminOnly, adminCtrl.saveSchedul
 router.patch('/admin/report-schedules/:scheduleId', ...adminOnly, adminCtrl.saveSchedule);
 router.delete('/admin/report-schedules/:scheduleId', ...adminOnly, adminCtrl.deleteSchedule);
 router.post('/admin/report-schedules/:scheduleId/run', ...adminOnly, adminCtrl.runScheduleNow);
+
+// ── Reporting → Legacy Downloads (read-only exports over legacy BC DBs) ───────
+const canLegacyReport = [authMiddleware, requireRole(...REPORTING_ROLES)];
+router.get('/reporting/legacy/sources',  ...canLegacyReport, legacyReportCtrl.listSources);
+router.get('/reporting/legacy/run',      ...canLegacyReport, legacyReportCtrl.run);
+router.get('/reporting/legacy/download', ...canLegacyReport, legacyReportCtrl.download);
 
 // ── Finance Reports ──────────────────────────────────────────────────────────
 const canFinance = [authMiddleware, requireRole(...FINANCE_ROLES)];

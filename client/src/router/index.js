@@ -10,6 +10,13 @@ import { canAccessDispatch, canDispatchAssign } from '@/lib/dispatchAccess.js'
 // the POS / Finance fall-throughs (so shop-admin / shop / finance roles get
 // bounced to /login from the home redirect). Keeping it here avoids editing
 // access.js, whose folder is owned by a different account on this host.
+// data-analyst is a lightweight role that only sees Reporting → Legacy Downloads.
+// (lib/access.js can't be edited on this host — its folder is owned by another
+// account — so the role is matched by string here, as the router already does
+// for sales-admin / chef / dispatch-* roles.)
+const REPORTING_ROLES = ['admin', 'data-analyst']
+const canAccessReporting = (r) => REPORTING_ROLES.includes(normalizeRole(r))
+
 function defaultRouteForRole(role) {
   const r = normalizeRole(role)
   if (canAccessOrders(r))   return '/orders/scan'
@@ -20,6 +27,7 @@ function defaultRouteForRole(role) {
   if (canAccessProduction(r)) return '/pos/production'
   if (canAccessCosting(r))  return '/costing'
   if (canAccessDispatch(r)) return '/dispatch/registry'
+  if (canAccessReporting(r)) return '/reporting/legacy'
   return '/login'
 }
 
@@ -38,6 +46,7 @@ const routes = [
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
+      { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'data-analyst'] } },
       { path: 'finance',        name: 'Finance',      component: () => import('@/pages/FinanceReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'costing',        name: 'Costing',      component: () => import('@/pages/CostingPage.vue'), props: { company: 'FCL' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
       { path: 'costing/cm',     name: 'CostingCM',    component: () => import('@/pages/CostingPage.vue'), props: { company: 'CM' }, meta: { roles: [ROLES.ADMIN, COSTING_ROLE] } },
@@ -104,6 +113,7 @@ router.beforeEach((to) => {
       if (canAccessPos(role)) return '/pos'
       if (canAccessCosting(role)) return '/costing'
       if (canAccessDispatch(role)) return '/dispatch/registry'
+      if (canAccessReporting(role)) return '/reporting/legacy'
       return '/login'
     }
   }

@@ -1625,6 +1625,7 @@ const roleOptions = [
   { label: 'Admin',    value: 'admin' },
   { label: 'Sales',    value: 'sales' },
   { label: 'Analyst',  value: 'analyst' },
+  { label: 'Data Analyst', value: 'data-analyst' },
   { label: 'Finance',  value: 'finance' },
   { label: 'Dispatch', value: 'dispatch' },
   { label: 'Security', value: 'security' },

@@ -83,6 +83,14 @@
           </RouterLink>
         </details>
 
+        <details v-if="canViewReporting" class="nav-section" :open="navOpen.reporting" @toggle="onNavToggle('reporting', $event)">
+          <summary class="section-label">Reporting</summary>
+          <RouterLink to="/reporting/legacy" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-database" />
+            <span>Legacy Downloads</span>
+          </RouterLink>
+        </details>
+
         <details v-if="canViewCosting" class="nav-section" :open="navOpen.costing" @toggle="onNavToggle('costing', $event)">
           <summary class="section-label">Costing</summary>
           <RouterLink to="/costing" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
@@ -279,7 +287,7 @@ window.addEventListener('resize', () => {
 
 // Sidebar section open/closed state (persisted per browser)
 const NAV_KEY = 'bcapp.navOpen'
-const navOpenDefault = { orders: true, invoices: true, analytics: true, costing: true, pos: true, production: true, admin: true }
+const navOpenDefault = { orders: true, invoices: true, analytics: true, reporting: true, costing: true, pos: true, production: true, admin: true }
 let saved = navOpenDefault
 try {
   const raw = localStorage.getItem(NAV_KEY)
@@ -309,6 +317,9 @@ const canViewCosting = computed(() => canAccessCosting(role.value))
 const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
 const canViewDispatch = computed(() => canAccessDispatch(role.value))
 const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.value || '').toLowerCase()))
+// Reporting → Legacy Downloads — admin + data-analyst (string-matched here;
+// lib/access.js is owned by another account on this host and can't be edited).
+const canViewReporting = computed(() => ['admin', 'data-analyst'].includes(String(role.value || '').toLowerCase()))
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 const canDispAssemble = computed(() => canDispatchAssemble(role.value))
@@ -326,6 +337,7 @@ const roleOptions = [
   { label: 'security',        value: 'security' },
   { label: 'sales',           value: 'sales' },
   { label: 'analyst',         value: 'analyst' },
+  { label: 'data-analyst',    value: 'data-analyst' },
   { label: 'finance',         value: 'finance' },
   { label: 'costing',         value: 'costing' },
   { label: 'dispatch-registry',   value: 'dispatch-registry' },
