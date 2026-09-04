@@ -209,7 +209,7 @@
       </Drawer>
 
       <!-- P&L mapping editor (admin) — edit each line's account ranges to fix overlaps -->
-      <Drawer v-model:visible="plEditor.visible" position="right" :header="`Edit P&L mapping — ${plCompany}`" style="width:640px">
+      <Drawer v-model:visible="plEditor.visible" position="right" :header="`Edit P&L mapping — ${plCompany}`" style="width:640px" class="pls-edit-drawer">
         <p class="pls-note" style="margin-top:0">
           Account grammar: <code>31050..31595</code> ranges, <code>|</code> to join, single accounts.
           Fix the overlap by removing the shared account from one line (e.g. set UNREALISED to <code>75404</code> so 75403 is DEPRECIATION only).
@@ -425,6 +425,7 @@ import Checkbox   from 'primevue/checkbox'
 import DatePicker from 'primevue/datepicker'
 import MultiSelect from 'primevue/multiselect'
 import Select      from 'primevue/select'
+import InputText   from 'primevue/inputtext'
 import Skeleton   from 'primevue/skeleton'
 import Message    from 'primevue/message'
 import Drawer     from 'primevue/drawer'
@@ -1185,6 +1186,12 @@ onMounted(async () => {
 <style>
 .p-drawer:has(.pls-drawer) { background:#151b28 !important; color:#f8fafc !important; }
 .p-drawer:has(.pls-drawer) .p-drawer-header { background:#1b2233 !important; color:#f8fafc !important; border-bottom:1px solid #324256; }
+/* P&L mapping editor drawer — dark theme so the light labels/inputs are legible */
+.p-drawer.pls-edit-drawer { background:#151b28 !important; color:#f8fafc !important; }
+.p-drawer.pls-edit-drawer .p-drawer-header { background:#1b2233 !important; color:#f8fafc !important; border-bottom:1px solid #324256; }
+.p-drawer.pls-edit-drawer .pls-edit-spec .p-inputtext,
+.p-drawer.pls-edit-drawer .pls-edit-ro .p-inputtext { background:#0f1626 !important; color:#f8fafc !important; border-color:#324256 !important; }
+.p-drawer.pls-edit-drawer code { background:#1b2233; color:#93c5fd; padding:1px 4px; border-radius:3px; }
 .pls-drawer.p-datatable,
 .pls-drawer .p-datatable-table-container,
 .pls-drawer .p-datatable-table,
