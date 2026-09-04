@@ -49,6 +49,34 @@ export async function resolveShopCompany(shopCode) {
   };
 }
 
+const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+
+/**
+ * Per-company mirror {customerNo, locationCode, salespersonCode} for a shop, from
+ * PosShopCompany. Falls back to the shop's single-company identity for any company
+ * without a mirror row (so single-company shops behave exactly as before).
+ */
+export async function resolveShopCompanyMirrors(shopCode, fallback) {
+  const pool = await appDb.getPool();
+  const r = await pool.request().input('code', sql.NVarChar(50), String(shopCode || '').toUpperCase())
+    .query(`SELECT [Company],[CustomerNo],[LocationCode],[SalespersonCode],[KraPin]
+            FROM [dbo].[PosShopCompany] WHERE [ShopCode]=@code`);
+  const map = new Map();
+  for (const x of r.recordset) {
+    map.set(String(x.Company).toUpperCase(), {
+      customerNo: (x.CustomerNo || '').trim(),
+      locationCode: (x.LocationCode || '').trim(),
+      salespersonCode: (x.SalespersonCode || '').trim(),
+      kraPin: (x.KraPin || '').trim(),
+    });
+  }
+  // Ensure the shop's own company has an entry (fallback to legacy shop values).
+  if (fallback?.company && !map.has(fallback.company)) {
+    map.set(fallback.company, { customerNo: fallback.customerNo || '', locationCode: fallback.locationCode || '', salespersonCode: fallback.salespersonCode || '', kraPin: '' });
+  }
+  return map;
+}
+
 // The exact BC staging columns (order matters for the export sheet). The
 // system/$ columns are BC-generated and deliberately omitted.
 export const IMPORTED_SALES_COLUMNS = [
@@ -81,7 +109,7 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
            CONVERT(varchar(10), DATEADD(HOUR, 3, o.[CreatedAt]), 23) AS OrderDate,  -- EAT calendar date, no time
            o.[EtimsInvoiceNo], o.[CuSerialNo], o.[SignedAt], o.[ShopCode],
            s.[SalespersonCode], s.[LocationCode],
-           l.[ItemNo], l.[Quantity], l.[UnitPrice], l.[LineAmount], l.[SortOrder], l.[LineId],
+           l.[ItemNo], l.[Quantity], l.[UnitPrice], l.[LineAmount], l.[SortOrder], l.[LineId], l.[Company] AS LineCompany,
            it.[UnitOfMeasure],
            hdr.TotalQty, hdr.LineCount
     FROM [dbo].[PosOrder] o
@@ -100,14 +128,13 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
   `);
 
   const rows = [];
-  const lineNoByOrder = new Map();
   for (const x of r.recordset) {
-    const seq = (lineNoByOrder.get(x.OrderNo) || 0) + 1;
-    lineNoByOrder.set(x.OrderNo, seq);
     const cust = (x.ContactNo || '').slice(0, 10);
     rows.push({
+      OrderNo:             x.OrderNo || '',
+      LineCompany:         (x.LineCompany || '').toUpperCase(),   // BC company that owns this line
       ExtDocNo:            (x.OrderNo || '').slice(0, 30),
-      LineNo:              seq * 10000,
+      LineNo:              0,   // (re)sequenced per (order, company) at push time
       CustNO:              cust,
       Date:                x.OrderDate,   // 'YYYY-MM-DD' → BC datetime midnight
       SPCode:              (x.SalespersonCode || '').slice(0, 10),
@@ -169,46 +196,84 @@ const PUSH_TYPES = {
  */
 export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType = 0, orderNo = null } = {}) {
   if (!shopCode) throw new Error('shopCode is required');
-  const { company, customerNo } = await resolveShopCompany(shopCode);
+  const fallback = await resolveShopCompany(shopCode);   // company for lines with no tag (legacy / single-company)
   const rows = await buildImportedSalesRows({ shopCode, dateFrom, dateTo, lineType, orderNo });
-  if (!rows.length) return { company, table: null, candidates: 0, inserted: 0, skipped: 0, orders: [] };
+  if (!rows.length) return { company: fallback.company, companies: [], candidates: 0, inserted: 0, skipped: 0, orders: [] };
 
-  // CustNO & BillTo are always the shop's BC customer no (ignore the per-order
-  // walk-in contact, e.g. LOCAL-MSEO).
-  const shopCust = customerNo.slice(0, 10);
-  for (const r of rows) { r.CustNO = shopCust; r.BillTo = shopCust; }
+  const mirrors = await resolveShopCompanyMirrors(shopCode, { ...fallback, locationCode: rows[0]?.Location });
 
-  const table = bcTable(company, 'Imported SalesAL', { ext: true });
-  const pool = await bcDb.getPool();
-
-  // Which (ExtDocNo, LineNo) already exist, so we never overwrite processed rows.
-  const extDocs = [...new Set(rows.map((r) => r.ExtDocNo))];
-  const chk = pool.request();
-  extDocs.forEach((d, i) => chk.input(`d${i}`, bcSql.NVarChar(30), d));
-  const existing = await chk.query(
-    `SELECT [ExtDocNo],[LineNo] FROM ${table} WHERE [ExtDocNo] IN (${extDocs.map((_, i) => `@d${i}`).join(',')})`
-  );
-  const seen = new Set(existing.recordset.map((r) => `${r.ExtDocNo}|${r.LineNo}`));
-
-  let inserted = 0, skipped = 0;
+  // Group lines by their owning BC company (untagged lines → the shop's company).
+  const byCompany = new Map();
   for (const r of rows) {
-    if (seen.has(`${r.ExtDocNo}|${r.LineNo}`)) { skipped++; continue; }
-    const req = pool.request();
-    for (const c of PUSH_COLUMNS) {
-      let v = r[c];
-      // Date → 'YYYYMMDD' (dateformat-independent; a dashed 'YYYY-MM-DD' string
-      // is rejected on this server's dateformat). BC widens it to datetime midnight.
-      if (c === 'Date') v = String(v || '').replace(/-/g, '');
-      req.input(`c_${c.replace(/\W/g, '')}`, PUSH_TYPES[c], v ?? (typeof v === 'number' ? 0 : ''));
-    }
-    const cols = PUSH_COLUMNS.map((c) => `[${c}]`).join(', ');
-    const vals = PUSH_COLUMNS.map((c) => `@c_${c.replace(/\W/g, '')}`).join(', ');
-    await req.query(`INSERT INTO ${table} (${cols}) VALUES (${vals})`);
-    inserted++;
+    const co = r.LineCompany || fallback.company;
+    if (!byCompany.has(co)) byCompany.set(co, []);
+    byCompany.get(co).push(r);
   }
 
-  logger.info('pushImportedSales', { shopCode, company, inserted, skipped, candidates: rows.length });
-  return { company, table, candidates: rows.length, inserted, skipped, orders: extDocs };
+  const pool = await bcDb.getPool();
+  const results = [];
+  const allOrders = new Set();
+  let totalInserted = 0, totalSkipped = 0;
+
+  for (const [company, coRows] of byCompany) {
+    // Per-company BC identity (mirror), falling back to the shop's own values.
+    const m = mirrors.get(company) || { customerNo: fallback.customerNo, locationCode: rows[0]?.Location || '', salespersonCode: fallback.salespersonCode };
+    const cust = (m.customerNo || '').slice(0, 10);
+    const loc  = (m.locationCode || '').slice(0, 10);
+    const sp   = (m.salespersonCode || '').slice(0, 10);
+
+    // Re-sequence LineNo + recompute header totals PER (order, company) — each
+    // company's slice is its own invoice/document.
+    const agg = new Map(), seqOf = new Map();
+    for (const r of coRows) {
+      const a = agg.get(r.OrderNo) || { qty: 0, amt: 0, count: 0 };
+      a.qty += num(r.Qty); a.amt += num(r.LineAmount); a.count++; agg.set(r.OrderNo, a);
+    }
+    for (const r of coRows) {
+      const seq = (seqOf.get(r.OrderNo) || 0) + 1; seqOf.set(r.OrderNo, seq);
+      r.LineNo = seq * 10000;
+      r.CustNO = cust; r.BillTo = cust; r.Location = loc; r.SPCode = sp;
+      const a = agg.get(r.OrderNo);
+      r.TotalHeaderAmount = round4(a.amt); r.TotalHeaderQty = round4(a.qty); r['Expected Line Count'] = a.count;
+    }
+
+    const table = bcTable(company, 'Imported SalesAL', { ext: true });
+    const extDocs = [...new Set(coRows.map((r) => r.ExtDocNo))];
+    extDocs.forEach((d) => allOrders.add(d));
+    const chk = pool.request();
+    extDocs.forEach((d, i) => chk.input(`d${i}`, bcSql.NVarChar(30), d));
+    const existing = await chk.query(
+      `SELECT [ExtDocNo],[LineNo] FROM ${table} WHERE [ExtDocNo] IN (${extDocs.map((_, i) => `@d${i}`).join(',')})`
+    );
+    const seen = new Set(existing.recordset.map((r) => `${r.ExtDocNo}|${r.LineNo}`));
+
+    let inserted = 0, skipped = 0;
+    for (const r of coRows) {
+      if (seen.has(`${r.ExtDocNo}|${r.LineNo}`)) { skipped++; continue; }
+      const req = pool.request();
+      for (const c of PUSH_COLUMNS) {
+        let v = r[c];
+        // Date → 'YYYYMMDD' (dateformat-independent). BC widens it to datetime midnight.
+        if (c === 'Date') v = String(v || '').replace(/-/g, '');
+        req.input(`c_${c.replace(/\W/g, '')}`, PUSH_TYPES[c], v ?? (typeof v === 'number' ? 0 : ''));
+      }
+      const cols = PUSH_COLUMNS.map((c) => `[${c}]`).join(', ');
+      const vals = PUSH_COLUMNS.map((c) => `@c_${c.replace(/\W/g, '')}`).join(', ');
+      await req.query(`INSERT INTO ${table} (${cols}) VALUES (${vals})`);
+      inserted++;
+    }
+    totalInserted += inserted; totalSkipped += skipped;
+    results.push({ company, table, candidates: coRows.length, inserted, skipped });
+  }
+
+  logger.info('pushImportedSales', { shopCode, companies: results.map((r) => r.company), inserted: totalInserted, skipped: totalSkipped, candidates: rows.length });
+  // Back-compat top-level fields (company/table/inserted/skipped) + per-company breakdown.
+  return {
+    company: results.map((r) => r.company).join(', '),
+    table: results[0]?.table || null,
+    companies: results, candidates: rows.length,
+    inserted: totalInserted, skipped: totalSkipped, orders: [...allOrders],
+  };
 }
 
 // ── Stock request → BC Imported Orders (PDA transfer request) ─────────────────
