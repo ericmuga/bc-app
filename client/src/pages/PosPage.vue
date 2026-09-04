@@ -16,6 +16,13 @@
         </IconField>
       </div>
 
+      <!-- Company toggle (only when this till sells for more than one company) -->
+      <div v-if="availableCompanies.length > 1" class="company-tabs">
+        <button class="co-tab" :class="{ active: activeCompany === null }" @click="activeCompany = null">All companies</button>
+        <button v-for="co in availableCompanies" :key="co"
+          class="co-tab" :class="{ active: activeCompany === co }" @click="activeCompany = co">{{ co }}</button>
+      </div>
+
       <!-- Category tabs -->
       <div class="category-tabs">
         <button
@@ -184,7 +191,10 @@
         </div>
         <div v-for="(line, idx) in lines" :key="line.itemNo" class="order-line">
           <div class="line-info">
-            <div class="line-desc">{{ line.description }}</div>
+            <div class="line-desc">
+              <span v-if="isMixedCompany && line.company" class="line-co-tag">{{ line.company }}</span>
+              {{ line.description }}
+            </div>
             <div class="line-unit-price">{{ fmt(line.unitPrice) }} each</div>
           </div>
           <div class="line-qty-ctrl">
@@ -207,6 +217,14 @@
 
       <!-- Total + flow buttons -->
       <div class="order-footer">
+        <!-- Multi-company: this sale will produce one invoice per company -->
+        <div v-if="isMixedCompany" class="co-split">
+          <div class="co-split-head">This sale = {{ cartCompanies.length }} invoices</div>
+          <div v-for="c in cartCompanies" :key="c.company" class="co-split-row">
+            <span class="co-split-name">{{ c.company }} <span class="co-split-count">· {{ c.count }} item{{ c.count === 1 ? '' : 's' }}</span></span>
+            <span class="co-split-amt">{{ fmt(c.subtotal) }}</span>
+          </div>
+        </div>
         <div class="order-total-row">
           <span>Total</span>
           <span class="order-total">{{ fmt(total) }}</span>
@@ -660,14 +678,23 @@ const allCategories = computed(() => [
   ...categories.value,
 ])
 
+// ── Multi-company: filter the catalogue + tag lines by the item's source company ──
+const activeCompany = ref(null)   // null = show all companies
+const availableCompanies = computed(() => {
+  const set = new Set()
+  categories.value.forEach(c => c.items.forEach(i => { if (i.sourceCompany) set.add(i.sourceCompany) }))
+  return [...set].sort()
+})
+const byCompany = (items) => (activeCompany.value ? items.filter(i => (i.sourceCompany || '') === activeCompany.value) : items)
+
 // Searches across ALL items when a query is present so barcode scans always resolve
 const filteredItems = computed(() => {
   const cats = allCategories.value
   const q = search.value.trim().toLowerCase()
   if (!q) {
-    return cats.find(c => c.code === activeCat.value)?.items ?? []
+    return byCompany(cats.find(c => c.code === activeCat.value)?.items ?? [])
   }
-  const all = cats.find(c => c.code === ALL_CAT)?.items ?? []
+  const all = byCompany(cats.find(c => c.code === ALL_CAT)?.items ?? [])
   // 1. Exact barcode match wins, even if many items also fuzzy-match
   const exactBarcode = all.find(i => i.barcode && i.barcode.toLowerCase() === q)
   if (exactBarcode) return [exactBarcode]
@@ -677,6 +704,19 @@ const filteredItems = computed(() => {
     (i.barcode && i.barcode.toLowerCase().includes(q))
   )
 })
+
+// Per-company breakdown of the cart — the cashier watches one invoice per company form.
+const cartCompanies = computed(() => {
+  const m = new Map()
+  for (const l of lines.value) {
+    const co = (l.company || '').toUpperCase() || '?'
+    const cur = m.get(co) || { company: co, subtotal: 0, count: 0 }
+    cur.subtotal += Number(l.lineAmount || 0); cur.count++
+    m.set(co, cur)
+  }
+  return [...m.values()].sort((a, b) => a.company.localeCompare(b.company))
+})
+const isMixedCompany = computed(() => cartCompanies.value.filter(c => c.company !== '?').length > 1)
 
 const searchHint = computed(() => {
   const n = filteredItems.value.length
@@ -1107,6 +1147,7 @@ async function loadResumedOrder(oid) {
       quantity:   Number(l.quantity ?? l.Quantity) || 0,
       unitPrice:  Number(l.unitPrice ?? l.UnitPrice) || 0,
       lineAmount: Number(l.lineAmount ?? l.LineAmount ?? ((l.quantity || 0) * (l.unitPrice || 0))) || 0,
+      company:    (l.company || l.Company || '').toUpperCase(),
     }))
     const cName = data.contactName || data.ContactName
     if (cName) contactDraft.value = { name: cName, phone: data.contactPhone || '', pin: data.contactPin || '' }
@@ -1154,6 +1195,7 @@ function addToOrder(item) {
       quantity: 1,
       unitPrice: item.unitPrice,
       lineAmount: item.unitPrice,
+      company: (item.sourceCompany || '').toUpperCase(),
     })
   }
   nextTick(() => linesEl.value?.scrollTo({ top: linesEl.value.scrollHeight, behavior: 'smooth' }))
@@ -1656,6 +1698,28 @@ function remainingClass(qty) {
   border-color: #2563eb;
   font-weight: 700;
 }
+
+/* Company toggle (multi-company tills) */
+.company-tabs { display:flex; gap:6px; padding:8px 12px 0; overflow-x:auto; flex-shrink:0; background:#fff; }
+.co-tab {
+  padding:5px 14px; border-radius:20px; border:1.5px solid #0f7173; background:#e6f4f4;
+  color:#0f7173; cursor:pointer; white-space:nowrap; font-size:12px; font-weight:700; letter-spacing:.02em;
+  transition: background .15s, color .15s;
+}
+.co-tab:hover { background:#d0ecec; }
+.co-tab.active { background:#0f7173; color:#fff; }
+/* Company tag on a cart line (mixed cart) */
+.line-co-tag {
+  display:inline-block; font-size:10px; font-weight:800; color:#0f7173; background:#e6f4f4;
+  border:1px solid #0f7173; border-radius:4px; padding:0 4px; margin-right:6px; vertical-align:middle;
+}
+/* Per-company invoice split summary in the cart footer */
+.co-split { background:#f0fdfa; border:1px solid #99f6e4; border-radius:8px; padding:8px 10px; margin-bottom:8px; }
+.co-split-head { font-size:12px; font-weight:800; color:#0f766e; margin-bottom:4px; }
+.co-split-row { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; color:#134e4a; }
+.co-split-name { font-weight:600; }
+.co-split-count { color:#5f8a86; font-weight:400; font-size:12px; }
+.co-split-amt { font-variant-numeric: tabular-nums; font-weight:700; }
 
 .item-grid {
   flex: 1;
