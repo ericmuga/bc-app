@@ -238,15 +238,20 @@ loadCatalogue()
 /* ── Table theming — mirror the Sales Reports (/bc-reports) DataTable so the two
       pages read as one high-contrast dark surface. Uses the shared --bc-* tokens
       defined globally in assets/main.css. ─────────────────────────────────────── */
-.ld-table :deep(.p-datatable),
+/* Solid dark surface on the table root + every structural container (the
+   .p-datatable root carries the .ld-table class itself, so :deep(.p-datatable)
+   never matched it — hence the earlier light background). */
+.ld-table { background: var(--bc-surface-card) !important; border: 1px solid var(--bc-border); border-radius: 8px; overflow: hidden; }
+.ld-table :deep(.p-datatable-table-container),
 .ld-table :deep(.p-datatable-table),
-.ld-table :deep(.p-datatable-tbody > tr) { background: transparent !important; }
+.ld-table :deep(.p-datatable-tbody > tr) { background: var(--bc-surface-card) !important; }
 .ld-table :deep(.p-datatable-tbody > tr > td) { color: var(--bc-text) !important; background: transparent !important; padding: 6px 10px !important; border-color: var(--bc-border) !important; }
-.ld-table :deep(.p-datatable-tbody > tr:nth-child(even) > td) { background: rgba(255,255,255,0.03) !important; }
-.ld-table :deep(.p-datatable-tbody > tr:hover > td) { background: rgba(255,255,255,0.06) !important; }
+.ld-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: var(--bc-surface-raised) !important; }
+.ld-table :deep(.p-datatable-tbody > tr:hover) { background: rgba(255,255,255,0.06) !important; }
 .ld-table :deep(.p-datatable-thead > tr > th) { background: var(--bc-surface-raised) !important; color: var(--bc-text) !important; font-size: 11px !important; font-weight: 700 !important; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px !important; border-color: var(--bc-border) !important; }
 .ld-table :deep(.p-datatable-header),
 .ld-table :deep(.p-paginator) { background: var(--bc-surface-card) !important; color: var(--bc-text) !important; border-color: var(--bc-border) !important; }
+.ld-table :deep(.p-paginator .p-paginator-page.p-highlight) { background: var(--bc-primary) !important; color: #fff !important; }
 
 @media (prefers-color-scheme: dark) {
   .ld-head .sub { color: #94a3b8; }
