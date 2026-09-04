@@ -13,6 +13,9 @@
 
 import { bcDb, bcSql } from '../db/bcPool.js';
 import { bcTable, resolveCompanies } from '../services/bcTables.js';
+import { getPlDefinition, parseSpec, specMatches } from '../services/financePl.js';
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 async function queryBc(querySql, params = {}) {
   const pool = await bcDb.getPool();
@@ -113,6 +116,69 @@ export async function getProfitLoss({ companies, dateFrom, dateTo, ytdFrom }) {
     }
   );
   return recordset;
+}
+
+/**
+ * Configurable P&L STATEMENT for one company, built from its editable definition
+ * (services/financePl.js). Sums G/L Entry per account over the period and buckets
+ * into the definition's lines. Sign convention: each account line = -SUM(Amount)
+ * so income shows positive and expenses negative; subtotals are plain sums; the
+ * tax line applies its rate to its base (only when the base is a profit).
+ * Returns { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }.
+ */
+export async function computePlStatement({ company, dateFrom, dateTo }) {
+  const co = String(company || '').toUpperCase();
+  const def = await getPlDefinition(co);
+  const entry = bcTable(co, 'G_L Entry');
+  const { recordset } = await queryBc(
+    `SELECT [G_L Account No_] AS AccountNo, SUM([Amount]) AS Amount
+     FROM ${entry}
+     WHERE [Posting Date] >= @dateFrom AND [Posting Date] <= @dateTo
+     GROUP BY [G_L Account No_]`,
+    { dateFrom: { type: bcSql.Date, value: new Date(dateFrom) }, dateTo: { type: bcSql.Date, value: new Date(dateTo) } }
+  );
+  const accts = recordset.map((r) => ({ no: String(r.AccountNo).trim(), amt: Number(r.Amount) || 0 }));
+
+  const values = {};              // line key -> statement value
+  const memberOf = new Map();     // accountNo -> [lineKeys] (overlap detection)
+  const mapped = new Set();
+
+  // 1) Account-bucket lines (sign-flipped so income is positive).
+  for (const line of def.lines) {
+    if (line.kind !== 'accounts') continue;
+    const ranges = parseSpec(line.spec);
+    let sum = 0;
+    for (const a of accts) {
+      if (specMatches(a.no, ranges)) {
+        sum += a.amt; mapped.add(a.no);
+        memberOf.set(a.no, (memberOf.get(a.no) || []).concat(line.key));
+      }
+    }
+    values[line.key] = -round2(sum);
+  }
+  // 2) Subtotals + tax, in definition order (depends on earlier values).
+  for (const line of def.lines) {
+    if (line.kind === 'subtotal') {
+      values[line.key] = round2((line.of || []).reduce((s, k) => s + (values[k] || 0), 0));
+    } else if (line.kind === 'tax') {
+      const base = values[line.base] || 0;
+      const rate = line.rate ?? def.taxRate ?? 0;
+      values[line.key] = base > 0 ? -round2(base * rate) : 0;
+    }
+  }
+
+  // Accounts that landed in more than one line (double-counted) — surfaced as a warning.
+  const overlaps = [...memberOf.entries()]
+    .filter(([, ks]) => new Set(ks).size > 1)
+    .map(([account, ks]) => ({ account, lines: [...new Set(ks)] }));
+  // Income-statement accounts with movement that no line captured.
+  const unmapped = accts.filter((a) => !mapped.has(a.no) && a.amt !== 0).length;
+
+  const rows = def.lines.map((l) => ({
+    key: l.key, label: l.label, kind: l.kind, amount: values[l.key] ?? 0,
+    spec: l.spec || null,
+  }));
+  return { company: co, title: def.title, dateFrom, dateTo, rows, overlaps, unmapped };
 }
 
 /**

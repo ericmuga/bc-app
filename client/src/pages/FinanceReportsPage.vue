@@ -31,6 +31,13 @@
             <DatePicker v-model="ytdFrom" date-format="yy-mm-dd" show-icon fluid />
           </div>
         </details>
+        <details v-if="isPLS" class="filter-box" open>
+          <summary>Company</summary>
+          <div class="filter-body">
+            <label class="slicer-label">Company</label>
+            <Select v-model="plCompany" :options="PL_COMPANIES" fluid />
+          </div>
+        </details>
         <details v-if="isAging" class="filter-box" open>
           <summary>As-of Date</summary>
           <div class="filter-body">
@@ -95,17 +102,17 @@
       </div>
 
       <!-- Toolbar -->
-      <div class="toolbar" v-if="loading || rows.length || mgmtResult.lines.length || agingRows.length">
+      <div class="toolbar" v-if="loading || rows.length || mgmtResult.lines.length || agingRows.length || plData?.rows?.length">
         <div v-if="periodLabel" class="period-pill">{{ periodLabel }}</div>
         <div class="toolbar-actions">
           <Button icon="pi pi-refresh" text size="small" @click="forceRefresh" />
-          <Button icon="pi pi-download" text size="small" :disabled="!rows.length && !mgmtResult.lines.length" @click="exportExcel" />
+          <Button icon="pi pi-download" text size="small" :disabled="!rows.length && !mgmtResult.lines.length && !plData?.rows?.length" @click="exportExcel" />
         </div>
       </div>
 
       <!-- Status messages -->
       <Message v-if="error" severity="error" :closable="false" class="mx">{{ error }}</Message>
-      <div v-if="!loading && !error && !rows.length && !mgmtResult.lines.length && !agingRows.length" class="empty-state">
+      <div v-if="!loading && !error && !rows.length && !mgmtResult.lines.length && !agingRows.length && !plData?.rows?.length" class="empty-state">
         <i class="pi pi-file-check" style="font-size:3rem;opacity:.25" />
         <p>Select filters and click <strong>Run Report</strong></p>
       </div>
@@ -149,6 +156,29 @@
             </template>
           </Column>
         </DataTable>
+      </div>
+
+      <!-- ── P&L Statement (configurable) ── -->
+      <div v-if="!loading && isPLS && plData?.rows?.length" class="report-wrap">
+        <div class="pls-title">{{ plData.title }}</div>
+        <Message v-if="plData.overlaps?.length" severity="warn" :closable="false" class="mx">
+          {{ plData.overlaps.length }} account(s) mapped to more than one line (double-counted) —
+          e.g. {{ plData.overlaps.slice(0,3).map(o => o.account + ' → ' + o.lines.join('/')).join(', ') }}.
+          Fix in the P&L mapping.
+        </Message>
+        <DataTable :value="plData.rows" show-gridlines size="small" scrollable scroll-height="flex"
+          :row-class="(r) => (r.kind === 'subtotal' ? 'pls-subtotal' : (r.kind === 'tax' ? 'pls-tax' : ''))">
+          <Column field="label" header="Line" frozen style="min-width:280px" />
+          <Column field="spec" header="Accounts" style="min-width:220px">
+            <template #body="{ data }"><span class="pls-spec">{{ data.spec || '' }}</span></template>
+          </Column>
+          <Column header="Amount" class="num-col" style="min-width:170px">
+            <template #body="{ data }">
+              <span :class="data.kind === 'subtotal' ? 'subtotal-val' : signClass(data.amount)">{{ signedFmt(data.amount) }}</span>
+            </template>
+          </Column>
+        </DataTable>
+        <p v-if="plData.unmapped" class="pls-note">{{ plData.unmapped }} GL account(s) with movement fall outside every line (includes balance-sheet accounts).</p>
       </div>
 
       <!-- ── Profit & Loss ── -->
@@ -358,6 +388,7 @@ const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
 const TABS = [
   { value: 'trialBalance',   label: 'Trial Balance',     icon: 'pi pi-list' },
   { value: 'profitLoss',     label: 'Profit & Loss',     icon: 'pi pi-chart-line' },
+  { value: 'plStatement',    label: 'P&L Statement',     icon: 'pi pi-file-o' },
   { value: 'balanceSheet',   label: 'Balance Sheet',     icon: 'pi pi-chart-bar' },
   { value: 'mgmt',           label: 'Management Accts',  icon: 'pi pi-table' },
   { value: 'customerAging',  label: 'Customer Aging',    icon: 'pi pi-clock' },
@@ -406,6 +437,10 @@ const ytdFrom  = ref(ytdDefault())
 
 const isTB    = computed(() => reportType.value === 'trialBalance')
 const isPL    = computed(() => reportType.value === 'profitLoss')
+const isPLS   = computed(() => reportType.value === 'plStatement')
+const PL_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
+const plCompany = ref('FCL')
+const plData = ref(null)   // { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }
 const isBS    = computed(() => reportType.value === 'balanceSheet')
 const isMgmt  = computed(() => reportType.value === 'mgmt')
 const isAging = computed(() => reportType.value === 'customerAging')
@@ -526,6 +561,7 @@ function switchTab(type) {
   agingRows.value = []
   agingExpandedGroups.value = {}
   agingExpandedCompanies.value = {}
+  plData.value = null
   error.value = null
   // Load only when the user clicks Run Report — avoids auto-loading heavy queries.
 }
@@ -661,7 +697,25 @@ const bsRowClass = (data) => {
 const bsAmtClass = (data) => data._section === 'assets' ? 'positive' : ''
 
 // ── API calls ────────────────────────────────────────────────────────────────
+async function runPl(refresh = false) {
+  if (!canAccessFinance(auth.user?.role)) return
+  error.value = null
+  loading.value = true
+  plData.value = null
+  try {
+    const { data } = await financeReportsApi.plStatement(plCompany.value, {
+      dateFrom: toDateStr(dateFrom.value), dateTo: toDateStr(dateTo.value), refresh,
+    })
+    plData.value = data
+  } catch (err) {
+    error.value = err.response?.data?.error || err.message
+  } finally {
+    loading.value = false
+  }
+}
+
 async function run(refresh = false) {
+  if (isPLS.value) return runPl(refresh)
   if (!canAccessFinance(auth.user?.role)) return
   error.value = null
   loading.value = true
@@ -686,6 +740,7 @@ async function run(refresh = false) {
 async function forceRefresh() {
   if (isMgmt.value)  { await runMgmt(true); return }
   if (isAging.value) { await runAging(true); return }
+  if (isPLS.value)   { await financeReportsApi.clearCache().catch(() => {}); await runPl(true); return }
   await financeReportsApi.clearCache().catch(() => {})
   await run(true)
 }
@@ -801,6 +856,14 @@ function exportExcel() {
     }))
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Customer Aging')
     XLSX.writeFile(wb, `customer-aging-${toDateStr(agingAsOfDate.value)}.xlsx`)
+    return
+  }
+  if (isPLS.value && plData.value?.rows?.length) {
+    const data = plData.value.rows.map(r => ({
+      Line: r.label, Accounts: r.spec || '', Amount: r.amount, Type: r.kind,
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'P&L Statement')
+    XLSX.writeFile(wb, `pl-${plData.value.company}-${toDateStr(dateTo.value)}.xlsx`)
     return
   }
   if (isMgmt.value && mgmtResult.value.lines.length) {
@@ -930,6 +993,11 @@ onMounted(async () => {
 .bs-total-row { grid-template-columns: 120px 260px 160px; }
 .sticky-total-key { min-width:120px; }
 .subtotal-val { font-weight:700; }
+.pls-title { font-size:16px; font-weight:800; padding:2px 2px 8px; }
+.pls-spec { font-family:monospace; font-size:11px; color:var(--bc-text-muted,#64748b); }
+.pls-note { font-size:12px; color:var(--bc-text-muted,#64748b); margin-top:6px; }
+:deep(.pls-subtotal) { background:var(--bc-surface-2,#f1f5f9); font-weight:800; }
+:deep(.pls-tax) { font-style:italic; }
 
 /* ── Positive / Negative ─────────────────────────────────────── */
 .positive { color:#0d5f2a; }

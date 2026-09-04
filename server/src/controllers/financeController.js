@@ -6,6 +6,7 @@ import * as FinanceReport from '../models/FinanceReport.js';
 import { db } from '../db/pool.js';
 import logger from '../services/logger.js';
 import { getOrSet, clearNamespace } from '../services/reportCache.js';
+import { getPlDefinition, savePlDefinition } from '../services/financePl.js';
 
 const VALID_REPORT_TYPES = ['trialBalance', 'profitLoss', 'balanceSheet'];
 
@@ -71,7 +72,42 @@ export async function runFinanceReport(req, res) {
 export function clearFinanceCache(_req, res) {
   clearNamespace('finance-report');
   clearNamespace('finance-gl-mappings');
+  clearNamespace('finance-pl');
   return res.json({ message: 'Finance report cache cleared' });
+}
+
+// ── Configurable P&L statement ────────────────────────────────────────────────
+/** GET /api/finance/pl?company=FCL&dateFrom=&dateTo=&refresh= */
+export async function runPlStatement(req, res) {
+  try {
+    const company = String(req.query.company || 'FCL').toUpperCase();
+    const { dateFrom, dateTo } = req.query;
+    if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom and dateTo are required' });
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+    const { value, cached } = await getOrSet('finance-pl', { query: { company, dateFrom, dateTo } },
+      () => FinanceReport.computePlStatement({ company, dateFrom, dateTo }), { ttlMs: 10 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
+  } catch (err) {
+    logger.error('finance/pl error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /api/finance/pl/definition?company=FCL — the editable line/account mapping. */
+export async function getPlDef(req, res) {
+  try { return res.json(await getPlDefinition(req.query.company || 'FCL')); }
+  catch (err) { return res.status(500).json({ error: err.message }); }
+}
+
+/** PUT /api/finance/pl/definition (admin) — save/override a company's mapping. */
+export async function savePlDef(req, res) {
+  try {
+    const company = String(req.body?.company || '').toUpperCase();
+    const def = await savePlDefinition(company, req.body?.definition);
+    clearNamespace('finance-pl');
+    return res.json(def);
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 }
 
 /** GET /api/finance/gl-mappings */

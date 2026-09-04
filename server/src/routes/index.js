@@ -131,6 +131,10 @@ router.get('/reporting/legacy/download', ...canLegacyReport, legacyReportCtrl.do
 const canFinance = [authMiddleware, requireRole(...FINANCE_ROLES)];
 router.get('/finance/run',                    ...canFinance, financeCtrl.runFinanceReport);
 router.post('/finance/cache/clear',           ...canFinance, financeCtrl.clearFinanceCache);
+// Configurable P&L statement (per-company account mapping)
+router.get('/finance/pl',                     ...canFinance, financeCtrl.runPlStatement);
+router.get('/finance/pl/definition',          ...canFinance, financeCtrl.getPlDef);
+router.put('/finance/pl/definition',          authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.savePlDef);
 router.get('/finance/gl-mappings',            ...canFinance, financeCtrl.listGlMappings);
 router.post('/finance/gl-mappings',           authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.saveGlMapping);
 router.patch('/finance/gl-mappings/:mapId',   authMiddleware, requireRole(...ADMIN_ROLES), financeCtrl.saveGlMapping);
