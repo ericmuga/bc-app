@@ -170,7 +170,7 @@ export async function download(req, res) {
     });
     res.setHeader('X-Row-Count', String(rows.length));
     res.setHeader('X-Total-Count', String(total));
-    if (truncated) res.setHeader('X-Truncated', `true; cap=${cap} — use CSV for larger extracts`);
+    if (truncated) res.setHeader('X-Truncated', `true; cap=${cap}; use CSV for larger extracts`);
     return sendXlsx(res, filename, columns, rows);
   } catch (err) {
     logger.error('reporting/legacy/download error', { source, dataset, format, error: err.message });
