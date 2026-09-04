@@ -2,7 +2,7 @@
   <div class="login-wrap">
     <div class="login-card bc-card">
       <div class="login-logo">⬡</div>
-      <h1 class="login-title">BC Sales Console</h1>
+      <h1 class="login-title">BC Console</h1>
       <p class="login-sub text-muted">Sign in with your domain credentials</p>
 
       <div class="field">

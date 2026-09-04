@@ -749,6 +749,9 @@ import Message from 'primevue/message'
 import Drawer from 'primevue/drawer'
 import * as XLSX from 'xlsx'
 import { canAccessReports } from '@/lib/access.js'
+// finance + sales-admin also get Sales Reports (lib/access.js REPORT_ROLES can't be
+// edited on this host, so extend here — matching the AppShell nav gate).
+const canViewSalesReports = (r) => canAccessReports(r) || ['finance', 'sales-admin'].includes(String(r || '').toLowerCase())
 import SalesmanStatement from '@/components/reports/SalesmanStatement.vue'
 
 const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
@@ -2027,7 +2030,7 @@ function normalizeCustomerRow(row) {
 
 async function runReport(refresh = false) {
   const role = auth.user?.role
-  if (!canAccessReports(role)) { noAccess.value = true; return }
+  if (!canViewSalesReports(role)) { noAccess.value = true; return }
   if (isDownloads.value) return
   noAccess.value = false
   error.value = null
@@ -2192,7 +2195,7 @@ async function exportDownloadDataset(kind, label) {
 }
 
 onMounted(() => {
-  if (canAccessReports(auth.user?.role)) {
+  if (canViewSalesReports(auth.user?.role)) {
     loadMasterOptions()
     runReport()
   }
