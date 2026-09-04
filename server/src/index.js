@@ -149,8 +149,30 @@ async function ensurePosItemColumns() {
       )
     `);
 
+    // PosShopCompany — per-company mirror of a shop (multi-company invoicing setup)
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosShopCompany' AND schema_id=SCHEMA_ID('dbo'))
+      CREATE TABLE [dbo].[PosShopCompany] (
+        [ShopCode]        NVARCHAR(50)  NOT NULL,
+        [Company]         NVARCHAR(20)  NOT NULL,
+        [CustomerNo]      NVARCHAR(20)  NULL,
+        [LocationCode]    NVARCHAR(20)  NULL,
+        [SalespersonCode] NVARCHAR(20)  NULL,
+        [KraPin]          NVARCHAR(30)  NULL,
+        [MpesaTill]       NVARCHAR(30)  NULL,
+        [DisplayName]     NVARCHAR(200) NULL,
+        [IsActive]        BIT           NOT NULL DEFAULT 1,
+        [SortOrder]       INT           NOT NULL DEFAULT 0,
+        [CreatedAt]       DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        [UpdatedAt]       DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT [PK_PosShopCompany] PRIMARY KEY ([ShopCode],[Company])
+      )
+    `);
+
     // 2. Single-column adds (idempotent)
     const adds = [
+      // PosOrderLine — company tag for multi-company split invoicing
+      ['PosOrderLine', 'Company',            'NVARCHAR(20) NULL'],
       // PosItem
       ['PosItem', 'VatPercent',         'DECIMAL(8,4) NOT NULL DEFAULT 0'],
       ['PosItem', 'ProductionCategory', 'NVARCHAR(50)  NULL'],

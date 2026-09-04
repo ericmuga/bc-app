@@ -372,6 +372,9 @@ router.get(   '/pos/setup/shops',                  ...canManage, posCtrl.listSho
 router.post(  '/pos/setup/shops',                  ...canManage, posCtrl.saveShop);
 router.patch( '/pos/setup/shops/:shopId',          ...canManage, posCtrl.saveShop);
 router.delete('/pos/setup/shops/:shopId',          ...canManage, posCtrl.deleteShop);
+// Per-company mirrors of a shop (multi-company invoicing setup)
+router.get(   '/pos/setup/shops/:shopCode/companies', ...canManage, posCtrl.getShopCompanies);
+router.put(   '/pos/setup/shops/:shopCode/companies', ...canManage, posCtrl.saveShopCompanies);
 
 router.get(   '/pos/setup/categories',             ...canManage, posCtrl.listCategories);
 router.post(  '/pos/setup/categories',             ...canManage, posCtrl.saveCategory);

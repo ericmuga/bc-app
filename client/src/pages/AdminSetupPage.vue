@@ -978,6 +978,40 @@ GROUP BY [G_L Account No_]</pre>
                 <Button label="Save" icon="pi pi-save" size="small" @click="savePosShop" :loading="savingPosShop" />
                 <Button label="Cancel" icon="pi pi-times" text size="small" @click="editingPosShop=false" />
               </div>
+
+              <!-- Company mirrors: each company this shop sells for, with its BC identity. -->
+              <div v-if="posShopForm.shopId" class="mirror-panel">
+                <div class="mirror-head">
+                  <label class="ig-label">Company mirrors — multi-company invoicing</label>
+                  <Button label="Add company" icon="pi pi-plus" text size="small" @click="addMirror" />
+                </div>
+                <p class="text-muted text-sm" style="margin:2px 0 8px">
+                  One row per company this till sells for — its BC customer, location, salesperson, KRA PIN and receipt name.
+                  A mixed cart splits into one invoice per company using these. (The M-PESA till is per-shop, shared across companies.)
+                </p>
+                <div style="overflow-x:auto">
+                  <table class="mirror-table" v-if="shopCompanies.length">
+                    <thead><tr>
+                      <th>Company</th><th>Customer No</th><th>Location</th><th>Salesperson</th>
+                      <th>KRA PIN</th><th>Display name</th><th>Active</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      <tr v-for="(m,i) in shopCompanies" :key="i">
+                        <td><Select v-model="m.Company" :options="['FCL','CM','RMK','FLM']" placeholder="Co" style="width:80px" /></td>
+                        <td><InputText v-model="m.CustomerNo" style="width:100px" /></td>
+                        <td><InputText v-model="m.LocationCode" style="width:90px" /></td>
+                        <td><InputText v-model="m.SalespersonCode" style="width:95px" /></td>
+                        <td><InputText v-model="m.KraPin" style="width:120px" /></td>
+                        <td><InputText v-model="m.DisplayName" style="width:150px" /></td>
+                        <td style="text-align:center"><Checkbox v-model="m.IsActive" binary /></td>
+                        <td><Button icon="pi pi-times" text severity="danger" size="small" @click="shopCompanies.splice(i,1)" /></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p v-else class="text-muted text-sm">No company mirrors yet — click "Add company".</p>
+                </div>
+                <Button label="Save mirrors" icon="pi pi-save" size="small" style="margin-top:8px" @click="saveMirrors" :loading="savingMirrors" />
+              </div>
             </div>
             <DataTable :value="posShops" dataKey="ShopId" size="small">
               <Column field="Code"            header="Code"        style="width:100px" />
@@ -2273,8 +2307,36 @@ async function loadBcSalespersons() {
   finally { loadingBcSp.value = false }
 }
 
-function newPosShop()  { posShopForm.value = emptyShopForm(); editingPosShop.value = true }
-function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', fclCustomerNo: d.FclCustomerNo||'', cmCustomerNo: d.CmCustomerNo||'', rmkCustomerNo: d.RmkCustomerNo||'', flmCustomerNo: d.FlmCustomerNo||'', walkInCustomerNo: d.WalkInCustomerNo||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; editingPosShop.value = true }
+// ── Company mirrors (multi-company invoicing setup) ──
+const shopCompanies = ref([])
+const savingMirrors = ref(false)
+async function loadMirrors(code) {
+  shopCompanies.value = []
+  if (!code) return
+  try {
+    const { data } = await posSetupApi.shopCompanies(code)
+    shopCompanies.value = (data || []).map(m => ({ ...m, IsActive: m.IsActive !== false && m.IsActive !== 0 }))
+  } catch { /* none yet */ }
+}
+function addMirror() {
+  shopCompanies.value.push({ Company: '', CustomerNo: '', LocationCode: '', SalespersonCode: '', KraPin: '', MpesaTill: '', DisplayName: '', IsActive: true })
+}
+async function saveMirrors() {
+  savingMirrors.value = true
+  try {
+    const rows = shopCompanies.value.filter(m => m.Company).map(m => ({
+      company: m.Company, customerNo: m.CustomerNo, locationCode: m.LocationCode, salespersonCode: m.SalespersonCode,
+      kraPin: m.KraPin, mpesaTill: m.MpesaTill, displayName: m.DisplayName, isActive: m.IsActive !== false,
+    }))
+    const { data } = await posSetupApi.saveShopCompanies(posShopForm.value.code, rows)
+    shopCompanies.value = (data || []).map(m => ({ ...m, IsActive: m.IsActive !== false && m.IsActive !== 0 }))
+    await loadPosSetup()
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { savingMirrors.value = false }
+}
+
+function newPosShop()  { posShopForm.value = emptyShopForm(); shopCompanies.value = []; editingPosShop.value = true }
+function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', fclCustomerNo: d.FclCustomerNo||'', cmCustomerNo: d.CmCustomerNo||'', rmkCustomerNo: d.RmkCustomerNo||'', flmCustomerNo: d.FlmCustomerNo||'', walkInCustomerNo: d.WalkInCustomerNo||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; loadMirrors(d.Code); editingPosShop.value = true }
 
 async function savePosShop() {
   savingPosShop.value = true
@@ -2956,6 +3018,11 @@ onMounted(() => { loadPosShopsOnly() })
 </script>
 
 <style scoped>
+.mirror-panel { margin-top:12px; border:1px solid var(--bc-border, #e2e8f0); border-radius:8px; padding:10px 12px; background:var(--bc-surface, #f8fafc); }
+.mirror-head { display:flex; justify-content:space-between; align-items:center; }
+.mirror-table { border-collapse:collapse; font-size:12px; }
+.mirror-table th, .mirror-table td { padding:4px 6px; border-bottom:1px solid var(--bc-border, #e2e8f0); text-align:left; white-space:nowrap; }
+.mirror-table th { color:var(--bc-text-muted, #64748b); font-weight:600; }
 .admin-page { display:flex; flex-direction:column; gap:16px; }
 .page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .page-title { font-size:24px; font-weight:700; margin:0 0 4px; }

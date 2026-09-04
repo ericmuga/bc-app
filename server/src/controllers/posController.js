@@ -1160,6 +1160,14 @@ export async function deleteShop(req, res) {
   } catch (e) { err(res, e); }
 }
 
+// Per-company mirrors of a shop (multi-company setup)
+export async function getShopCompanies(req, res) {
+  try { ok(res, await Pos.listShopCompanies(req.params.shopCode)); } catch (e) { err(res, e, 400); }
+}
+export async function saveShopCompanies(req, res) {
+  try { ok(res, await Pos.saveShopCompanies(req.params.shopCode, req.body?.companies || req.body)); } catch (e) { err(res, e, 400); }
+}
+
 // ── Admin setup: categories ───────────────────────────────────────────────────
 
 export async function listCategories(req, res) {

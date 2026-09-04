@@ -248,6 +248,9 @@ export const posSetupApi = {
     ? api.patch(`/pos/setup/shops/${body.shopId}`, body)
     : api.post('/pos/setup/shops', body),
   deleteShop:      (id)         => api.delete(`/pos/setup/shops/${id}`),
+  // per-company mirrors of a shop (multi-company setup)
+  shopCompanies:     (code)          => api.get(`/pos/setup/shops/${code}/companies`),
+  saveShopCompanies: (code, companies) => api.put(`/pos/setup/shops/${code}/companies`, { companies }),
 
   // categories
   listCategories:  ()           => api.get('/pos/setup/categories'),

@@ -197,6 +197,7 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null } = {
            i.[Barcode],i.[ImageUrl],
            i.[SortOrder],
            i.[EtimsItemCode],i.[EtimsItemClassCode],i.[TaxType],i.[UnitOfMeasure],
+           i.[SourceCompany],
            ISNULL(oh.[Qty], 0) AS OnHand
            ${userId ? `, CASE WHEN f.[FavouriteId] IS NULL THEN 0 ELSE 1 END AS IsFavourite` : ', 0 AS IsFavourite'}
     FROM [dbo].[PosItem] i
@@ -231,6 +232,7 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null } = {
       etimsItemClassCode: item.EtimsItemClassCode || '',
       taxType:            item.TaxType || '',
       unitOfMeasure:      item.UnitOfMeasure || '',
+      sourceCompany:      (item.SourceCompany || '').toUpperCase(),
       remaining:          Number(item.OnHand || 0),
       isFavourite:        Boolean(item.IsFavourite),
     };
@@ -2044,6 +2046,61 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
   return result.recordset[0].ShopId;
 }
 
+// ── PosShopCompany — per-company mirror of a shop (customer / location / salesperson
+//    / KRA PIN / till / name), the setup basis for multi-company invoicing ──────
+export async function listShopCompanies(shopCode) {
+  const pool = await appPool();
+  const r = await pool.request().input('code', sql.NVarChar(50), str(shopCode, 50).toUpperCase())
+    .query(`SELECT [Company],[CustomerNo],[LocationCode],[SalespersonCode],[KraPin],[MpesaTill],[DisplayName],[IsActive],[SortOrder]
+            FROM [dbo].[PosShopCompany] WHERE [ShopCode]=@code ORDER BY [SortOrder],[Company]`);
+  return r.recordset;
+}
+
+const COMPANY_CUST_COL = { FCL: 'FclCustomerNo', CM: 'CmCustomerNo', RMK: 'RmkCustomerNo', FLM: 'FlmCustomerNo' };
+
+export async function saveShopCompanies(shopCode, rows) {
+  const code = str(shopCode, 50).toUpperCase();
+  if (!code) throw new Error('shopCode is required');
+  const clean = (Array.isArray(rows) ? rows : []).map((x, i) => ({
+    company:         str(x.company, 20).toUpperCase(),
+    customerNo:      str(x.customerNo, 20) || null,
+    locationCode:    str(x.locationCode, 20).toUpperCase() || null,
+    salespersonCode: str(x.salespersonCode, 20).toUpperCase() || null,
+    kraPin:          str(x.kraPin, 30).toUpperCase() || null,
+    mpesaTill:       str(x.mpesaTill, 30) || null,
+    displayName:     str(x.displayName, 200) || null,
+    isActive:        x.isActive === false ? 0 : 1,
+    sortOrder:       Number.isFinite(+x.sortOrder) ? +x.sortOrder : i,
+  })).filter((x) => x.company);
+
+  const pool = await appPool();
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    await new sql.Request(tx).input('code', sql.NVarChar(50), code)
+      .query(`DELETE FROM [dbo].[PosShopCompany] WHERE [ShopCode]=@code`);
+    for (const x of clean) {
+      await new sql.Request(tx)
+        .input('code', sql.NVarChar(50), code).input('co', sql.NVarChar(20), x.company)
+        .input('cust', sql.NVarChar(20), x.customerNo).input('loc', sql.NVarChar(20), x.locationCode)
+        .input('sp', sql.NVarChar(20), x.salespersonCode).input('pin', sql.NVarChar(30), x.kraPin)
+        .input('till', sql.NVarChar(30), x.mpesaTill).input('dn', sql.NVarChar(200), x.displayName)
+        .input('active', sql.Bit, x.isActive).input('sort', sql.Int, x.sortOrder)
+        .query(`INSERT INTO [dbo].[PosShopCompany]([ShopCode],[Company],[CustomerNo],[LocationCode],[SalespersonCode],[KraPin],[MpesaTill],[DisplayName],[IsActive],[SortOrder])
+                VALUES(@code,@co,@cust,@loc,@sp,@pin,@till,@dn,@active,@sort)`);
+    }
+    // Mirror customer numbers back to PosShop legacy columns so resolveShopCompany
+    // (which still reads Fcl/Cm/Rmk/FlmCustomerNo) stays correct until Phase 3.
+    const byCo = Object.fromEntries(clean.map((x) => [x.company, x.customerNo]));
+    await new sql.Request(tx).input('code', sql.NVarChar(50), code)
+      .input('fcl', sql.NVarChar(20), byCo.FCL || null).input('cm', sql.NVarChar(20), byCo.CM || null)
+      .input('rmk', sql.NVarChar(20), byCo.RMK || null).input('flm', sql.NVarChar(20), byCo.FLM || null)
+      .query(`UPDATE [dbo].[PosShop] SET [FclCustomerNo]=@fcl,[CmCustomerNo]=@cm,[RmkCustomerNo]=@rmk,[FlmCustomerNo]=@flm,[UpdatedAt]=GETUTCDATE() WHERE [Code]=@code`);
+    await tx.commit();
+  } catch (e) { await tx.rollback(); throw e; }
+  return listShopCompanies(code);
+}
+
 export async function deleteShop(shopId) {
   const pool = await appPool();
   await pool.request()
@@ -2396,7 +2453,7 @@ export async function getOrder(orderId) {
              ${hasEtimsNo ? 'o.[EtimsNo]' : 'CAST(NULL AS NVARCHAR(50))'} AS [EtimsNo],
              o.[EtimsInvoiceNo],o.[CuSerialNo],o.[QrUrl],o.[SignedAt],o.[PrintedAt],o.[PdfFileName],
              o.[CreatedAt],o.[UpdatedAt],
-             l.[LineId],l.[ItemNo],l.[Description],l.[Quantity],l.[UnitPrice],l.[LineAmount],l.[SortOrder],
+             l.[LineId],l.[ItemNo],l.[Description],l.[Quantity],l.[UnitPrice],l.[LineAmount],l.[Company],l.[SortOrder],
              pi.[EtimsItemCode],pi.[EtimsItemClassCode],pi.[TaxType],pi.[UnitOfMeasure],pi.[VatPercent],pi.[PriceIncludesVat],
              p.[PaymentId],p.[PaymentTypeCode],p.[PaymentTypeName],p.[Amount],p.[MobileNo],
              p.[Reference],p.[Status] AS PayStatus
@@ -2434,6 +2491,7 @@ export async function getOrder(orderId) {
         lineId: row.LineId, itemNo: row.ItemNo, description: row.Description,
         quantity: Number(row.Quantity), unitPrice: Number(row.UnitPrice),
         lineAmount: Number(row.LineAmount), sortOrder: row.SortOrder,
+        company:            (row.Company || '').toUpperCase(),
         etimsItemCode:      row.EtimsItemCode      || '',
         etimsItemClassCode: row.EtimsItemClassCode || '',
         taxType:            row.TaxType            || '',
@@ -2537,6 +2595,18 @@ export async function setOrderLines(orderId, lines) {
   const req  = pool.request().input('orderId', sql.UniqueIdentifier, orderId);
   await req.query(`DELETE FROM [dbo].[PosOrderLine] WHERE [OrderId]=@orderId`);
 
+  // Tag each line with the BC company that owns the item (PosItem.SourceCompany),
+  // so a mixed-company cart can be split into one invoice per company at checkout.
+  // Server-resolved (not client-trusted); falls back to a client-supplied company.
+  const companyByItem = new Map();
+  const itemNos = [...new Set((lines || []).map((l) => str(l.itemNo, 30).toUpperCase()).filter(Boolean))];
+  if (itemNos.length) {
+    const cr = pool.request();
+    itemNos.forEach((n, i) => cr.input(`c${i}`, sql.NVarChar(30), n));
+    const cres = await cr.query(`SELECT [ItemNo],[SourceCompany] FROM [dbo].[PosItem] WHERE UPPER([ItemNo]) IN (${itemNos.map((_, i) => `@c${i}`).join(',')})`);
+    cres.recordset.forEach((r) => companyByItem.set(String(r.ItemNo).toUpperCase(), (r.SourceCompany || '').toUpperCase() || null));
+  }
+
   let total = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
@@ -2545,17 +2615,20 @@ export async function setOrderLines(orderId, lines) {
     if (qty <= 0) throw new Error(`Line "${l.description || l.itemNo}" must have a positive quantity — negative or zero sales are not allowed.`);
     const amount = Math.round(qty * price * 10000) / 10000;
     total += amount;
+    const itemNo  = str(l.itemNo, 30).toUpperCase();
+    const company = companyByItem.get(itemNo) || (str(l.company, 20).toUpperCase() || null);
     const r2 = pool.request()
       .input(`oid${i}`,  sql.UniqueIdentifier, orderId)
-      .input(`ino${i}`,  sql.NVarChar(30),    str(l.itemNo, 30).toUpperCase())
+      .input(`ino${i}`,  sql.NVarChar(30),    itemNo)
       .input(`dsc${i}`,  sql.NVarChar(200),   str(l.description))
       .input(`qty${i}`,  sql.Decimal(18, 4),  qty)
       .input(`prc${i}`,  sql.Decimal(18, 4),  price)
       .input(`amt${i}`,  sql.Decimal(18, 4),  amount)
+      .input(`cmp${i}`,  sql.NVarChar(20),    company)
       .input(`srt${i}`,  sql.Int,             i);
     await r2.query(`
-      INSERT INTO [dbo].[PosOrderLine]([OrderId],[ItemNo],[Description],[Quantity],[UnitPrice],[LineAmount],[SortOrder])
-      VALUES(@oid${i},@ino${i},@dsc${i},@qty${i},@prc${i},@amt${i},@srt${i})
+      INSERT INTO [dbo].[PosOrderLine]([OrderId],[ItemNo],[Description],[Quantity],[UnitPrice],[LineAmount],[Company],[SortOrder])
+      VALUES(@oid${i},@ino${i},@dsc${i},@qty${i},@prc${i},@amt${i},@cmp${i},@srt${i})
     `);
   }
   await pool.request()
