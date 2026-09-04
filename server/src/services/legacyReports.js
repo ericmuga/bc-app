@@ -24,6 +24,23 @@
  *   order        ORDER BY expression (must be deterministic for OFFSET/FETCH)
  *   columns      [{ col, as }]  explicit, whitelisted SELECT list
  *   filters      { filterKey: { col, label } }  optional equality filters
+ *   summary      optional roll-up spec (see below)
+ *
+ * ─── HOW TO ADD A SUMMARY (roll-up) TO A DATASET ────────────────────────────
+ * Give the dataset a `summary` object. It reuses the SAME source/prefix, the
+ * SAME base FROM (header [+ line]) and the SAME date-range + equality filters as
+ * the detail query; it only changes the SELECT into a GROUP BY roll-up:
+ *   summary: {
+ *     label      friendly name shown in the UI (e.g. 'Summary by Document')
+ *     joins      [{ table, alias, on, type }]  optional extra whitelisted joins
+ *                (e.g. LEFT JOIN the G/L Account table to pull the account name)
+ *     groupBy    [{ col, as }]  columns that appear in BOTH the SELECT and the
+ *                GROUP BY (the grain of one summary row)
+ *     aggregates [{ expr, as }]  aggregate expressions (SUM(...), COUNT_BIG(*))
+ *     order      ORDER BY expression (deterministic; used for OFFSET/FETCH)
+ *   }
+ * Only columns/tables named HERE are ever emitted — `mode=summary` from the
+ * request just picks this pre-declared spec; it never carries SQL.
  *
  * All table/column names come from THIS file (a whitelist) — never from user
  * input. Every filter VALUE is bound as a parameter (see LegacyReportModel).
@@ -67,6 +84,21 @@ const LEGACY_DATASETS = [
       documentNo: { col: 'h.[No_]',                 label: 'Document No.' },
       vendorNo:   { col: 'h.[Buy-from Vendor No_]', label: 'Vendor No.' },
     },
+    summary: {
+      label: 'Summary by Document',
+      groupBy: [
+        { col: 'h.[No_]',                  as: 'DocumentNo' },
+        { col: 'h.[Posting Date]',         as: 'PostingDate' },
+        { col: 'h.[Buy-from Vendor No_]',  as: 'VendorNo' },
+        { col: 'h.[Buy-from Vendor Name]', as: 'VendorName' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(l.[Line No_])',        as: 'LineCount' },
+        { expr: 'SUM(l.[Amount])',                as: 'TotalAmount' },
+        { expr: 'SUM(l.[Amount Including VAT])',  as: 'TotalAmountInclVAT' },
+      ],
+      order: 'h.[Posting Date] DESC, h.[No_]',
+    },
   },
 
   {
@@ -97,6 +129,23 @@ const LEGACY_DATASETS = [
     filters: {
       documentNo: { col: 'h.[No_]',                 label: 'Receipt No.' },
       vendorNo:   { col: 'h.[Buy-from Vendor No_]', label: 'Vendor No.' },
+    },
+    // Purchase-receipt lines carry quantities, not amounts, so the per-document
+    // "total" here is the received quantity (there is no amount column to sum).
+    summary: {
+      label: 'Summary by Document',
+      groupBy: [
+        { col: 'h.[No_]',                  as: 'DocumentNo' },
+        { col: 'h.[Posting Date]',         as: 'PostingDate' },
+        { col: 'h.[Buy-from Vendor No_]',  as: 'VendorNo' },
+        { col: 'h.[Buy-from Vendor Name]', as: 'VendorName' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(l.[Line No_])',    as: 'LineCount' },
+        { expr: 'SUM(l.[Quantity])',          as: 'TotalQuantity' },
+        { expr: 'SUM(l.[Quantity (Base)])',   as: 'TotalQuantityBase' },
+      ],
+      order: 'h.[Posting Date] DESC, h.[No_]',
     },
   },
 
@@ -133,6 +182,21 @@ const LEGACY_DATASETS = [
       documentNo: { col: 'h.[No_]',                  label: 'Invoice No.' },
       customerNo: { col: 'h.[Sell-to Customer No_]', label: 'Customer No.' },
     },
+    summary: {
+      label: 'Summary by Document',
+      groupBy: [
+        { col: 'h.[No_]',                   as: 'DocumentNo' },
+        { col: 'h.[Posting Date]',          as: 'PostingDate' },
+        { col: 'h.[Sell-to Customer No_]',  as: 'CustomerNo' },
+        { col: 'h.[Sell-to Customer Name]', as: 'CustomerName' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(l.[Line No_])',       as: 'LineCount' },
+        { expr: 'SUM(l.[Amount])',               as: 'TotalAmount' },
+        { expr: 'SUM(l.[Amount Including VAT])', as: 'TotalAmountInclVAT' },
+      ],
+      order: 'h.[Posting Date] DESC, h.[No_]',
+    },
   },
 
   {
@@ -163,6 +227,23 @@ const LEGACY_DATASETS = [
       documentNo:  { col: 'h.[Document No_]',   label: 'Document No.' },
       glAccountNo: { col: 'h.[G_L Account No_]', label: 'G/L Account No.' },
       sourceCode:  { col: 'h.[Source Code]',    label: 'Source Code' },
+    },
+    summary: {
+      label: 'Summary by G/L Account',
+      // LEFT JOIN the G/L Account master so entries still show even if the
+      // account row is missing; [Name] is the account name "if available".
+      joins: [
+        { table: 'G_L Account', alias: 'ga', on: 'ga.[No_] = h.[G_L Account No_]', type: 'LEFT' },
+      ],
+      groupBy: [
+        { col: 'h.[G_L Account No_]', as: 'GLAccountNo' },
+        { col: 'ga.[Name]',           as: 'GLAccountName' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(*)',      as: 'EntryCount' },
+        { expr: 'SUM(h.[Amount])',   as: 'TotalAmount' },
+      ],
+      order: 'h.[G_L Account No_]',
     },
   },
 ];
@@ -213,6 +294,8 @@ export function catalogue() {
       key: d.key,
       label: d.label,
       hasLines: !!d.line,
+      hasSummary: !!d.summary,
+      summaryLabel: d.summary?.label || null,
       filters: Object.entries(d.filters || {}).map(([key, meta]) => ({ key, label: meta.label })),
     })),
   }));

@@ -4,7 +4,10 @@
  * All routes require admin or data-analyst (enforced in routes/index.js).
  * READ-ONLY: delegates to LegacyReportModel, which only ever issues SELECTs.
  */
-import * as XLSX from 'xlsx';
+// xlsx-js-style is a drop-in community fork of SheetJS that CAN write cell
+// styles. Imported here ONLY for the Legacy Downloads export so the header row
+// can be bold + shaded. Other pages keep using plain `xlsx` (unstyled).
+import * as XLSX from 'xlsx-js-style';
 import * as Legacy from '../models/LegacyReportModel.js';
 import { catalogue } from '../services/legacyReports.js';
 import logger from '../services/logger.js';
@@ -39,6 +42,7 @@ export async function run(req, res) {
       filters: parseFilters(req.query),
       page: req.query.page,
       pageSize: req.query.pageSize,
+      mode: req.query.mode,
     });
     return res.json(result);
   } catch (err) {
@@ -61,12 +65,36 @@ function sendCsv(res, filename, columns, rows) {
   return res.send(`${header}\r\n${body}`);
 }
 
+// Header/title-row style (xlsx-js-style): bold white text on a solid blue fill,
+// matching the app's --bc-primary accent, with a thin border for sharp contrast.
+const HEADER_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 11 },
+  fill: { patternType: 'solid', fgColor: { rgb: 'FF1D4ED8' } },
+  alignment: { horizontal: 'left', vertical: 'center' },
+  border: {
+    top:    { style: 'thin', color: { rgb: 'FF1E40AF' } },
+    bottom: { style: 'thin', color: { rgb: 'FF1E40AF' } },
+    left:   { style: 'thin', color: { rgb: 'FF1E40AF' } },
+    right:  { style: 'thin', color: { rgb: 'FF1E40AF' } },
+  },
+};
+
 function sendXlsx(res, filename, columns, rows) {
   const aoa = [columns, ...rows.map((r) => columns.map((c) => {
     const v = r[c];
     return v instanceof Date ? v.toISOString().slice(0, 10) : (v ?? '');
   }))];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Style the header row (row 0) — bold + shaded fill for high contrast.
+  for (let c = 0; c < columns.length; c++) {
+    const ref = XLSX.utils.encode_cell({ r: 0, c });
+    if (ws[ref]) ws[ref].s = HEADER_STYLE;
+  }
+  // Sensible column widths so the bold header is readable.
+  ws['!cols'] = columns.map((col) => ({ wch: Math.min(Math.max(String(col).length + 2, 12), 40) }));
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Data');
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
@@ -87,10 +115,11 @@ export async function download(req, res) {
       return res.status(400).json({ error: "format must be 'csv' or 'xlsx'" });
     }
 
-    const { rows, columns, total, truncated, cap } = await Legacy.fetchForDownload({
+    const { rows, columns, total, truncated, cap, mode } = await Legacy.fetchForDownload({
       sourceKey: source,
       datasetKey: dataset,
       filters: parseFilters(req.query),
+      mode: req.query.mode,
     });
 
     // Surface truncation to the client via a header (the file itself stays clean).
@@ -99,7 +128,7 @@ export async function download(req, res) {
     if (truncated) res.setHeader('X-Truncated', `true; cap=${cap}`);
 
     const stamp = new Date().toISOString().slice(0, 10);
-    const filename = `legacy-${source}-${dataset}-${stamp}`.replace(/[^a-z0-9\-]/gi, '-');
+    const filename = `legacy-${source}-${dataset}-${mode}-${stamp}`.replace(/[^a-z0-9\-]/gi, '-');
 
     return format === 'xlsx'
       ? sendXlsx(res, filename, columns, rows)

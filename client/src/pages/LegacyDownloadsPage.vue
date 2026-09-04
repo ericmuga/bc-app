@@ -29,8 +29,18 @@
         <InputText v-model="filters[ff.key]" :placeholder="ff.label" class="fi sm" @keyup.enter="run(1)" />
       </div>
 
+      <!-- Detail / Summary toggle (only for datasets that declare a summary) -->
+      <div class="f" v-if="selectedDataset?.hasSummary">
+        <label>View</label>
+        <div class="mode-toggle">
+          <button class="mt-btn" :class="{ active: mode === 'detail' }" @click="setMode('detail')">Detail</button>
+          <button class="mt-btn" :class="{ active: mode === 'summary' }" @click="setMode('summary')">{{ selectedDataset.summaryLabel || 'Summary' }}</button>
+        </div>
+      </div>
+
       <Button icon="pi pi-search" label="Run" size="small" :loading="loading" :disabled="!dataset" @click="run(1)" />
       <div class="spacer" />
+      <span v-if="hasRun" class="dl-mode-tag">{{ mode === 'summary' ? (selectedDataset?.summaryLabel || 'Summary') : 'Detail' }}</span>
       <Button icon="pi pi-file" label="CSV" size="small" severity="secondary" :disabled="!hasRun || downloading" :loading="downloading === 'csv'" @click="download('csv')" />
       <Button icon="pi pi-file-excel" label="Excel" size="small" severity="secondary" :disabled="!hasRun || downloading" :loading="downloading === 'xlsx'" @click="download('xlsx')" />
     </div>
@@ -74,6 +84,7 @@ const source = ref(null)
 const dataset = ref(null)
 const filters = reactive({ dateFrom: null, dateTo: null, documentNo: '', vendorNo: '', customerNo: '', glAccountNo: '', sourceCode: '' })
 
+const mode = ref('detail')
 const rows = ref([])
 const columns = ref([])
 const total = ref(0)
@@ -100,8 +111,13 @@ function resetResults() {
   page.value = 1
   truncNote.value = null
 }
-function onSourceChange() { dataset.value = null; resetResults() }
-function onDatasetChange() { resetResults() }
+function onSourceChange() { dataset.value = null; mode.value = 'detail'; resetResults() }
+function onDatasetChange() { mode.value = 'detail'; resetResults() }
+function setMode(m) {
+  if (mode.value === m) return
+  mode.value = m
+  if (hasRun.value) run(1)
+}
 
 function ymd(d) {
   if (!d) return undefined
@@ -127,7 +143,7 @@ async function run(toPage = 1) {
   try {
     const { data } = await legacyReportsApi.run({
       source: source.value, dataset: dataset.value,
-      filters: filterPayload(), page: toPage, pageSize: pageSize.value,
+      filters: filterPayload(), page: toPage, pageSize: pageSize.value, mode: mode.value,
     })
     rows.value = data.rows || []
     columns.value = data.columns || (rows.value[0] ? Object.keys(rows.value[0]) : [])
@@ -152,7 +168,7 @@ async function download(format) {
   downloading.value = format; error.value = null
   try {
     const res = await legacyReportsApi.download({
-      source: source.value, dataset: dataset.value, filters: filterPayload(), format,
+      source: source.value, dataset: dataset.value, filters: filterPayload(), format, mode: mode.value,
     })
     const trunc = res.headers['x-truncated']
     if (trunc) {
@@ -164,7 +180,7 @@ async function download(format) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `legacy-${source.value}-${dataset.value}-${ymd(new Date())}.${format}`
+    a.download = `legacy-${source.value}-${dataset.value}-${mode.value}-${ymd(new Date())}.${format}`
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
@@ -207,7 +223,24 @@ loadCatalogue()
 .cap-note { margin: -4px 0 0; font-size: 12px; color: #b45309; }
 .run-prompt { padding: 28px; text-align: center; color: #6b7280; background: #f8fafc; border: 1px dashed #d1d5db; border-radius: 10px; }
 .ld-table { flex: 1; min-height: 0; }
-.empty { padding: 28px; text-align: center; color: #9ca3af; }
+.empty { padding: 28px; text-align: center; color: var(--bc-text-muted); }
+
+/* Detail / Summary segmented toggle (mirrors BcReports view-toggle) */
+.mode-toggle { display: inline-flex; border: 1px solid var(--bc-border); border-radius: 8px; overflow: hidden; }
+.mt-btn { border: none; background: var(--bc-surface-card); color: var(--bc-text-muted); font-size: 12px; font-weight: 700; padding: 7px 12px; cursor: pointer; }
+.mt-btn + .mt-btn { border-left: 1px solid var(--bc-border); }
+.mt-btn.active { background: var(--bc-primary); color: #fff; }
+.dl-mode-tag { align-self: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--bc-text-muted); padding: 0 4px; }
+
+/* ── Table theming — mirror the Sales Reports (/bc-reports) DataTable so the two
+      pages read as one high-contrast dark surface. Uses the shared --bc-* tokens
+      defined globally in assets/main.css. ─────────────────────────────────────── */
+.ld-table :deep(.p-datatable-tbody > tr > td) { color: var(--bc-text) !important; background: transparent !important; padding: 6px 10px !important; border-color: var(--bc-border) !important; }
+.ld-table :deep(.p-datatable-tbody > tr:nth-child(even) > td) { background: rgba(255,255,255,0.03) !important; }
+.ld-table :deep(.p-datatable-tbody > tr:hover > td) { background: rgba(255,255,255,0.06) !important; }
+.ld-table :deep(.p-datatable-thead > tr > th) { background: var(--bc-surface-raised) !important; color: var(--bc-text) !important; font-size: 11px !important; font-weight: 700 !important; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px !important; border-color: var(--bc-border) !important; }
+.ld-table :deep(.p-datatable-header),
+.ld-table :deep(.p-paginator) { background: var(--bc-surface-card) !important; color: var(--bc-text) !important; border-color: var(--bc-border) !important; }
 
 @media (prefers-color-scheme: dark) {
   .ld-head .sub { color: #94a3b8; }
