@@ -23,8 +23,33 @@
  *   dateColumn   column the posting-date range filters on
  *   order        ORDER BY expression (must be deterministic for OFFSET/FETCH)
  *   columns      [{ col, as }]  explicit, whitelisted SELECT list
- *   filters      { filterKey: { col, label } }  optional equality filters
+ *   filters      { filterKey: <spec> }  optional filters (see FILTER SHAPES)
  *   summary      optional roll-up spec (see below)
+ *
+ * ─── FILTER SHAPES ──────────────────────────────────────────────────────────
+ * A dataset's `filters` map keys a client-facing filter name to a whitelisted
+ * spec. Three shapes are supported (all VALUES are still bound as parameters):
+ *
+ *   1. Text equality  { col, label }
+ *        compiles to `col = @param` (NVarChar). The original/default shape.
+ *
+ *   2. Join-scoped     { col, label, join:{ table, alias, on, type:'LEFT' } }
+ *        same `col = @param`, but the WHITELISTED join is added to the FROM
+ *        ONLY when this filter is supplied (e.g. filter on the Item card's
+ *        [Inventory Posting Group] via a LEFT JOIN to [{Prefix}$Item]).
+ *
+ *   3. Enum multi-select { type:'enum', col, label, multi:true,
+ *                          options:[{ value, label }], numeric?:true }
+ *        compiles to `col IN (@a,@b,…)`. The client shows `label`s and sends
+ *        the `value` codes; the model VALIDATES every value against the
+ *        declared option set server-side and drops anything unknown. `numeric`
+ *        (default true) binds each value as an Int — NAV Option fields are
+ *        integer-backed (e.g. Entry Type, Document Type). Set `numeric:false`
+ *        for string-coded enums.
+ *
+ * To add ANOTHER enum filter later (e.g. Document Type), just declare a new
+ * `{ type:'enum', col, label, multi:true, options:[…] }` in a dataset's
+ * `filters` — the model + controller + client already handle any enum generically.
  *
  * ─── HOW TO ADD A SUMMARY (roll-up) TO A DATASET ────────────────────────────
  * Give the dataset a `summary` object. It reuses the SAME source/prefix, the
@@ -48,6 +73,38 @@
 
 // Default posting-date column shared by all header tables.
 const POSTING_DATE = 'h.[Posting Date]';
+
+// BC "Item Ledger Entry Type" Option codes → friendly labels. Exported so the
+// enum filter, the detail EntryTypeName CASE column and the client all agree.
+// This is also the SERVER-SIDE whitelist the model validates submitted codes
+// against (see LegacyReportModel enum handling).
+export const ENTRY_TYPE_OPTIONS = [
+  { value: 0, label: 'Purchase' },
+  { value: 1, label: 'Sale' },
+  { value: 2, label: 'Positive Adjmt.' },
+  { value: 3, label: 'Negative Adjmt.' },
+  { value: 4, label: 'Transfer' },
+  { value: 5, label: 'Consumption' },
+  { value: 6, label: 'Output' },
+  { value: 8, label: 'Assembly Consumption' },
+  { value: 9, label: 'Assembly Output' },
+];
+
+// Whitelisted CASE expression that renders the integer Entry Type as its label
+// in the detail view (registry-defined SQL — never user input).
+const ENTRY_TYPE_NAME_SQL =
+  `CASE h.[Entry Type] ` +
+  ENTRY_TYPE_OPTIONS.map((o) => `WHEN ${o.value} THEN '${o.label.replace(/'/g, "''")}'`).join(' ') +
+  ` ELSE CAST(h.[Entry Type] AS varchar(10)) END`;
+
+// Reusable filter spec: filter on the Item card's [Inventory Posting Group] by
+// LEFT JOINing [{Prefix}$Item] on the given item-no column. `itemNoCol` differs
+// by dataset (document lines use l.[No_]; the Item Ledger uses h.[Item No_]).
+const inventoryPostingGroupFilter = (itemNoCol) => ({
+  col: 'it.[Inventory Posting Group]',
+  label: 'Inventory Posting Group',
+  join: { table: 'Item', alias: 'it', on: `it.[No_] = ${itemNoCol}`, type: 'LEFT' },
+});
 
 const LEGACY_DATASETS = [
   {
@@ -83,6 +140,8 @@ const LEGACY_DATASETS = [
     filters: {
       documentNo: { col: 'h.[No_]',                 label: 'Document No.' },
       vendorNo:   { col: 'h.[Buy-from Vendor No_]', label: 'Vendor No.' },
+      itemNo:     { col: 'l.[No_]',                 label: 'Item No.' },
+      inventoryPostingGroup: inventoryPostingGroupFilter('l.[No_]'),
     },
     summary: {
       label: 'Summary by Document',
@@ -129,6 +188,8 @@ const LEGACY_DATASETS = [
     filters: {
       documentNo: { col: 'h.[No_]',                 label: 'Receipt No.' },
       vendorNo:   { col: 'h.[Buy-from Vendor No_]', label: 'Vendor No.' },
+      itemNo:     { col: 'l.[No_]',                 label: 'Item No.' },
+      inventoryPostingGroup: inventoryPostingGroupFilter('l.[No_]'),
     },
     // Purchase-receipt lines carry quantities, not amounts, so the per-document
     // "total" here is the received quantity (there is no amount column to sum).
@@ -181,6 +242,8 @@ const LEGACY_DATASETS = [
     filters: {
       documentNo: { col: 'h.[No_]',                  label: 'Invoice No.' },
       customerNo: { col: 'h.[Sell-to Customer No_]', label: 'Customer No.' },
+      itemNo:     { col: 'l.[No_]',                  label: 'Item No.' },
+      inventoryPostingGroup: inventoryPostingGroupFilter('l.[No_]'),
     },
     summary: {
       label: 'Summary by Document',
@@ -246,6 +309,137 @@ const LEGACY_DATASETS = [
       order: 'h.[G_L Account No_]',
     },
   },
+
+  {
+    key: 'itemLedgerEntries',
+    label: 'Item Ledger Entries',
+    header: 'Item Ledger Entry',
+    line:   null, // single-table dataset (no line table in classic NAV)
+    dateColumn: POSTING_DATE,
+    order: 'h.[Entry No_]',
+    columns: [
+      { col: 'h.[Entry No_]',              as: 'EntryNo' },
+      { col: 'h.[Posting Date]',           as: 'PostingDate' },
+      { col: 'h.[Entry Type]',             as: 'EntryType' },
+      { col: ENTRY_TYPE_NAME_SQL,          as: 'EntryTypeName' },
+      { col: 'h.[Item No_]',               as: 'ItemNo' },
+      { col: 'h.[Description]',            as: 'Description' },
+      { col: 'h.[Location Code]',          as: 'LocationCode' },
+      { col: 'h.[Quantity]',               as: 'Quantity' },
+      { col: 'h.[Invoiced Quantity]',      as: 'InvoicedQuantity' },
+      { col: 'h.[Remaining Quantity]',     as: 'RemainingQuantity' },
+      { col: 'h.[Unit of Measure Code]',   as: 'UnitOfMeasureCode' },
+      { col: 'h.[Document No_]',           as: 'DocumentNo' },
+      { col: 'h.[Document Type]',          as: 'DocumentType' },
+      { col: 'h.[External Document No_]',  as: 'ExternalDocumentNo' },
+      { col: 'h.[Source No_]',             as: 'SourceNo' },
+      { col: 'h.[Global Dimension 1 Code]', as: 'GlobalDimension1Code' },
+      { col: 'h.[Global Dimension 2 Code]', as: 'GlobalDimension2Code' },
+      { col: 'h.[Variant Code]',           as: 'VariantCode' },
+      { col: 'h.[Item Category Code]',     as: 'ItemCategoryCode' },
+      // NOTE: this NAV version's Item Ledger Entry table has NO cost columns —
+      // Cost Amount (Actual)/(Expected) live on the separate Value Entry table.
+      // Cost is therefore intentionally omitted here (single-table dataset).
+    ],
+    filters: {
+      itemNo:     { col: 'h.[Item No_]',    label: 'Item No.' },
+      documentNo: { col: 'h.[Document No_]', label: 'Document No.' },
+      sourceNo:   { col: 'h.[Source No_]',  label: 'Source No.' },
+      entryTypes: {
+        type: 'enum', multi: true, numeric: true,
+        col: 'h.[Entry Type]', label: 'Entry Type',
+        options: ENTRY_TYPE_OPTIONS,
+      },
+      inventoryPostingGroup: inventoryPostingGroupFilter('h.[Item No_]'),
+    },
+    summary: {
+      label: 'Summary by Item',
+      // LEFT JOIN the Item master for a stable description at the item grain.
+      joins: [
+        { table: 'Item', alias: 'it', on: 'it.[No_] = h.[Item No_]', type: 'LEFT' },
+      ],
+      groupBy: [
+        { col: 'h.[Item No_]',    as: 'ItemNo' },
+        { col: 'it.[Description]', as: 'Description' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(*)',                as: 'EntryCount' },
+        { expr: 'SUM(h.[Quantity])',           as: 'TotalQuantity' },
+        { expr: 'SUM(h.[Invoiced Quantity])',  as: 'TotalInvoicedQuantity' },
+        // No cost aggregate — cost lives on Value Entry, not Item Ledger Entry.
+      ],
+      order: 'h.[Item No_]',
+    },
+  },
+
+  {
+    key: 'slaughterData',
+    label: 'Slaughter Data',
+    // Custom BC table (classic NAV naming) holding per-animal slaughter/settlement
+    // records. Present only in fcl-bc-main (FCL/CM/FLM) — see `sources` below.
+    header: 'SlaughterData',
+    line:   null,
+    dateColumn: 'h.[SlaughterDate]',
+    order: 'h.[SlaughterSequenceNo]',
+    sources: ['FCL', 'CM', 'FLM'],
+    // Default to SETTLED rows only (Status = 1) unless the caller overrides it.
+    defaultFilters: { statuses: '1' },
+    columns: [
+      { col: 'h.[SlaughterSequenceNo]', as: 'SlaughterSequenceNo' },
+      { col: 'h.[SlaughterDate]',       as: 'SlaughterDate' },
+      { col: 'h.[ItemNo]',              as: 'ItemNo' },
+      { col: 'h.[VendorNo]',            as: 'VendorNo' },
+      { col: 'h.[VendorName]',          as: 'VendorName' },
+      { col: 'h.[EarTag]',              as: 'EarTag' },
+      { col: 'h.[SlapMark]',            as: 'SlapMark' },
+      { col: 'h.[StockWeight]',         as: 'StockWeight' },
+      { col: 'h.[SettlementWeight]',    as: 'SettlementWeight' },
+      { col: 'h.[LiveWeight]',          as: 'LiveWeight' },
+      { col: 'h.[MeatPercent]',         as: 'MeatPercent' },
+      { col: 'h.[ClassificationCode]',  as: 'ClassificationCode' },
+      { col: 'h.[FatGroupCode]',        as: 'FatGroupCode' },
+      { col: 'h.[ColorCode]',           as: 'ColorCode' },
+      { col: 'h.[DiseasePresent]',      as: 'DiseasePresent' },
+      { col: 'h.[Status]',              as: 'Status' },
+      { col: 'h.[ReceiptNo]',           as: 'ReceiptNo' },
+      { col: 'h.[LinkedReceiptNo]',     as: 'LinkedReceiptNo' },
+      { col: 'h.[AnimalDocumentNo]',    as: 'AnimalDocumentNo' },
+      { col: 'h.[SettlementNo]',        as: 'SettlementNo' },
+      { col: 'h.[Unit Price]',          as: 'UnitPrice' },
+      { col: 'h.[Settlement Date]',     as: 'SettlementDate' },
+      { col: 'h.[SalughteredBy]',       as: 'SlaughteredBy' }, // (sic — column is misspelled in BC)
+    ],
+    filters: {
+      itemNo:   { col: 'h.[ItemNo]',    label: 'Item No.' },
+      vendorNo: { col: 'h.[VendorNo]',  label: 'Vendor No.' },
+      statuses: {
+        type: 'enum', multi: true, numeric: true,
+        col: 'h.[Status]', label: 'Status',
+        options: [
+          { value: 1, label: 'Settled' },
+          { value: 0, label: 'Unsettled' },
+        ],
+      },
+      inventoryPostingGroup: inventoryPostingGroupFilter('h.[ItemNo]'),
+    },
+    summary: {
+      label: 'Summary by Item',
+      joins: [
+        { table: 'Item', alias: 'it', on: 'it.[No_] = h.[ItemNo]', type: 'LEFT' },
+      ],
+      groupBy: [
+        { col: 'h.[ItemNo]',      as: 'ItemNo' },
+        { col: 'it.[Description]', as: 'Description' },
+      ],
+      aggregates: [
+        { expr: 'COUNT_BIG(*)',              as: 'Animals' },
+        { expr: 'SUM(h.[StockWeight])',      as: 'TotalStockWeight' },
+        { expr: 'SUM(h.[SettlementWeight])', as: 'TotalSettlementWeight' },
+        { expr: 'SUM(h.[LiveWeight])',       as: 'TotalLiveWeight' },
+      ],
+      order: 'h.[ItemNo]',
+    },
+  },
 ];
 
 // ─── SOURCES ─────────────────────────────────────────────────────────────────
@@ -267,10 +461,17 @@ export function getSource(sourceKey) {
   return SOURCES.find((s) => s.key === sourceKey) || null;
 }
 
-/** Look up a dataset within a source by key. */
+/** True when a dataset is available for a given source (some datasets, e.g.
+ *  Slaughter Data, only exist for certain company prefixes). */
+function datasetAvailable(source, dataset) {
+  return !dataset.sources || dataset.sources.includes(source.key);
+}
+
+/** Look up a dataset within a source by key (respecting per-source availability). */
 export function getDataset(source, datasetKey) {
   if (!source) return null;
-  return source.datasets.find((d) => d.key === datasetKey) || null;
+  const d = source.datasets.find((x) => x.key === datasetKey) || null;
+  return d && datasetAvailable(source, d) ? d : null;
 }
 
 /**
@@ -290,13 +491,21 @@ export function catalogue() {
   return SOURCES.map((s) => ({
     key: s.key,
     label: s.label,
-    datasets: s.datasets.map((d) => ({
+    datasets: s.datasets.filter((d) => datasetAvailable(s, d)).map((d) => ({
       key: d.key,
       label: d.label,
       hasLines: !!d.line,
       hasSummary: !!d.summary,
       summaryLabel: d.summary?.label || null,
-      filters: Object.entries(d.filters || {}).map(([key, meta]) => ({ key, label: meta.label })),
+      filters: Object.entries(d.filters || {}).map(([key, meta]) => ({
+        key,
+        label: meta.label,
+        type: meta.type || 'text',                 // 'text' | 'enum'
+        multi: !!meta.multi,
+        options: meta.options || null,             // [{ value, label }] for enum
+        // Default selection the client should pre-apply (e.g. Slaughter → Settled).
+        default: d.defaultFilters?.[key] != null ? String(d.defaultFilters[key]).split(',') : null,
+      })),
     })),
   }));
 }

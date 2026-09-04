@@ -26,7 +26,10 @@
       <!-- dataset-specific filters, driven by the registry -->
       <div class="f" v-for="ff in datasetFilters" :key="ff.key">
         <label>{{ ff.label }}</label>
-        <InputText v-model="filters[ff.key]" :placeholder="ff.label" class="fi sm" @keyup.enter="run(1)" />
+        <MultiSelect v-if="ff.type === 'enum'" v-model="filters[ff.key]" :options="ff.options"
+          option-label="label" option-value="value" :placeholder="`Any ${ff.label}`"
+          display="chip" :showToggleAll="true" filter class="fi" />
+        <InputText v-else v-model="filters[ff.key]" :placeholder="ff.label" class="fi sm" @keyup.enter="run(1)" />
       </div>
 
       <!-- Detail / Summary toggle (only for datasets that declare a summary) -->
@@ -74,6 +77,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
+import MultiSelect from 'primevue/multiselect'
 import DatePicker from 'primevue/datepicker'
 import Message from 'primevue/message'
 
@@ -82,7 +86,9 @@ const toast = useToast()
 const catalogue = ref([])         // [{ key, label, datasets: [...] }]
 const source = ref(null)
 const dataset = ref(null)
-const filters = reactive({ dateFrom: null, dateTo: null, documentNo: '', vendorNo: '', customerNo: '', glAccountNo: '', sourceCode: '' })
+// Only the date range is fixed; all dataset-specific filter keys are created
+// dynamically from the registry (initFilters) so new filters need no client edit.
+const filters = reactive({ dateFrom: null, dateTo: null })
 
 const mode = ref('detail')
 const rows = ref([])
@@ -111,8 +117,26 @@ function resetResults() {
   page.value = 1
   truncNote.value = null
 }
+// Create (and default) the reactive filter keys for the selected dataset.
+function initFilters() {
+  for (const k of Object.keys(filters)) {
+    if (k !== 'dateFrom' && k !== 'dateTo') delete filters[k]
+  }
+  for (const ff of datasetFilters.value) {
+    if (ff.type === 'enum') {
+      // Server default (e.g. Slaughter → Settled) arrives as string codes; map
+      // back onto the real option values so the MultiSelect shows them selected.
+      filters[ff.key] = (ff.default || []).map((d) => {
+        const opt = (ff.options || []).find((o) => String(o.value) === String(d))
+        return opt ? opt.value : d
+      })
+    } else {
+      filters[ff.key] = ''
+    }
+  }
+}
 function onSourceChange() { dataset.value = null; mode.value = 'detail'; resetResults() }
-function onDatasetChange() { mode.value = 'detail'; resetResults() }
+function onDatasetChange() { mode.value = 'detail'; initFilters(); resetResults() }
 function setMode(m) {
   if (mode.value === m) return
   mode.value = m
@@ -126,15 +150,13 @@ function ymd(d) {
   return `${y}-${m}-${day}`
 }
 function filterPayload() {
-  return {
-    dateFrom: ymd(filters.dateFrom),
-    dateTo: ymd(filters.dateTo),
-    documentNo: filters.documentNo,
-    vendorNo: filters.vendorNo,
-    customerNo: filters.customerNo,
-    glAccountNo: filters.glAccountNo,
-    sourceCode: filters.sourceCode,
+  const out = { dateFrom: ymd(filters.dateFrom), dateTo: ymd(filters.dateTo) }
+  for (const ff of datasetFilters.value) {
+    const v = filters[ff.key]
+    if (Array.isArray(v)) { if (v.length) out[ff.key] = v.join(',') }   // enum → "0,1,4"
+    else if (v != null && String(v).trim() !== '') out[ff.key] = String(v).trim()
   }
+  return out
 }
 
 async function run(toPage = 1) {
