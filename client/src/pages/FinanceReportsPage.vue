@@ -165,7 +165,10 @@
 
       <!-- ── P&L Statement (configurable) ── -->
       <div v-if="!loading && isPLS && plData?.rows?.length" class="report-wrap">
-        <div class="pls-title">{{ plData.title }}</div>
+        <div class="pls-title-row">
+          <div class="pls-title">{{ plData.title }}</div>
+          <Button v-if="isAdmin" label="Edit mapping" icon="pi pi-pencil" text size="small" @click="openPlEditor" />
+        </div>
         <Message v-if="plData.overlaps?.length" severity="warn" :closable="false" class="mx">
           {{ plData.overlaps.length }} account(s) mapped to more than one line (double-counted) —
           e.g. {{ plData.overlaps.slice(0,3).map(o => o.account + ' → ' + o.lines.join('/')).join(', ') }}.
@@ -204,6 +207,26 @@
             <template #body="{ data }"><span :class="signClass(data.amount)">{{ signedFmt(data.amount) }}</span></template>
           </Column>
         </DataTable>
+      </Drawer>
+
+      <!-- P&L mapping editor (admin) — edit each line's account ranges to fix overlaps -->
+      <Drawer v-model:visible="plEditor.visible" position="right" :header="`Edit P&L mapping — ${plCompany}`" style="width:640px">
+        <p class="pls-note" style="margin-top:0">
+          Account grammar: <code>31050..31595</code> ranges, <code>|</code> to join, single accounts.
+          Fix the overlap by removing the shared account from one line (e.g. set UNREALISED to <code>75404</code> so 75403 is DEPRECIATION only).
+        </p>
+        <div v-if="plEditor.def" class="pls-edit-list">
+          <div v-for="(l, i) in plEditor.def.lines" :key="l.key" class="pls-edit-row">
+            <div class="pls-edit-label">{{ l.label }} <span class="pls-edit-kind">{{ l.kind }}</span></div>
+            <InputText v-if="l.kind === 'accounts'" v-model="plEditor.def.lines[i].spec" class="pls-edit-spec" placeholder="e.g. 31050..31595|40040" />
+            <span v-else-if="l.kind === 'tax'" class="pls-edit-ro">rate <InputText v-model.number="plEditor.def.lines[i].rate" style="width:80px" /></span>
+            <span v-else class="pls-edit-ro">computed</span>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:12px">
+          <Button label="Save mapping" icon="pi pi-save" :loading="plEditor.saving" @click="savePlMapping" />
+          <Button label="Cancel" text @click="plEditor.visible = false" />
+        </div>
       </Drawer>
 
       <!-- ── Profit & Loss ── -->
@@ -465,6 +488,23 @@ const isPLS   = computed(() => reportType.value === 'plStatement')
 const PL_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
 const plCompany = ref('FCL')
 const plData = ref(null)   // { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }
+const isAdmin = computed(() => auth.user?.role === 'admin')
+const plEditor = ref({ visible: false, def: null, saving: false })
+async function openPlEditor() {
+  try {
+    const { data } = await financeReportsApi.plDefinition(plCompany.value)
+    plEditor.value = { visible: true, def: data, saving: false }
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+}
+async function savePlMapping() {
+  plEditor.value.saving = true
+  try {
+    await financeReportsApi.savePlDefinition(plCompany.value, plEditor.value.def)
+    plEditor.value.visible = false
+    await runPl(true)   // re-run so overlaps clear
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { plEditor.value.saving = false }
+}
 const plDrawer = ref({ visible: false, label: '', accounts: [], total: 0 })
 function openPlLine(row) {
   plDrawer.value = { visible: true, label: row.label, accounts: row.accounts || [], total: row.amount };
@@ -1031,7 +1071,14 @@ onMounted(async () => {
 .bs-total-row { grid-template-columns: 120px 260px 160px; }
 .sticky-total-key { min-width:120px; }
 .subtotal-val { font-weight:700; }
+.pls-title-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .pls-title { font-size:16px; font-weight:800; padding:2px 2px 8px; color:#f8fafc; }
+.pls-edit-list { display:flex; flex-direction:column; gap:8px; }
+.pls-edit-row { display:flex; align-items:center; gap:10px; }
+.pls-edit-label { flex:0 0 210px; font-size:12px; font-weight:700; color:#e2e8f0; }
+.pls-edit-kind { font-weight:400; color:#94a3b8; font-size:10px; text-transform:uppercase; }
+.pls-edit-spec { flex:1; font-family:monospace; font-size:12px; }
+.pls-edit-ro { flex:1; color:#94a3b8; font-size:12px; }
 .pls-spec { font-family:monospace; font-size:11px; color:#94a3b8; }
 .pls-note { font-size:12px; color:#94a3b8; margin-top:6px; }
 :deep(.pls-subtotal > td) { background:#243247 !important; color:#fff !important; font-weight:800 !important; }
