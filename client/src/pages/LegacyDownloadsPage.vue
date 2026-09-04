@@ -206,7 +206,10 @@ loadCatalogue()
 </script>
 
 <style scoped>
-.ld-page { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; }
+/* Solid theme surface behind the (transparent) table cells + matching text token,
+   exactly like the Sales Reports page — without it the transparent cells sit on the
+   white content area while text uses the light --bc-text token, masking the text. */
+.ld-page { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; background: var(--bc-surface); color: var(--bc-text); }
 .ld-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .ld-head h2 { margin: 0; font-size: 20px; }
 .ld-head .sub { margin: 2px 0 0; color: #6b7280; font-size: 13px; }
@@ -235,6 +238,9 @@ loadCatalogue()
 /* ── Table theming — mirror the Sales Reports (/bc-reports) DataTable so the two
       pages read as one high-contrast dark surface. Uses the shared --bc-* tokens
       defined globally in assets/main.css. ─────────────────────────────────────── */
+.ld-table :deep(.p-datatable),
+.ld-table :deep(.p-datatable-table),
+.ld-table :deep(.p-datatable-tbody > tr) { background: transparent !important; }
 .ld-table :deep(.p-datatable-tbody > tr > td) { color: var(--bc-text) !important; background: transparent !important; padding: 6px 10px !important; border-color: var(--bc-border) !important; }
 .ld-table :deep(.p-datatable-tbody > tr:nth-child(even) > td) { background: rgba(255,255,255,0.03) !important; }
 .ld-table :deep(.p-datatable-tbody > tr:hover > td) { background: rgba(255,255,255,0.06) !important; }
