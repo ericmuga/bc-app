@@ -407,7 +407,6 @@ const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
 
 const TABS = [
   { value: 'trialBalance',   label: 'Trial Balance',     icon: 'pi pi-list' },
-  { value: 'profitLoss',     label: 'Profit & Loss',     icon: 'pi pi-chart-line' },
   { value: 'plStatement',    label: 'P&L Statement',     icon: 'pi pi-file-o' },
   { value: 'balanceSheet',   label: 'Balance Sheet',     icon: 'pi pi-chart-bar' },
   { value: 'mgmt',           label: 'Management Accts',  icon: 'pi pi-table' },
@@ -936,26 +935,26 @@ onMounted(async () => {
 
 <style scoped>
 /* ── Layout ──────────────────────────────────────────────────── */
-.fin-layout { display:flex; height:100%; overflow:hidden; background:#f3f6fb; font-size:13px; }
+.fin-layout { display:flex; height:100%; overflow:hidden; background:#151b28; font-size:13px; }
 
 /* ── Filter panel ─────────────────────────────────────────────── */
 .fin-slicer {
   width:260px; min-width:260px;
-  background:#fff; border-right:1px solid #dbe3ee;
+  background:#1b2233; border-right:1px solid #324256;
   padding:12px; overflow-y:auto; overflow-x:hidden;
   transition: width 0.25s ease, min-width 0.25s ease, padding 0.25s ease;
   flex-shrink:0;
 }
 .fin-slicer.closed { width:0; min-width:0; padding:0; }
-.fin-slicer-header { display:flex; align-items:center; gap:8px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#000; margin-bottom:10px; }
-.filter-box { border:1px solid #dbe3ee; border-radius:10px; background:#fbfdff; margin-bottom:10px; overflow:hidden; }
-.filter-box summary { list-style:none; cursor:pointer; padding:10px 12px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#000; }
+.fin-slicer-header { display:flex; align-items:center; gap:8px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#f8fafc; margin-bottom:10px; }
+.filter-box { border:1px solid #324256; border-radius:10px; background:#1b2233; margin-bottom:10px; overflow:hidden; }
+.filter-box summary { list-style:none; cursor:pointer; padding:10px 12px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#f8fafc; }
 .filter-box summary::-webkit-details-marker { display:none; }
 .filter-body { padding:10px 12px; }
-.slicer-label { display:block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#000; margin:0 0 6px; white-space:nowrap; }
+.slicer-label { display:block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#cbd5e1; margin:0 0 6px; white-space:nowrap; }
 .hint { font-size:9px; font-weight:400; color:#687487; }
 .slicer-check { display:flex; align-items:center; gap:7px; padding:3px 0; }
-.slicer-check label { color:#000; font-weight:600; white-space:nowrap; }
+.slicer-check label { color:#e2e8f0; font-weight:600; white-space:nowrap; }
 .run-btn { width:100%; margin-top:8px; }
 
 /* ── Drill-down ── */
@@ -984,16 +983,16 @@ onMounted(async () => {
 .fin-main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
 
 /* ── Tab bar ─────────────────────────────────────────────────── */
-.tab-bar { display:flex; gap:4px; padding:8px 10px 0; background:#fff; border-bottom:1px solid #dbe3ee; overflow-x:auto; flex-shrink:0; scrollbar-width:none; }
+.tab-bar { display:flex; gap:4px; padding:8px 10px 0; background:#1b2233; border-bottom:1px solid #324256; overflow-x:auto; flex-shrink:0; scrollbar-width:none; }
 .tab-bar::-webkit-scrollbar { display:none; }
-.tab-btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border:none; border-radius:8px 8px 0 0; background:transparent; cursor:pointer; font-size:12px; color:#687487; font-weight:600; white-space:nowrap; flex-shrink:0; }
+.tab-btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border:none; border-radius:8px 8px 0 0; background:transparent; cursor:pointer; font-size:12px; color:#94a3b8; font-weight:600; white-space:nowrap; flex-shrink:0; }
 .tab-btn.active { background:#1d4ed8; color:#fff; }
-.filter-toggle-btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border:none; border-radius:8px 8px 0 0; background:#f1f5f9; cursor:pointer; font-size:12px; color:#1d4ed8; font-weight:700; white-space:nowrap; flex-shrink:0; }
+.filter-toggle-btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border:none; border-radius:8px 8px 0 0; background:#243247; cursor:pointer; font-size:12px; color:#93c5fd; font-weight:700; white-space:nowrap; flex-shrink:0; }
 
 /* ── Toolbar ─────────────────────────────────────────────────── */
-.toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#fff; border-bottom:1px solid #dbe3ee; flex-wrap:wrap; }
+.toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#1b2233; border-bottom:1px solid #324256; flex-wrap:wrap; }
 .toolbar-actions { margin-left:auto; display:flex; align-items:center; gap:4px; }
-.period-pill { padding:5px 10px; border-radius:999px; background:#eef4ff; color:#24407a; font-size:11px; flex-shrink:0; }
+.period-pill { padding:5px 10px; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; font-size:11px; flex-shrink:0; }
 
 /* ── Report wrap ─────────────────────────────────────────────── */
 .report-wrap { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:10px 12px; gap:0; }
