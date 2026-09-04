@@ -44,7 +44,7 @@ const routes = [
       { path: 'invoices/scan',  name: 'InvoiceScan',  component: () => import('@/pages/InvoiceScanPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
       { path: 'invoices',       name: 'Invoices',     component: () => import('@/pages/InvoicesListPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
-      { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.FINANCE] } },
+      { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
       { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'finance', 'analyst'] } },
       { path: 'finance',        name: 'Finance',      component: () => import('@/pages/FinanceReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.ANALYST, FINANCE_ROLE] } },
@@ -67,6 +67,7 @@ const routes = [
       { path: 'pos/requisition',     name: 'ChefRequisition', component: () => import('@/pages/ChefRequisitionPage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
       { path: 'pos/chef-stock-take', name: 'ChefStockTake',   component: () => import('@/pages/ChefStockTakePage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
       { path: 'pos/chef-reports',    name: 'ChefReports',     component: () => import('@/pages/ChefReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
+      { path: 'no-access',      name: 'NoAccess',     component: () => import('@/pages/AccessDenied.vue') },
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
       { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
@@ -106,15 +107,8 @@ router.beforeEach((to) => {
     if (role === 'sales-admin') { actsAs.add('shop-admin'); actsAs.add('sales') }
     // chef is limited to Recipes + Production, whose route metas list 'chef' directly.
     if (!to.meta.roles.some(r => actsAs.has(r))) {
-      if (canAccessOrders(role)) return '/orders/scan'
-      if (canAccessInvoices(role)) return '/invoices/scan'
-      if (canAccessReports(role)) return '/reports'
-      if (canAccessFinance(role)) return '/finance'
-      if (canAccessPos(role)) return '/pos'
-      if (canAccessCosting(role)) return '/costing'
-      if (canAccessDispatch(role)) return '/dispatch/registry'
-      if (canAccessReporting(role)) return '/reporting/legacy'
-      return '/login'
+      // Explicit "no access" page instead of a silent bounce, so the user knows why.
+      return { path: '/no-access', query: { from: to.fullPath } }
     }
   }
 })
