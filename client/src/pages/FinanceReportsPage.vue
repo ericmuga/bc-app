@@ -166,7 +166,7 @@
       <div v-if="!loading && isPLS && plData?.rows?.length" class="report-wrap">
         <div class="pls-title-row">
           <div class="pls-title">{{ plData.title }}</div>
-          <Button v-if="isAdmin" label="Edit mapping" icon="pi pi-pencil" text size="small" @click="openPlEditor" />
+          <Button v-if="canEditPl" label="Edit mapping" icon="pi pi-pencil" text size="small" @click="openPlEditor" />
         </div>
         <Message v-if="plData.overlaps?.length" severity="warn" :closable="false" class="mx">
           {{ plData.overlaps.length }} account(s) mapped to more than one line (double-counted) —
@@ -489,6 +489,8 @@ const PL_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
 const plCompany = ref('FCL')
 const plData = ref(null)   // { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }
 const isAdmin = computed(() => auth.user?.role === 'admin')
+// Consolidated P&L mapping is editable by admin + finance.
+const canEditPl = computed(() => ['admin', 'finance'].includes(String(auth.user?.role || '').toLowerCase()))
 const plEditor = ref({ visible: false, def: null, saving: false })
 async function openPlEditor() {
   try {
