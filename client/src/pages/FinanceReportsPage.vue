@@ -168,18 +168,38 @@
         </Message>
         <DataTable :value="plData.rows" show-gridlines size="small" scrollable scroll-height="flex"
           :row-class="(r) => (r.kind === 'subtotal' ? 'pls-subtotal' : (r.kind === 'tax' ? 'pls-tax' : ''))">
-          <Column field="label" header="Line" frozen style="min-width:280px" />
-          <Column field="spec" header="Accounts" style="min-width:220px">
-            <template #body="{ data }"><span class="pls-spec">{{ data.spec || '' }}</span></template>
-          </Column>
-          <Column header="Amount" class="num-col" style="min-width:170px">
+          <Column field="label" header="Line" frozen style="min-width:300px" />
+          <Column header="Amount" class="num-col" style="min-width:180px">
             <template #body="{ data }">
               <span :class="data.kind === 'subtotal' ? 'subtotal-val' : signClass(data.amount)">{{ signedFmt(data.amount) }}</span>
+            </template>
+          </Column>
+          <Column header="" style="min-width:120px">
+            <template #body="{ data }">
+              <Button v-if="data.accounts?.length" :label="`${data.accounts.length} accts`" icon="pi pi-search"
+                text size="small" @click="openPlLine(data)" v-tooltip="'View / download the GL accounts in this line'" />
             </template>
           </Column>
         </DataTable>
         <p v-if="plData.unmapped" class="pls-note">{{ plData.unmapped }} GL account(s) with movement fall outside every line (includes balance-sheet accounts).</p>
       </div>
+
+      <!-- P&L line → GL accounts drill-down (aside) -->
+      <Drawer v-model:visible="plDrawer.visible" position="right" :header="`${plDrawer.label} — accounts`" style="width:560px">
+        <div class="toolbar" style="margin-bottom:8px">
+          <div class="period-pill">{{ fmtAmt(plDrawer.total) }}</div>
+          <div class="toolbar-actions">
+            <Button icon="pi pi-download" label="Excel" text size="small" :disabled="!plDrawer.accounts.length" @click="exportPlLine" />
+          </div>
+        </div>
+        <DataTable :value="plDrawer.accounts" show-gridlines size="small" scrollable scroll-height="flex">
+          <Column field="accountNo" header="Account" style="min-width:100px" />
+          <Column field="name" header="Name" style="min-width:220px" />
+          <Column header="Amount" class="num-col" style="min-width:140px">
+            <template #body="{ data }"><span :class="signClass(data.amount)">{{ signedFmt(data.amount) }}</span></template>
+          </Column>
+        </DataTable>
+      </Drawer>
 
       <!-- ── Profit & Loss ── -->
       <div v-if="!loading && isPL && rows.length" class="report-wrap">
@@ -441,6 +461,17 @@ const isPLS   = computed(() => reportType.value === 'plStatement')
 const PL_COMPANIES = ['FCL', 'CM', 'RMK', 'FLM']
 const plCompany = ref('FCL')
 const plData = ref(null)   // { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }
+const plDrawer = ref({ visible: false, label: '', accounts: [], total: 0 })
+function openPlLine(row) {
+  plDrawer.value = { visible: true, label: row.label, accounts: row.accounts || [], total: row.amount };
+}
+function exportPlLine() {
+  const wb = XLSX.utils.book_new();
+  const data = plDrawer.value.accounts.map(a => ({ Account: a.accountNo, Name: a.name, Amount: a.amount }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Accounts');
+  const safe = String(plDrawer.value.label || 'line').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 24);
+  XLSX.writeFile(wb, `pl-${plData.value?.company || ''}-${safe}-${toDateStr(dateTo.value)}.xlsx`);
+}
 const isBS    = computed(() => reportType.value === 'balanceSheet')
 const isMgmt  = computed(() => reportType.value === 'mgmt')
 const isAging = computed(() => reportType.value === 'customerAging')

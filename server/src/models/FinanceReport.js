@@ -130,31 +130,37 @@ export async function computePlStatement({ company, dateFrom, dateTo }) {
   const co = String(company || '').toUpperCase();
   const def = await getPlDefinition(co);
   const entry = bcTable(co, 'G_L Entry');
+  const acct  = bcTable(co, 'G_L Account');
   const { recordset } = await queryBc(
-    `SELECT [G_L Account No_] AS AccountNo, SUM([Amount]) AS Amount
-     FROM ${entry}
-     WHERE [Posting Date] >= @dateFrom AND [Posting Date] <= @dateTo
-     GROUP BY [G_L Account No_]`,
+    `SELECT e.[G_L Account No_] AS AccountNo, MAX(RTRIM(a.[Name])) AS AccountName, SUM(e.[Amount]) AS Amount
+     FROM ${entry} e
+     LEFT JOIN ${acct} a ON a.[No_] = e.[G_L Account No_]
+     WHERE e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo
+     GROUP BY e.[G_L Account No_]`,
     { dateFrom: { type: bcSql.Date, value: new Date(dateFrom) }, dateTo: { type: bcSql.Date, value: new Date(dateTo) } }
   );
-  const accts = recordset.map((r) => ({ no: String(r.AccountNo).trim(), amt: Number(r.Amount) || 0 }));
+  const accts = recordset.map((r) => ({ no: String(r.AccountNo).trim(), name: r.AccountName || '', amt: Number(r.Amount) || 0 }));
 
   const values = {};              // line key -> statement value
   const memberOf = new Map();     // accountNo -> [lineKeys] (overlap detection)
   const mapped = new Set();
+  const accountsByLine = {};      // line key -> [{accountNo, name, amount}] (drill-down detail)
 
   // 1) Account-bucket lines (sign-flipped so income is positive).
   for (const line of def.lines) {
     if (line.kind !== 'accounts') continue;
     const ranges = parseSpec(line.spec);
     let sum = 0;
+    const members = [];
     for (const a of accts) {
       if (specMatches(a.no, ranges)) {
         sum += a.amt; mapped.add(a.no);
         memberOf.set(a.no, (memberOf.get(a.no) || []).concat(line.key));
+        members.push({ accountNo: a.no, name: a.name, amount: -round2(a.amt) });
       }
     }
     values[line.key] = -round2(sum);
+    accountsByLine[line.key] = members.sort((x, y) => x.accountNo.localeCompare(y.accountNo));
   }
   // 2) Subtotals + tax, in definition order (depends on earlier values).
   for (const line of def.lines) {
@@ -177,6 +183,7 @@ export async function computePlStatement({ company, dateFrom, dateTo }) {
   const rows = def.lines.map((l) => ({
     key: l.key, label: l.label, kind: l.kind, amount: values[l.key] ?? 0,
     spec: l.spec || null,
+    accounts: l.kind === 'accounts' ? (accountsByLine[l.key] || []) : undefined,
   }));
   return { company: co, title: def.title, dateFrom, dateTo, rows, overlaps, unmapped };
 }
