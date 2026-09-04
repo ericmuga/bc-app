@@ -131,7 +131,6 @@
           <Column field="AccountNo" header="Account No" sortable frozen style="min-width:120px" />
           <Column field="AccountName" header="Account Name" sortable frozen style="min-width:240px" />
           <Column field="Company" header="Company" sortable style="min-width:80px" v-if="multiCompany" />
-          <Column field="AccountCategoryLabel" header="Category" sortable style="min-width:120px" />
           <Column header="Opening Balance" class="num-col" style="min-width:150px" sortable field="OpeningBalance">
             <template #body="{ data }">
               <span :class="data._isTotalRow ? 'total-num' : signClass(data.OpeningBalance)">{{ fmtAmt(data.OpeningBalance) }}</span>
@@ -1043,7 +1042,13 @@ onMounted(async () => {
 .period-pill { padding:5px 10px; border-radius:999px; background:rgba(59,130,246,0.15); color:#93c5fd; font-size:11px; flex-shrink:0; }
 
 /* ── Report wrap ─────────────────────────────────────────────── */
-.report-wrap { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:10px 12px; gap:0; }
+.report-wrap { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:10px 12px; gap:0; min-height:0; }
+/* Make the DataTable fill the flex column and scroll internally, so the last rows
+   are reachable (previously the table overflowed report-wrap's overflow:hidden and
+   the bottom rows were clipped/unreachable). */
+.report-wrap :deep(.p-datatable) { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+.report-wrap :deep(.p-datatable-table-container) { flex:1 1 auto; min-height:0; overflow:auto; }
+.report-wrap :deep(.p-datatable-table-container)::after { content:''; display:block; height:6px; }
 .skeleton-wrap { padding:10px 12px; }
 .empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#98a2b3; gap:10px; }
 .mb { margin-bottom:6px !important; }
@@ -1096,8 +1101,10 @@ onMounted(async () => {
 :deep(.p-datatable-table-container),
 :deep(.p-datatable-table),
 :deep(.p-datatable-tbody > tr) { background:#1b2233 !important; }
-:deep(.p-datatable-tbody > tr > td) { color:#f8fafc !important; background:transparent !important; padding:6px 10px !important; border-color:#324256 !important; }
-:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:rgba(255,255,255,0.035) !important; }
+/* Opaque cells (not transparent) so scrolling rows never show through the sticky
+   total/header while scrolling. */
+:deep(.p-datatable-tbody > tr > td) { color:#f8fafc !important; background:#1b2233 !important; padding:6px 10px !important; border-color:#324256 !important; }
+:deep(.p-datatable-tbody > tr:nth-child(even) > td) { background:#212a3d !important; }
 :deep(.p-datatable-tbody > tr:hover > td) { background:rgba(255,255,255,0.06) !important; }
 :deep(.p-paginator) { background:#1b2233 !important; color:#f8fafc !important; border-color:#324256 !important; }
 :deep(.p-datatable-thead > tr > th) { background:#243247 !important; color:#f8fafc !important; font-size:11px !important; font-weight:700 !important; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px !important; border-color:#324256 !important; }
