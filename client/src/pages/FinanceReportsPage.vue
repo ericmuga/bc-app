@@ -1104,8 +1104,14 @@ onMounted(async () => {
 :deep(.num-col) { text-align:right !important; }
 
 /* Pinned TB total row — sticky just below headers */
-:deep(.p-datatable-tbody > tr.tb-pinned-total) { position:sticky; top:0; z-index:3; }
-:deep(.p-datatable-tbody > tr.tb-pinned-total > td) { background:#243247 !important; color:#f8fafc !important; font-weight:800 !important; border-bottom:2px solid #1d4ed8 !important; }
+/* Pinned TOTAL row: sticky on the cells (reliable in tables) so it stays put just
+   below the sticky header while the account rows scroll. */
+:deep(.p-datatable-tbody > tr.tb-pinned-total > td) {
+  position:sticky; top:33px; z-index:2;
+  background:#243247 !important; color:#f8fafc !important; font-weight:800 !important; border-bottom:2px solid #1d4ed8 !important;
+}
+/* Ensure the header stays above the pinned total row */
+:deep(.p-datatable-thead > tr > th) { position:sticky; top:0; z-index:3; }
 
 /* Section rows (P&L / BS heading rows) */
 :deep(.p-datatable-tbody > tr.section-row > td) { background:#243247 !important; color:#f8fafc !important; font-weight:700 !important; font-size:11px !important; text-transform:uppercase; letter-spacing:.06em; }
