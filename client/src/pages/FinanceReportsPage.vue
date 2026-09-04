@@ -412,7 +412,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
@@ -429,7 +429,7 @@ import InputText   from 'primevue/inputtext'
 import Skeleton   from 'primevue/skeleton'
 import Message    from 'primevue/message'
 import Drawer     from 'primevue/drawer'
-import * as XLSX  from 'xlsx'
+import XLSX  from 'xlsx-js-style'   // styled header + number formats on export
 
 const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
 
@@ -514,7 +514,7 @@ function openPlLine(row) {
 function exportPlLine() {
   const wb = XLSX.utils.book_new();
   const data = plDrawer.value.accounts.map(a => ({ Account: a.accountNo, Name: a.name, Amount: a.amount }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Accounts');
+  appendSheet(wb, data, 'Accounts');
   const safe = String(plDrawer.value.label || 'line').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 24);
   XLSX.writeFile(wb, `pl-${plData.value?.company || ''}-${safe}-${toDateStr(dateTo.value)}.xlsx`);
 }
@@ -925,6 +925,32 @@ async function openDetail(line) {
 
 
 // ── Excel export ─────────────────────────────────────────────────────────────
+// Bold white header on a solid blue fill (matches --bc-primary), for downloads.
+const XLSX_HEADER_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 11 },
+  fill: { patternType: 'solid', fgColor: { rgb: 'FF1D4ED8' } },
+  alignment: { horizontal: 'left', vertical: 'center' },
+}
+// Build a worksheet from row objects: highlight the header row, and format every
+// numeric cell to 2dp (#,##0.00). Non-numeric cells (text/dates) are left as-is.
+function makeSheet(data) {
+  const ws = XLSX.utils.json_to_sheet(data)
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const h = ws[XLSX.utils.encode_cell({ r: range.s.r, c })]
+    if (h) h.s = XLSX_HEADER_STYLE
+  }
+  for (let r = range.s.r + 1; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      if (cell && cell.t === 'n') { cell.v = Math.round(cell.v * 100) / 100; cell.z = '#,##0.00' }
+    }
+  }
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
+  return ws
+}
+function appendSheet(wb, data, name) { XLSX.utils.book_append_sheet(wb, makeSheet(data), name) }
+
 function exportExcel() {
   const wb = XLSX.utils.book_new()
   if (isAging.value && agingRows.value.length) {
@@ -934,15 +960,20 @@ function exportExcel() {
       Current: r.Current_ || 0, '30Days': r.Days30 || 0,
       '60Days': r.Days60 || 0, '90PlusDays': r.Days90Plus || 0, Balance: r.Balance || 0,
     }))
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Customer Aging')
+    appendSheet(wb, data, 'Customer Aging')
     XLSX.writeFile(wb, `customer-aging-${toDateStr(agingAsOfDate.value)}.xlsx`)
     return
   }
   if (isPLS.value && plData.value?.rows?.length) {
-    const data = plData.value.rows.map(r => ({
+    appendSheet(wb, plData.value.rows.map(r => ({
       Line: r.label, Accounts: r.spec || '', Amount: r.amount, Type: r.kind,
-    }))
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'P&L Statement')
+    })), 'P&L Statement')
+    // Second sheet: the detailed GL accounts summed behind each line.
+    const detail = []
+    for (const row of plData.value.rows) {
+      for (const a of (row.accounts || [])) detail.push({ Line: row.label, AccountNo: a.accountNo, Name: a.name, Amount: a.amount })
+    }
+    if (detail.length) appendSheet(wb, detail, 'Accounts (detail)')
     XLSX.writeFile(wb, `pl-${plData.value.company}-${toDateStr(dateTo.value)}.xlsx`)
     return
   }
@@ -953,29 +984,59 @@ function exportExcel() {
       for (const m of measureCols) row[m.measureLabel] = l.values[m.measureCode] ?? 0
       return row
     })
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Management Accounts')
+    appendSheet(wb, data, 'Management Accounts')
     XLSX.writeFile(wb, `mgmt-${toDateStr(mgmtReferenceDate.value)}.xlsx`)
     return
   }
   if (isTB.value) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tbRows.value.map(r => ({
+    appendSheet(wb, tbRows.value.map(r => ({
       Company: r.Company, AccountNo: r.AccountNo, AccountName: r.AccountName,
-      Category: r.AccountCategoryLabel, OpeningBalance: r.OpeningBalance,
+      OpeningBalance: r.OpeningBalance,
       PeriodDebit: r.PeriodDebit, PeriodCredit: r.PeriodCredit,
       NetChange: r.NetChange, ClosingBalance: r.ClosingBalance,
-    }))), 'Trial Balance')
+    })), 'Trial Balance')
   } else if (isPL.value) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(plRows.value.filter(r => !r._isSection).map(r => ({
+    appendSheet(wb, plRows.value.filter(r => !r._isSection).map(r => ({
       AccountNo: r.AccountNo, Description: r.label,
       PeriodAmount: r.PeriodAmount, YtdAmount: r.YtdAmount,
-    }))), 'P&L')
+    })), 'P&L')
   } else if (isBS.value) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bsRows.value.filter(r => !r._isSection).map(r => ({
+    appendSheet(wb, bsRows.value.filter(r => !r._isSection).map(r => ({
       AccountNo: r.AccountNo, Description: r.label, Balance: r.Balance,
-    }))), 'Balance Sheet')
+    })), 'Balance Sheet')
   }
   XLSX.writeFile(wb, `finance-${reportType.value}-${toDateStr(dateTo.value)}.xlsx`)
 }
+
+// ── Sticky filters: remember selections across tabs + navigation ─────────────
+const FILTER_KEY = 'fin_filters_v1'
+const asDate = (s) => (s ? new Date(s) : null)
+function restoreFilters() {
+  try {
+    const s = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null')
+    if (!s) return
+    if (Array.isArray(s.companies) && s.companies.length) companies.value = s.companies
+    if (s.dateFrom) dateFrom.value = asDate(s.dateFrom)
+    if (s.dateTo)   dateTo.value   = asDate(s.dateTo)
+    if (s.ytdFrom)  ytdFrom.value  = asDate(s.ytdFrom)
+    if (s.plCompany) plCompany.value = s.plCompany
+    if (s.mgmtDateFrom) mgmtDateFrom.value = asDate(s.mgmtDateFrom)
+    if (s.mgmtDateTo)   mgmtDateTo.value   = asDate(s.mgmtDateTo)
+    if (s.reportType && TABS.some(t => t.value === s.reportType)) reportType.value = s.reportType
+  } catch { /* ignore */ }
+}
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify({
+      reportType: reportType.value, companies: companies.value,
+      dateFrom: toDateStr(dateFrom.value), dateTo: toDateStr(dateTo.value), ytdFrom: toDateStr(ytdFrom.value),
+      plCompany: plCompany.value,
+      mgmtDateFrom: toDateStr(mgmtDateFrom.value), mgmtDateTo: toDateStr(mgmtDateTo.value),
+    }))
+  } catch { /* ignore */ }
+}
+restoreFilters()
+watch([reportType, companies, dateFrom, dateTo, ytdFrom, plCompany, mgmtDateFrom, mgmtDateTo], saveFilters, { deep: true })
 
 onMounted(async () => {
   // Load slicer options only; the report itself loads when the user clicks Run.
