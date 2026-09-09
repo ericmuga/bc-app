@@ -83,8 +83,15 @@ export async function createProductionOrder({ shopCode, company = null, location
   // Resolve company/location from the shop's stock baseline when not supplied
   // (e.g. auto-production at sale time), so the order can push to BC WMS later.
   if (!company || !locationCode) {
+    // A shop can now hold several per-company baselines; when the caller didn't
+    // pin a company, prefer the shop's primary company, else the newest baseline.
     const wm = await pool.request().input('s', sql.NVarChar(50), String(shopCode || '').toUpperCase())
-      .query(`SELECT TOP 1 [SourceCompany],[LocationCode] FROM [dbo].[PosStockWatermark] WHERE [ShopCode]=@s`);
+      .query(`SELECT TOP 1 w.[SourceCompany],w.[LocationCode]
+              FROM [dbo].[PosStockWatermark] w
+              LEFT JOIN [dbo].[PosShop] sh ON sh.[Code]=w.[ShopCode]
+              WHERE w.[ShopCode]=@s
+              ORDER BY CASE WHEN UPPER(w.[SourceCompany])=UPPER(ISNULL(sh.[Company],'FCL')) THEN 0 ELSE 1 END,
+                       w.[UpdatedAt] DESC`);
     const w = wm.recordset[0] || {};
     company = company || w.SourceCompany || 'FCL';
     locationCode = locationCode || w.LocationCode || null;

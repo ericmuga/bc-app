@@ -83,7 +83,8 @@ async function ensureManager(req) {
 export async function bcStockWatermark(req, res) {
   try {
     const shopCode = await userShopCode(req);
-    ok(res, { shopCode, watermark: await Stock.getStockWatermark(shopCode) });
+    const company  = req.query?.company || 'FCL';
+    ok(res, { shopCode, company, watermark: await Stock.getStockWatermark(shopCode, company) });
   } catch (e) { err(res, e); }
 }
 
@@ -194,7 +195,7 @@ export async function harmonizeStockFromBc(req, res) {
 export async function bcLedgerDates(req, res) {
   try {
     const shopCode = await userShopCode(req);
-    const wm = await Stock.getStockWatermark(shopCode);
+    const wm = await Stock.getStockWatermark(shopCode, req.query?.company || 'FCL');
     if (!wm) return res.status(400).json({ error: 'Run Stock Reset first to set a baseline' });
     const dates = await Stock.bcLedgerDatesSince(wm.SourceCompany || 'FCL', wm.LocationCode, wm.LastEntryNo);
     ok(res, { shopCode, watermark: wm, dates });
@@ -210,6 +211,7 @@ export async function loadStockFromBc(req, res) {
     if (!uptoEntryNo) return res.status(400).json({ error: 'uptoEntryNo required' });
     const result = await Stock.loadStockFromBc({
       shopCode, uptoEntryNo,
+      company:  req.body?.company || undefined,
       asOfDate: req.body?.asOfDate || null,
       userId:   req.user.userId,
       userName: req.user.userName,

@@ -53,7 +53,10 @@ export async function getItems(req, res) {
     const shopCode = await resolveShopCode(req.user.userId, req.user.role, req)
                   || (req.headers['x-shop-code'] || '').trim().toUpperCase()
                   || null;
-    ok(res, await Pos.listPosItemsGrouped({ shopCode, userId: req.user.userId }));
+    // Optional company toggle: when the terminal selects a company, show only that
+    // company's items (PosItem.SourceCompany; NULL treated as FCL).
+    const company = (req.query?.company || '').trim().toUpperCase() || null;
+    ok(res, await Pos.listPosItemsGrouped({ shopCode, userId: req.user.userId, company }));
   } catch (e) { err(res, e); }
 }
 

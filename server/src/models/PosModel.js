@@ -133,8 +133,9 @@ export async function listPosItems(opts = {}) {
   return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
-export async function listPosItemsGrouped({ shopCode = null, userId = null } = {}) {
+export async function listPosItemsGrouped({ shopCode = null, userId = null, company = null } = {}) {
   const pool = await appPool();
+  const companyFilter = company ? String(company).toUpperCase() : null;
 
   // Resolve the shop's LocationCode (we keep stock at the location, not the shop).
   let locationCode = null;
@@ -150,9 +151,10 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null } = {
   const hideOutOfStock = !!cfg.hideOutOfStock;
 
   const req  = pool.request();
-  if (shopCode)     req.input('shopCode', sql.NVarChar(50), shopCode.toUpperCase());
-  if (locationCode) req.input('loc',      sql.NVarChar(20), locationCode.toUpperCase());
-  if (userId)       req.input('userId',   sql.UniqueIdentifier, userId);
+  if (shopCode)      req.input('shopCode', sql.NVarChar(50), shopCode.toUpperCase());
+  if (locationCode)  req.input('loc',      sql.NVarChar(20), locationCode.toUpperCase());
+  if (userId)        req.input('userId',   sql.UniqueIdentifier, userId);
+  if (companyFilter) req.input('company',  sql.NVarChar(20), companyFilter);
 
   // Active special price subquery: matches by item, optionally by shop, within date range.
   // Picks the most specific match (shop-specific beats global).
@@ -206,6 +208,7 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null } = {
     LEFT JOIN OnHandLoc oh           ON oh.[ItemNo] = i.[ItemNo]
     ${userId ? 'LEFT JOIN [dbo].[PosFavourite] f ON f.[ItemNo] = i.[ItemNo] AND f.[UserId] = @userId' : ''}
     WHERE i.[IsActive]=1
+      ${companyFilter ? "AND UPPER(ISNULL(i.[SourceCompany],'FCL')) = @company" : ''}
       ${hideOutOfStock && (locationCode || shopCode) ? 'AND ISNULL(oh.[Qty], 0) > 0' : ''}
     ORDER BY i.[SortOrder],i.[Description]
   `);

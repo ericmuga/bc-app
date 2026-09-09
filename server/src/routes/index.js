@@ -11,6 +11,8 @@ import * as companyCtrl from '../controllers/companyController.js';
 import * as authCtrl    from '../controllers/authController.js';
 import * as reportCtrl  from '../controllers/reportController.js';
 import * as legacyReportCtrl from '../controllers/legacyReportController.js';
+import * as warehouseSyncCtrl from '../controllers/warehouseSyncController.js';
+import * as warehouseInvCtrl from '../controllers/warehouseInventoryController.js';
 import * as adminCtrl   from '../controllers/adminController.js';
 import * as financeCtrl from '../controllers/financeController.js';
 import * as mgmtCtrl    from '../controllers/mgmtController.js';
@@ -29,7 +31,7 @@ import * as dispatchCtrl   from '../controllers/dispatchController.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, REPORTING_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
-  STORE_OPS_ROLES, CHEF_REPORT_ROLES,
+  STORE_OPS_ROLES, CHEF_REPORT_ROLES, WAREHOUSE_ROLES,
   DISPATCH_ROLES, DISPATCH_REGISTRY_ROLES, DISPATCH_SUPERVISOR_ROLES, DISPATCH_ASSEMBLE_ROLES, DISPATCH_PACK_ROLES, DISPATCH_LOAD_ROLES } from '../services/access.js';
 import * as posProdCtrl from '../controllers/posProductionController.js';
 import * as posBcBomCtrl from '../controllers/posBcBomController.js';
@@ -126,6 +128,21 @@ const canLegacyReport = [authMiddleware, requireRole(...REPORTING_ROLES)];
 router.get('/reporting/legacy/sources',  ...canLegacyReport, legacyReportCtrl.listSources);
 router.get('/reporting/legacy/run',      ...canLegacyReport, legacyReportCtrl.run);
 router.get('/reporting/legacy/download', ...canLegacyReport, legacyReportCtrl.download);
+
+// ── Reporting → Warehouse Sync Center (FCLWHS ETL monitoring) ────────────────
+// Separate from the POS Sync Center: watches SQL Agent jobs + refresh procs on
+// the data warehouse (172.16.10.9). Admin + analyst. "Run now" starts a job.
+const canWarehouse = [authMiddleware, requireRole(...WAREHOUSE_ROLES)];
+router.get( '/reporting/warehouse/jobs',              ...canWarehouse, warehouseSyncCtrl.getJobs);
+router.get( '/reporting/warehouse/jobs/:name/history',...canWarehouse, warehouseSyncCtrl.getJobHistory);
+router.get( '/reporting/warehouse/procedures',        ...canWarehouse, warehouseSyncCtrl.getProcedures);
+router.get( '/reporting/warehouse/facts',             ...canWarehouse, warehouseSyncCtrl.getFacts);
+router.post('/reporting/warehouse/jobs/:name/run',    ...canWarehouse, warehouseSyncCtrl.runJob);
+// Inventory analytics over the materialised item-ledger fact (fact_ILE_MV)
+router.get( '/reporting/warehouse/inventory/dimensions', ...canWarehouse, warehouseInvCtrl.getDimensions);
+router.get( '/reporting/warehouse/inventory/items',      ...canWarehouse, warehouseInvCtrl.getItems);
+router.post('/reporting/warehouse/inventory/report',     ...canWarehouse, warehouseInvCtrl.getReport);
+router.post('/reporting/warehouse/inventory/stock-card', ...canWarehouse, warehouseInvCtrl.getStockCard);
 
 // ── Finance Reports ──────────────────────────────────────────────────────────
 const canFinance = [authMiddleware, requireRole(...FINANCE_ROLES)];

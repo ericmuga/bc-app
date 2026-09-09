@@ -77,7 +77,7 @@ export const auditApi = {
 
 // ── POS terminal ──────────────────────────────────────────────────────────────
 export const posApi = {
-  getItems:       ()           => api.get('/pos/items'),
+  getItems:       (company)    => api.get('/pos/items', { params: company ? { company } : {} }),
   getPaymentTypes:()           => api.get('/pos/payment-types'),
   getMyShop:      ()           => api.get('/pos/my-shop'),
   listMyShops:    ()           => api.get('/pos/my-shops'),
@@ -198,7 +198,7 @@ export const stockApi = {
   completeRequest:(id, lines)                 => api.post(`/pos/stock-requests/${id}/complete`, { lines }),
 
   // BC stock baseline (reset to BC on-hand) + incremental ledger loads
-  bcWatermark:    ()                          => api.get('/pos/stock/bc-watermark'),
+  bcWatermark:    (company)                   => api.get('/pos/stock/bc-watermark', { params: { company: company || 'FCL' } }),
   resetFromBc:    (body = {})                 => api.post('/pos/stock/reset-from-bc', body),
   harmonizeReadiness:()                       => api.get('/pos/stock/harmonize-readiness'),
   harmonizeFromBc:(body = {})                 => api.post('/pos/stock/harmonize-from-bc', body),
@@ -208,7 +208,7 @@ export const stockApi = {
   saveBcPullConfig:(body)                     => api.put('/pos/stock/bc-pull-config', body),
   bcPullLog:      (limit = 100)               => api.get('/pos/stock/bc-pull-log', { params: { limit } }),
   bcPullRunNow:   ()                          => api.post('/pos/stock/bc-pull-run'),
-  bcLedgerDates:  ()                          => api.get('/pos/stock/bc-ledger-dates'),
+  bcLedgerDates:  (company)                   => api.get('/pos/stock/bc-ledger-dates', { params: { company: company || 'FCL' } }),
   loadFromBc:     (body)                      => api.post('/pos/stock/load-from-bc', body),
 
   // Stock ledger (chronological, running balance)
