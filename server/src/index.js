@@ -202,6 +202,9 @@ async function ensurePosItemColumns() {
       ['PosShop', 'TillNo',             'NVARCHAR(30)  NULL'],
       // PosItem — track the BC company an item was synced from
       ['PosItem', 'SourceCompany',      'NVARCHAR(20)  NULL'],
+      // PosStockMovement — tag each movement with the BC company it belongs to,
+      // so one shop can hold independent per-company stock baselines (NULL = FCL).
+      ['PosStockMovement', 'Company',    'NVARCHAR(20)  NULL'],
       // Denormalized document numbers on line tables — header and lines share the same DocNo
       ['PosStockRequestLine',       'RequestNo',     'NVARCHAR(30) NULL'],
       ['PosThirdPartyTransferLine', 'TransferNo',    'NVARCHAR(30) NULL'],
@@ -290,6 +293,37 @@ async function ensurePosItemColumns() {
       `);
     } catch (e) {
       logger.warn('PosPaymentType unique-key fix failed', { error: e.message });
+    }
+
+    // 2a2. PosStockWatermark → composite PK (ShopCode, SourceCompany) so a shop
+    //      can hold one BC-ledger baseline per company (FCL + CM + …) instead of a
+    //      single ShopCode row. Existing rows are already FCL. Idempotent.
+    try {
+      await pool.request().query(`
+        UPDATE [dbo].[PosStockWatermark] SET [SourceCompany]='FCL'
+          WHERE [SourceCompany] IS NULL OR LTRIM(RTRIM([SourceCompany]))='';
+        IF EXISTS (SELECT 1 FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosStockWatermark]')
+                     AND name='SourceCompany' AND is_nullable=1)
+          ALTER TABLE [dbo].[PosStockWatermark] ALTER COLUMN [SourceCompany] NVARCHAR(20) NOT NULL;
+        DECLARE @pk sysname, @cols int;
+        SELECT @pk = kc.name FROM sys.key_constraints kc
+          WHERE kc.parent_object_id=OBJECT_ID('[dbo].[PosStockWatermark]') AND kc.[type]='PK';
+        IF @pk IS NOT NULL
+        BEGIN
+          SELECT @cols = COUNT(*) FROM sys.index_columns ic
+            JOIN sys.key_constraints kc ON kc.parent_object_id=ic.object_id AND kc.unique_index_id=ic.index_id
+            WHERE kc.name=@pk;
+          IF @cols = 1
+          BEGIN
+            EXEC('ALTER TABLE [dbo].[PosStockWatermark] DROP CONSTRAINT [' + @pk + ']');
+            ALTER TABLE [dbo].[PosStockWatermark]
+              ADD CONSTRAINT [PK_PosStockWatermark] PRIMARY KEY ([ShopCode],[SourceCompany]);
+          END
+        END
+      `);
+    } catch (e) {
+      logger.warn('PosStockWatermark composite-PK migration failed', { error: e.message });
     }
 
     // 2b. Per-company SalesLine.Part + OrderPartConfirmation table (idempotent)

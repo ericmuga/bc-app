@@ -51,6 +51,32 @@ async function locationForShop(pool, shopCode) {
   return r.recordset[0]?.LocationCode?.trim() || null;
 }
 
+// Normalise a company code (defaults to FCL, which is also how a NULL movement/
+// watermark company is interpreted throughout this module).
+function co(c) { return String(c || 'FCL').toUpperCase(); }
+
+/**
+ * Location for a shop UNDER A SPECIFIC COMPANY. A multi-company outlet keeps a
+ * per-company mirror location in PosShopCompany (e.g. FCL 3636 / CM B3636); a
+ * single-company shop has no mirror, so we fall back to PosShop.LocationCode.
+ * This is what the BC-facing paths (reset / load / pull / harmonize) must use so
+ * a CM operation reads CM's location and never touches the FCL baseline.
+ */
+async function locationForShopCompany(pool, shopCode, company) {
+  if (!shopCode) return null;
+  const code = str(shopCode, 50).toUpperCase();
+  try {
+    const r = await pool.request()
+      .input('code', sql.NVarChar(50), code)
+      .input('co',   sql.NVarChar(20), co(company))
+      .query(`SELECT [LocationCode] FROM [dbo].[PosShopCompany]
+              WHERE [ShopCode]=@code AND UPPER([Company])=@co`);
+    const mir = r.recordset[0]?.LocationCode?.trim();
+    if (mir) return mir;
+  } catch { /* PosShopCompany may not exist on older installs — fall back below */ }
+  return locationForShop(pool, code);
+}
+
 /**
  * On-hand quantity for an item at the SHOP'S LOCATION (not just the shop).
  * If two shops are tagged to the same LocationCode, they see the same balance.
@@ -283,7 +309,7 @@ export async function assertOrderHasStock({ shopCode, lines }) {
  * Returns [{ itemNo, description, uom, onHand }] for items that have ever moved
  * (or, when includeZero, every catalogue item). Ordered by description.
  */
-export async function stockSnapshot({ shopCode, includeZero = false } = {}) {
+export async function stockSnapshot({ shopCode, includeZero = false, company = null } = {}) {
   const pool = await appPool();
   const loc = await locationForShop(pool, shopCode);
   const req = pool.request();
@@ -296,12 +322,23 @@ export async function stockSnapshot({ shopCode, includeZero = false } = {}) {
     req.input('shop', sql.NVarChar(50), shopCode.toUpperCase());
     scopeWhere = 'WHERE m.[ShopCode] = @shop';
   }
+  // When a company is given, scope to that company by the ITEM's SourceCompany
+  // (NULL/orphan = FCL) — not the movement tag — so a per-company harmonize never
+  // sees another company's items or balances, and untagged sale movements are
+  // still grouped under their item's company.
+  let itemJoin = '', movCo = '', itemCo = '';
+  if (company) {
+    req.input('co', sql.NVarChar(20), co(company));
+    itemJoin = 'LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = m.[ItemNo]';
+    movCo  = `${scopeWhere ? 'AND' : 'WHERE'} UPPER(ISNULL(pi.[SourceCompany],'FCL'))=@co`;
+    itemCo = `UPPER(ISNULL(i.[SourceCompany],'FCL'))=@co`;
+  }
   // Aggregate the local ledger, then join the catalogue for description/UoM.
   const r = await req.query(`
     WITH OnHand AS (
       SELECT m.[ItemNo], SUM(m.[Quantity]) AS Qty
-      FROM   [dbo].[PosStockMovement] m ${scopeJoin}
-      ${scopeWhere}
+      FROM   [dbo].[PosStockMovement] m ${scopeJoin} ${itemJoin}
+      ${scopeWhere} ${movCo}
       GROUP BY m.[ItemNo]
     )
     SELECT ${includeZero ? 'i.[ItemNo]' : 'COALESCE(oh.[ItemNo], i.[ItemNo])'} AS ItemNo,
@@ -310,7 +347,9 @@ export async function stockSnapshot({ shopCode, includeZero = false } = {}) {
            ISNULL(oh.Qty, 0) AS OnHand
     FROM ${includeZero ? '[dbo].[PosItem] i LEFT JOIN OnHand oh ON oh.[ItemNo] = i.[ItemNo]'
                        : 'OnHand oh LEFT JOIN [dbo].[PosItem] i ON i.[ItemNo] = oh.[ItemNo]'}
-    ${includeZero ? 'WHERE i.[IsActive] = 1' : ''}
+    ${includeZero
+        ? `WHERE i.[IsActive] = 1 ${itemCo ? 'AND ' + itemCo : ''}`
+        : (itemCo ? `WHERE ${itemCo}` : '')}
     ORDER BY i.[Description], ItemNo
   `);
   return r.recordset.map((row) => ({
@@ -1592,14 +1631,15 @@ export async function bcStockNetInRange(company, locationCode, sinceEntryNo, upt
   return r.recordset.map(x => ({ itemNo: x.ItemNo, qty: Number(x.Qty || 0) }));
 }
 
-/** Read the per-terminal watermark (null if never reset). */
-export async function getStockWatermark(shopCode) {
+/** Read the per-terminal, per-company watermark (null if never reset). */
+export async function getStockWatermark(shopCode, company = 'FCL') {
   if (!shopCode) return null;
   const pool = await appPool();
   const r = await pool.request()
     .input('code', sql.NVarChar(50), str(shopCode, 50).toUpperCase())
+    .input('co',   sql.NVarChar(20), co(company))
     .query(`SELECT [ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt]
-            FROM [dbo].[PosStockWatermark] WHERE [ShopCode]=@code`);
+            FROM [dbo].[PosStockWatermark] WHERE [ShopCode]=@code AND UPPER([SourceCompany])=@co`);
   return r.recordset[0] || null;
 }
 
@@ -1616,67 +1656,80 @@ async function posItemDescriptions(pool) {
 export async function resetStockFromBc({ shopCode, company = 'FCL', userId = null, userName = null }) {
   const pool = await appPool();
   const code = str(shopCode, 50).toUpperCase();
-  const loc  = await locationForShop(pool, code);
-  if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
+  const cc   = co(company);
+  const loc  = await locationForShopCompany(pool, code, cc);
+  if (!loc) throw new Error('Terminal has no Location Code mapped for this company — set one on the terminal / company mirror first');
 
-  const { items, maxEntryNo } = await bcStockOnHandAtLocation(company, loc);
+  const { items, maxEntryNo } = await bcStockOnHandAtLocation(cc, loc);
   const descByItem = await posItemDescriptions(pool);
   const seed = items.filter(it => descByItem.has(it.itemNo));
 
   const tx = new sql.Transaction(pool);
   await tx.begin();
   try {
-    await new sql.Request(tx).input('code', sql.NVarChar(50), code)
-      .query(`DELETE FROM [dbo].[PosStockMovement] WHERE [ShopCode]=@code`);
+    // Scope the wipe to THIS company's items only. We key on the ITEM's company
+    // (PosItem.SourceCompany), not the movement's Company tag, because ongoing
+    // sale movements aren't tagged — an item is single-company, so grouping by the
+    // item's company is always correct. Unknown/orphan items count as FCL, which
+    // preserves the original "wipe everything" behaviour for an FCL reset while
+    // guaranteeing a CM reset never touches FCL stock (and vice-versa).
+    await new sql.Request(tx)
+      .input('code', sql.NVarChar(50), code)
+      .input('co',   sql.NVarChar(20), cc)
+      .query(`DELETE m FROM [dbo].[PosStockMovement] m
+              LEFT JOIN [dbo].[PosItem] i ON i.[ItemNo] = m.[ItemNo]
+              WHERE m.[ShopCode]=@code AND UPPER(ISNULL(i.[SourceCompany],'FCL'))=@co`);
     for (const it of seed) {
       await new sql.Request(tx)
         .input('shopCode',    sql.NVarChar(50),  code)
+        .input('company',     sql.NVarChar(20),  cc)
         .input('itemNo',      sql.NVarChar(30),  it.itemNo)
         .input('description', sql.NVarChar(200), descByItem.get(it.itemNo) || null)
         .input('quantity',    sql.Decimal(18, 4), it.qty)
-        .input('notes',       sql.NVarChar(500), `Opening balance from BC @ ${loc} (entry <= ${maxEntryNo})`)
+        .input('notes',       sql.NVarChar(500), `Opening balance from BC ${cc} @ ${loc} (entry <= ${maxEntryNo})`)
         .input('createdBy',   sql.NVarChar(100), str(userName || userId, 100) || null)
         .query(`INSERT INTO [dbo].[PosStockMovement]
-          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
-          VALUES (@shopCode,@itemNo,@description,'reset',@quantity,'bc-reset',NULL,GETDATE(),@notes,@createdBy)`);
+          ([ShopCode],[Company],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@company,@itemNo,@description,'reset',@quantity,'bc-reset',NULL,GETDATE(),@notes,@createdBy)`);
     }
     await new sql.Request(tx)
       .input('code',    sql.NVarChar(50),  code)
       .input('loc',     sql.NVarChar(20),  loc.toUpperCase())
-      .input('company', sql.NVarChar(20),  String(company).toUpperCase())
+      .input('company', sql.NVarChar(20),  cc)
       .input('entry',   sql.Int,           maxEntryNo)
       .input('by',      sql.NVarChar(100), str(userName || userId, 100) || null)
       .query(`
         MERGE [dbo].[PosStockWatermark] AS t
-        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
+        USING (SELECT @code AS ShopCode, @company AS SourceCompany) AS s
+          ON t.[ShopCode]=s.ShopCode AND t.[SourceCompany]=s.SourceCompany
         WHEN MATCHED THEN UPDATE SET
-          [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,
+          [LocationCode]=@loc,[LastEntryNo]=@entry,
           [ResetAt]=GETUTCDATE(),[ResetBy]=@by,[UpdatedAt]=GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy])
           VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by);`);
     await tx.commit();
   } catch (e) { await tx.rollback(); throw e; }
 
-  logger.info('pos/resetStockFromBc', { shopCode: code, loc, company, items: seed.length, lastEntryNo: maxEntryNo });
-  return { shopCode: code, locationCode: loc, company, items: seed.length, lastEntryNo: maxEntryNo };
+  logger.info('pos/resetStockFromBc', { shopCode: code, loc, company: cc, items: seed.length, lastEntryNo: maxEntryNo });
+  return { shopCode: code, locationCode: loc, company: cc, items: seed.length, lastEntryNo: maxEntryNo };
 }
 
 /**
  * Fresh load: post the NET of BC ledger entries in (watermark, uptoEntryNo] as
  * 'bc-load' movements, then advance the watermark to uptoEntryNo.
  */
-export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, userId = null, userName = null }) {
+export async function loadStockFromBc({ shopCode, company = 'FCL', uptoEntryNo, asOfDate = null, userId = null, userName = null }) {
   const pool = await appPool();
   const code = str(shopCode, 50).toUpperCase();
-  const wm = await getStockWatermark(code);
+  const cc   = co(company);
+  const wm = await getStockWatermark(code, cc);
   if (!wm) throw new Error('No stock baseline yet — run Stock Reset first');
-  const loc     = wm.LocationCode || await locationForShop(pool, code);
-  const company = wm.SourceCompany || 'FCL';
+  const loc     = wm.LocationCode || await locationForShopCompany(pool, code, cc);
   const since   = Number(wm.LastEntryNo || 0);
   const upto    = Number(uptoEntryNo || 0);
   if (upto <= since) throw new Error(`Selected entry (${upto}) is not newer than the last loaded entry (${since})`);
 
-  const net = await bcStockNetInRange(company, loc, since, upto);
+  const net = await bcStockNetInRange(cc, loc, since, upto);
   const descByItem = await posItemDescriptions(pool);
 
   const tx = new sql.Transaction(pool);
@@ -1687,6 +1740,7 @@ export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, 
       if (!descByItem.has(it.itemNo)) continue;
       await new sql.Request(tx)
         .input('shopCode',    sql.NVarChar(50),  code)
+        .input('company',     sql.NVarChar(20),  cc)
         .input('itemNo',      sql.NVarChar(30),  it.itemNo)
         .input('description', sql.NVarChar(200), descByItem.get(it.itemNo) || null)
         .input('quantity',    sql.Decimal(18, 4), it.qty)
@@ -1694,21 +1748,22 @@ export async function loadStockFromBc({ shopCode, uptoEntryNo, asOfDate = null, 
         .input('notes',       sql.NVarChar(500), `BC load: net of entries ${since + 1}-${upto}${asOfDate ? ` (to ${asOfDate})` : ''}`)
         .input('createdBy',   sql.NVarChar(100), str(userName || userId, 100) || null)
         .query(`INSERT INTO [dbo].[PosStockMovement]
-          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
-          VALUES (@shopCode,@itemNo,@description,'bc-load',@quantity,'bc-load',@refno,GETDATE(),@notes,@createdBy)`);
+          ([ShopCode],[Company],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@company,@itemNo,@description,'bc-load',@quantity,'bc-load',@refno,GETDATE(),@notes,@createdBy)`);
       count++;
     }
     await new sql.Request(tx)
       .input('code',  sql.NVarChar(50), code)
+      .input('co',    sql.NVarChar(20), cc)
       .input('entry', sql.Int,          upto)
       .query(`UPDATE [dbo].[PosStockWatermark]
               SET [LastEntryNo]=@entry,[LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
-              WHERE [ShopCode]=@code`);
+              WHERE [ShopCode]=@code AND UPPER([SourceCompany])=@co`);
     await tx.commit();
   } catch (e) { await tx.rollback(); throw e; }
 
-  logger.info('pos/loadStockFromBc', { shopCode: code, loc, fromEntryNo: since, toEntryNo: upto, items: net.length });
-  return { shopCode: code, fromEntryNo: since, toEntryNo: upto, items: net.length };
+  logger.info('pos/loadStockFromBc', { shopCode: code, loc, company: cc, fromEntryNo: since, toEntryNo: upto, items: net.length });
+  return { shopCode: code, company: cc, fromEntryNo: since, toEntryNo: upto, items: net.length };
 }
 
 // BC Item Ledger [Entry Type] → POS movement type. We pull BC-originated stock
@@ -1736,15 +1791,15 @@ const LEDGER_TYPE_NAME     = { 1: 'Sale', 2: 'Positive Adj', 3: 'Negative Adj', 
 export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes = [1, 2, 3, 4], sinceEntryNo = null, userId = null, userName = null }) {
   const pool = await appPool();
   const code = str(shopCode, 50).toUpperCase();
-  const wm   = await getStockWatermark(code);
-  const loc  = wm?.LocationCode || await locationForShop(pool, code);
+  const cc   = co(company);
+  const wm   = await getStockWatermark(code, cc);
+  const loc  = wm?.LocationCode || await locationForShopCompany(pool, code, cc);
   if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
-  const co    = String(company || wm?.SourceCompany || 'FCL').toUpperCase();
   const types = [...new Set((entryTypes || []).map(Number))].filter(t => [1, 2, 3, 4].includes(t));
   if (!types.length) throw new Error('No valid entry types (use 1, 2, 3 and/or 4)');
   const floor = sinceEntryNo != null ? Number(sinceEntryNo) : Number(wm?.LastEntryNo || 0);
 
-  const { table } = ledgerTable(co);
+  const { table } = ledgerTable(cc);
   const bcPool = await bcDb.getPool();
   const maxR = await bcPool.request().input('loc', sql.NVarChar(20), str(loc, 20))
     .query(`SELECT ISNULL(MAX([Entry No_]),0) AS M FROM ${table} WHERE [Location Code]=@loc`);
@@ -1764,9 +1819,9 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
       ORDER BY [Entry No_]`);
 
   const descByItem = await posItemDescriptions(pool);
-  const existed = await pool.request().input('code', sql.NVarChar(50), code)
+  const existed = await pool.request().input('code', sql.NVarChar(50), code).input('co', sql.NVarChar(20), cc)
     .query(`SELECT [ReferenceNo] FROM [dbo].[PosStockMovement]
-            WHERE [ShopCode]=@code AND [ReferenceType]='bc-ledger' AND [ReferenceNo] IS NOT NULL`);
+            WHERE [ShopCode]=@code AND ISNULL([Company],'FCL')=@co AND [ReferenceType]='bc-ledger' AND [ReferenceNo] IS NOT NULL`);
   const seen = new Set(existed.recordset.map(r => String(r.ReferenceNo)));
 
   // POS order numbers for this shop — used to skip BC sales that ORIGINATED in the
@@ -1793,6 +1848,7 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
       const mt = LEDGER_TYPE_MOVEMENT[Number(e.EType)] || 'positive-adj';
       await new sql.Request(tx)
         .input('shopCode',    sql.NVarChar(50),   code)
+        .input('company',     sql.NVarChar(20),   cc)
         .input('itemNo',      sql.NVarChar(30),   e.ItemNo)
         .input('description', sql.NVarChar(200),  descByItem.get(e.ItemNo) || null)
         .input('mt',          sql.NVarChar(30),   mt)
@@ -1802,26 +1858,27 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
         .input('notes',       sql.NVarChar(500),  `BC ${LEDGER_TYPE_NAME[Number(e.EType)] || ('type ' + e.EType)} ${e.Doc || ''} (ILE ${ref}) @ ${loc}`.slice(0, 500))
         .input('by',          sql.NVarChar(100),  str(userName || userId, 100) || null)
         .query(`INSERT INTO [dbo].[PosStockMovement]
-          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
-          VALUES (@shopCode,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
+          ([ShopCode],[Company],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@company,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
       pulled.push({ entryNo: e.EntryNo, itemNo: e.ItemNo, description: descByItem.get(e.ItemNo) || '', qty: Number(e.Qty || 0), type: Number(e.EType), movementType: mt, doc: e.Doc || '' });
       inserted++;
     }
     await new sql.Request(tx)
       .input('code', sql.NVarChar(50), code).input('loc', sql.NVarChar(20), loc.toUpperCase())
-      .input('company', sql.NVarChar(20), co).input('entry', sql.Int, upto)
+      .input('company', sql.NVarChar(20), cc).input('entry', sql.Int, upto)
       .input('by', sql.NVarChar(100), str(userName || userId, 100) || null)
       .query(`
         MERGE [dbo].[PosStockWatermark] AS t
-        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
-        WHEN MATCHED THEN UPDATE SET [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,[LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
+        USING (SELECT @code AS ShopCode, @company AS SourceCompany) AS s
+          ON t.[ShopCode]=s.ShopCode AND t.[SourceCompany]=s.SourceCompany
+        WHEN MATCHED THEN UPDATE SET [LocationCode]=@loc,[LastEntryNo]=@entry,[LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt])
           VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by,GETUTCDATE());`);
     await tx.commit();
   } catch (e) { await tx.rollback(); throw e; }
 
-  logger.info('pullBcLedgerEntries', { shopCode: code, loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types });
-  return { shopCode: code, locationCode: loc, company: co, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types, pulled };
+  logger.info('pullBcLedgerEntries', { shopCode: code, loc, company: cc, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types });
+  return { shopCode: code, locationCode: loc, company: cc, fromEntryNo: floor, toEntryNo: upto, inserted, skipped, skippedPosSales, types, pulled };
 }
 
 /**
@@ -1902,6 +1959,7 @@ export async function backfillLedgerForNewItems({ itemNos, entryTypes = [2, 3, 4
         const mt = LEDGER_TYPE_MOVEMENT[Number(e.EType)] || 'positive-adj';
         await new sql.Request(tx)
           .input('shopCode',    sql.NVarChar(50),   code)
+          .input('company',     sql.NVarChar(20),   co)
           .input('itemNo',      sql.NVarChar(30),   e.ItemNo)
           .input('description', sql.NVarChar(200),  descByItem.get(e.ItemNo) || null)
           .input('mt',          sql.NVarChar(30),   mt)
@@ -1911,8 +1969,8 @@ export async function backfillLedgerForNewItems({ itemNos, entryTypes = [2, 3, 4
           .input('notes',       sql.NVarChar(500),  `BC ${LEDGER_TYPE_NAME[Number(e.EType)] || ('type ' + e.EType)} ${e.Doc || ''} (ILE ${ref}) @ ${loc} [new-item backfill]`.slice(0, 500))
           .input('by',          sql.NVarChar(100),  'backfill:bom-sync')
           .query(`INSERT INTO [dbo].[PosStockMovement]
-            ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
-            VALUES (@shopCode,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
+            ([ShopCode],[Company],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+            VALUES (@shopCode,@company,@itemNo,@description,@mt,@qty,'bc-ledger',@refno,@mdate,@notes,@by)`);
         inserted++;
       }
       await tx.commit();
@@ -2020,16 +2078,18 @@ export async function listBcPullRuns({ limit = 100 } = {}) {
 export async function harmonizeStockWithBc({ shopCode, company = 'FCL', userId = null, userName = null }) {
   const pool = await appPool();
   const code = str(shopCode, 50).toUpperCase();
-  const loc  = await locationForShop(pool, code);
-  if (!loc) throw new Error('Terminal has no Location Code mapped — set one on the terminal first');
+  const cc   = co(company);
+  const loc  = await locationForShopCompany(pool, code, cc);
+  if (!loc) throw new Error('Terminal has no Location Code mapped for this company — set one on the terminal / company mirror first');
 
-  // BC truth at the location + POS current on-hand (from the local ledger).
-  const { items: bcItems, maxEntryNo } = await bcStockOnHandAtLocation(company, loc);
+  // BC truth at the location + POS current on-hand (from the local ledger) —
+  // BOTH scoped to this company, so a CM harmonize can never zero out FCL items.
+  const { items: bcItems, maxEntryNo } = await bcStockOnHandAtLocation(cc, loc);
   const descByItem = await posItemDescriptions(pool);
   const bcByItem = new Map();
   for (const it of bcItems) if (descByItem.has(it.itemNo)) bcByItem.set(it.itemNo, Number(it.qty || 0));
 
-  const snap = await stockSnapshot({ shopCode: code });
+  const snap = await stockSnapshot({ shopCode: code, company: cc });
   const posByItem = new Map(snap.map(s => [String(s.itemNo).toUpperCase(), Number(s.onHand || 0)]));
 
   // Union so POS-only surplus is zeroed to BC, and BC-only items are seeded.
@@ -2049,16 +2109,17 @@ export async function harmonizeStockWithBc({ shopCode, company = 'FCL', userId =
       if (delta === 0) { unchanged++; continue; }
       await new sql.Request(tx)
         .input('shopCode',     sql.NVarChar(50),   code)
+        .input('company',      sql.NVarChar(20),   cc)
         .input('itemNo',       sql.NVarChar(30),   itemNo)
         .input('description',  sql.NVarChar(200),  descByItem.get(itemNo) || null)
         .input('movementType', sql.NVarChar(30),   delta > 0 ? 'bc-adjust-in' : 'bc-adjust-out')
         .input('quantity',     sql.Decimal(18, 4), delta)
         .input('refno',        sql.NVarChar(30),   ref)
-        .input('notes',        sql.NVarChar(500),  `Harmonize to BC: ${posQty} → ${bcQty} (Δ ${delta > 0 ? '+' : ''}${delta}) @ ${loc}`)
+        .input('notes',        sql.NVarChar(500),  `Harmonize to BC ${cc}: ${posQty} → ${bcQty} (Δ ${delta > 0 ? '+' : ''}${delta}) @ ${loc}`)
         .input('createdBy',    sql.NVarChar(100),  str(userName || userId, 100) || null)
         .query(`INSERT INTO [dbo].[PosStockMovement]
-          ([ShopCode],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
-          VALUES (@shopCode,@itemNo,@description,@movementType,@quantity,'bc-harmonize',@refno,GETDATE(),@notes,@createdBy)`);
+          ([ShopCode],[Company],[ItemNo],[Description],[MovementType],[Quantity],[ReferenceType],[ReferenceNo],[MovementDate],[Notes],[CreatedBy])
+          VALUES (@shopCode,@company,@itemNo,@description,@movementType,@quantity,'bc-harmonize',@refno,GETDATE(),@notes,@createdBy)`);
       adjustments.push({ itemNo, description: descByItem.get(itemNo) || '', posQty, bcQty, delta });
       if (delta > 0) increased++; else decreased++;
     }
@@ -2066,20 +2127,21 @@ export async function harmonizeStockWithBc({ shopCode, company = 'FCL', userId =
     await new sql.Request(tx)
       .input('code',    sql.NVarChar(50),  code)
       .input('loc',     sql.NVarChar(20),  loc.toUpperCase())
-      .input('company', sql.NVarChar(20),  String(company).toUpperCase())
+      .input('company', sql.NVarChar(20),  cc)
       .input('entry',   sql.Int,           maxEntryNo)
       .input('by',      sql.NVarChar(100), str(userName || userId, 100) || null)
       .query(`
         MERGE [dbo].[PosStockWatermark] AS t
-        USING (SELECT @code AS ShopCode) AS s ON t.[ShopCode]=s.ShopCode
+        USING (SELECT @code AS ShopCode, @company AS SourceCompany) AS s
+          ON t.[ShopCode]=s.ShopCode AND t.[SourceCompany]=s.SourceCompany
         WHEN MATCHED THEN UPDATE SET
-          [LocationCode]=@loc,[SourceCompany]=@company,[LastEntryNo]=@entry,
+          [LocationCode]=@loc,[LastEntryNo]=@entry,
           [LastLoadAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT ([ShopCode],[LocationCode],[SourceCompany],[LastEntryNo],[ResetAt],[ResetBy],[LastLoadAt])
           VALUES (@code,@loc,@company,@entry,GETUTCDATE(),@by,GETUTCDATE());`);
     await tx.commit();
   } catch (e) { await tx.rollback(); throw e; }
 
-  logger.info('pos/harmonizeStockWithBc', { shopCode: code, loc, company, increased, decreased, unchanged, lastEntryNo: maxEntryNo });
-  return { shopCode: code, locationCode: loc, company, lastEntryNo: maxEntryNo, increased, decreased, unchanged, adjustments };
+  logger.info('pos/harmonizeStockWithBc', { shopCode: code, loc, company: cc, increased, decreased, unchanged, lastEntryNo: maxEntryNo });
+  return { shopCode: code, locationCode: loc, company: cc, lastEntryNo: maxEntryNo, increased, decreased, unchanged, adjustments };
 }

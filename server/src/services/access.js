@@ -22,6 +22,8 @@ export const ROLES = {
 export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.SALES_ADMIN, ROLES.FINANCE];
 // Reporting → Legacy Downloads (read-only exports over legacy BC databases).
 export const REPORTING_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.ANALYST];
+// Warehouse Sync Center (FCLWHS ETL monitoring) — analytics-facing: admin + analyst.
+export const WAREHOUSE_ROLES = [ROLES.ADMIN, ROLES.ANALYST];
 export const ORDER_ROLES = [ROLES.ADMIN, ROLES.DISPATCH];
 export const INVOICE_ROLES = [ROLES.ADMIN, ROLES.SECURITY];
 export const ADMIN_ROLES = [ROLES.ADMIN];

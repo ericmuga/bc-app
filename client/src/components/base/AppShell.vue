@@ -63,7 +63,7 @@
           </RouterLink>
         </details>
 
-        <details v-if="canViewReports || canViewFinance || canViewTargets" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
+        <details v-if="canViewReports || canViewFinance || canViewTargets || canViewWarehouseSync" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
           <summary class="section-label">Analytics</summary>
           <RouterLink v-if="canViewReports" to="/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-chart-bar" />
@@ -81,6 +81,14 @@
             <i class="pi pi-money-bill" />
             <span>Finance Reports</span>
           </RouterLink>
+          <RouterLink v-if="canViewWarehouseSync" to="/reporting/inventory" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-chart-bar" />
+            <span>Inventory Analytics</span>
+          </RouterLink>
+          <RouterLink v-if="canViewWarehouseSync" to="/reporting/stock-position" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-box" />
+            <span>Stock Position</span>
+          </RouterLink>
         </details>
 
         <details v-if="canViewReporting" class="nav-section" :open="navOpen.reporting" @toggle="onNavToggle('reporting', $event)">
@@ -88,6 +96,10 @@
           <RouterLink to="/reporting/legacy" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-database" />
             <span>Legacy Downloads</span>
+          </RouterLink>
+          <RouterLink v-if="canViewWarehouseSync" to="/reporting/warehouse-sync" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-server" />
+            <span>Warehouse Sync</span>
           </RouterLink>
         </details>
 
@@ -320,6 +332,8 @@ const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.v
 // Reporting → Legacy Downloads — admin, finance, analyst (string-matched here;
 // lib/access.js is owned by another account on this host and can't be edited).
 const canViewReporting = computed(() => ['admin', 'finance', 'analyst'].includes(String(role.value || '').toLowerCase()))
+// Warehouse Sync Center: admin + analyst only (not finance).
+const canViewWarehouseSync = computed(() => ['admin', 'analyst'].includes(String(role.value || '').toLowerCase()))
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 const canDispAssemble = computed(() => canDispatchAssemble(role.value))

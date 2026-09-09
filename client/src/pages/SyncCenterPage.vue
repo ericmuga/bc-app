@@ -315,7 +315,7 @@ async function pushOrders() {
 async function pullLedger() {
   busyTxn.value = 'pull'; txnResult.value = null; error.value = ''
   try {
-    const { data } = await stockApi.pullBcLedger({ entryTypes: [1, 2, 3, 4] })
+    const { data } = await stockApi.pullBcLedger({ entryTypes: [1, 2, 3, 4], company: company.value })
     const bits = [`inserted ${data.inserted}`, `skipped ${data.skipped}`]
     if (data.skippedPosSales) bits.push(`${data.skippedPosSales} POS-origin sale(s) skipped`)
     txnResult.value = { label: 'Pull BC ledger', summary: `${bits.join(', ')} (entries ${data.fromEntryNo + 1}–${data.toEntryNo}, ${data.company}).` }
@@ -335,11 +335,11 @@ async function pushProduction() {
 }
 
 async function doReset() {
-  if (!window.confirm(`Stock Reset for ${shopCode.value}? This WIPES the shop's movement history and re-seeds on-hand from BC.`)) return
+  if (!window.confirm(`Stock Reset for ${shopCode.value} — ${company.value} only? This WIPES only the ${company.value} movement history for this shop and re-seeds ${company.value} on-hand from BC. Other companies' stock is untouched.`)) return
   busyTxn.value = 'reset'; txnResult.value = null; error.value = ''
   try {
-    const { data } = await stockApi.resetFromBc()
-    txnResult.value = { label: 'Stock Reset', summary: `${data.items} item(s) seeded from BC @ ${data.locationCode} (baseline entry ${data.lastEntryNo}).` }
+    const { data } = await stockApi.resetFromBc({ company: company.value })
+    txnResult.value = { label: `Stock Reset (${data.company})`, summary: `${data.items} item(s) seeded from BC @ ${data.locationCode} (baseline entry ${data.lastEntryNo}).` }
     toast.add({ severity: 'success', summary: 'Stock reset', detail: txnResult.value.summary, life: 6000 })
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { busyTxn.value = '' }
@@ -362,7 +362,7 @@ async function openHarmonize() {
 async function doHarmonize(force) {
   harmonizeError.value = ''; harmonizing.value = true
   try {
-    const { data } = await stockApi.harmonizeFromBc({ force })
+    const { data } = await stockApi.harmonizeFromBc({ force, company: company.value })
     harmonizeResult.value = data
   } catch (e) {
     if (e.response?.status === 409 && e.response.data?.readiness) { readiness.value = e.response.data.readiness; harmonizeError.value = e.response.data.error }
@@ -380,10 +380,10 @@ const loadingDates = ref(false)
 const selectedDate = ref(null)
 async function openLoad() {
   loadError.value = ''; selectedDate.value = null; ledgerDates.value = []; loadVisible.value = true
-  try { watermark.value = (await stockApi.bcWatermark()).data } catch { watermark.value = null }
+  try { watermark.value = (await stockApi.bcWatermark(company.value)).data } catch { watermark.value = null }
   if (!watermark.value?.watermark) return
   loadingDates.value = true
-  try { ledgerDates.value = (await stockApi.bcLedgerDates()).data.dates || [] }
+  try { ledgerDates.value = (await stockApi.bcLedgerDates(company.value)).data.dates || [] }
   catch (e) { loadError.value = e.response?.data?.error || e.message }
   finally { loadingDates.value = false }
 }
@@ -391,7 +391,7 @@ async function doLoad() {
   if (!selectedDate.value) return
   loadError.value = ''; loadingStock.value = true
   try {
-    const { data } = await stockApi.loadFromBc({ uptoEntryNo: selectedDate.value.lastEntryNo, asOfDate: String(selectedDate.value.postingDate).slice(0,10) })
+    const { data } = await stockApi.loadFromBc({ uptoEntryNo: selectedDate.value.lastEntryNo, asOfDate: String(selectedDate.value.postingDate).slice(0,10), company: company.value })
     loadVisible.value = false
     toast.add({ severity: 'success', summary: 'Loaded from BC', detail: `${data.items} item(s), entries ${data.fromEntryNo+1}–${data.toEntryNo}.`, life: 6000 })
   } catch (e) { loadError.value = e.response?.data?.error || e.message }

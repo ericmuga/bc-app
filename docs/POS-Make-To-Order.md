@@ -117,3 +117,4 @@ Pick any existing method to put component stock on-hand at the shop's location:
   - `GET/POST/DELETE /api/pos/boms[/:itemNo]` — recipe CRUD (manager).
   - `POST /api/pos/production-plan` `{ orderId }` — what must be made + availability.
   - `POST /api/pos/produce` `{ orderId, items:[{ itemNo, qty }] }` — make it.
+ 

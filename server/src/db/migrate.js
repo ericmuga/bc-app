@@ -725,14 +725,17 @@ async function migrate(companyId) {
   await run(`
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='PosStockWatermark' AND schema_id=SCHEMA_ID('dbo'))
     CREATE TABLE [dbo].[PosStockWatermark] (
-      [ShopCode]      NVARCHAR(50)  NOT NULL PRIMARY KEY,
+      [ShopCode]      NVARCHAR(50)  NOT NULL,
       [LocationCode]  NVARCHAR(20)  NULL,
-      [SourceCompany] NVARCHAR(20)  NULL,
+      [SourceCompany] NVARCHAR(20)  NOT NULL DEFAULT 'FCL',
       [LastEntryNo]   INT           NOT NULL DEFAULT 0,
       [ResetAt]       DATETIME2     NULL,
       [ResetBy]       NVARCHAR(100) NULL,
       [LastLoadAt]    DATETIME2     NULL,
-      [UpdatedAt]     DATETIME2     NOT NULL DEFAULT GETUTCDATE()
+      [UpdatedAt]     DATETIME2     NOT NULL DEFAULT GETUTCDATE(),
+      -- Composite PK: one BC-ledger baseline per (terminal, company) so a single
+      -- outlet can carry independent FCL / CM / … stock positions.
+      CONSTRAINT [PK_PosStockWatermark] PRIMARY KEY ([ShopCode],[SourceCompany])
     )
   `);
   console.log('  [dbo].[PosStockWatermark] OK');
@@ -794,6 +797,7 @@ async function migrate(companyId) {
     CREATE TABLE [dbo].[PosStockMovement] (
       [MovementId]    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
       [ShopCode]      NVARCHAR(50)     NOT NULL,
+      [Company]       NVARCHAR(20)     NULL,   -- BC company this movement belongs to (NULL = FCL)
       [ItemNo]        NVARCHAR(30)     NOT NULL,
       [Description]   NVARCHAR(200)    NULL,
       [MovementType]  NVARCHAR(30)     NOT NULL,
