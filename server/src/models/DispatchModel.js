@@ -1,3 +1,8 @@
+import {withUnitConversions} from './DispatchUomModel.js';
+import {trackSync} from './DispatchSyncModel.js';
+import { completeLine } from './DispatchSessionWriter.js';
+import { syncItemRules } from './DispatchItemRuleModel.js';
+import { configuration as chillerConfiguration } from './DispatchChillerModel.js';
 /**
  * models/DispatchModel.js
  *
@@ -62,9 +67,11 @@ export async function createForOrder(order) {
     .input('oid', sql.UniqueIdentifier, order.orderId)
     .query(`
       SELECT l.[ItemNo], pi.[Barcode], l.[Description], l.[Quantity],
-             pi.[UnitOfMeasure], l.[SortOrder]
+             COALESCE(NULLIF(pi.[SalesUnitOfMeasure],''),pi.[UnitOfMeasure]) UnitOfMeasure, l.[SortOrder],r.Part
+
       FROM [dbo].[PosOrderLine] l
       LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = l.[ItemNo]
+      LEFT JOIN dbo.DispatchItemRule r ON r.ItemNo=l.ItemNo AND r.Company=COALESCE(NULLIF(l.Company,''),'FCL')
       WHERE l.[OrderId] = @oid
       ORDER BY l.[SortOrder]
     `);
@@ -102,17 +109,19 @@ export async function createForOrder(order) {
         .input('uom',     sql.NVarChar(20),  uom)
         .input('weighted', sql.Bit, isWeightUom(uom) ? 1 : 0)
         .input('sort',    sql.Int, Number(ln.SortOrder) || i)
+        .input('part', sql.Char(1), ln.Part || null)
         .query(`
           INSERT INTO [dbo].[DispatchOrderLine]
-            ([DispatchOrderId],[ItemNo],[Barcode],[Description],[OrderQty],[Uom],[IsWeighted],[SortOrder])
-          VALUES (@doid,@itemNo,@barcode,@desc,@qty,@uom,@weighted,@sort)
+            ([DispatchOrderId],[ItemNo],[Barcode],[Description],[OrderQty],[Uom],[IsWeighted],[SortOrder],[Part])
+          VALUES (@doid,@itemNo,@barcode,@desc,@qty,@uom,@weighted,@sort,@part)
         `);
     }
     for (const part of PARTS) {
       await new sql.Request(tx)
         .input('doid', sql.UniqueIdentifier, dispatchOrderId)
         .input('part', sql.Char(1), part)
-        .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part]) VALUES (@doid,@part)`);
+        .input('active', sql.Bit, lines.some(l => l.Part === part))
+        .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part],[Active]) VALUES (@doid,@part,@active)`);
     }
     await tx.commit();
     return dispatchOrderId;
@@ -284,9 +293,9 @@ export async function listForAssignment() {
 export async function listUsersByRole(role) {
   const pool = await appPool();
   const r = await pool.request()
-    .input('role', sql.NVarChar(50), String(role || ''))
+    .input('roles', sql.NVarChar(sql.MAX), JSON.stringify(Array.isArray(role) ? role : [String(role || '')]))
     .query(`SELECT [UserId],[Username],[DisplayName] FROM [dbo].[Users]
-            WHERE [Role]=@role AND [IsActive]=1 ORDER BY [DisplayName],[Username]`);
+            WHERE [Role] IN (SELECT [value] FROM OPENJSON(@roles)) AND [IsActive]=1 ORDER BY [DisplayName],[Username]`);
   return r.recordset.map((u) => ({ userId: String(u.UserId), name: u.DisplayName || u.Username }));
 }
 
@@ -343,17 +352,20 @@ const EXECUTE_STATUS = () => Number(process.env.DISPATCH_EXECUTE_STATUS ?? 4);
 
 // Each Sales Line's dispatch Part (A/B/C/D) lives on the coreExt table's
 // [Part No_] field; join it in so lines can be tagged and empty parts deactivated.
-async function fetchBcOrderLines(bcPool, slTable, slExtTable, orderNo) {
+async function fetchBcOrderLines(bcPool, slTable, slExtTable, orderNo, company) {
   const partCol = extCol('Part No_');
   const r = await bcPool.request()
     .input('no', bcSql.NVarChar(20), orderNo)
     .query(`
       SELECT l.[Line No_] AS [LineNo], l.[No_] AS ItemNo, l.[Description] AS Descr,
-             l.[Quantity] AS Qty, l.[Unit of Measure Code] AS Uom, e.${partCol} AS PartNo
+             l.[Quantity] AS Qty, l.[Unit of Measure Code] AS Uom, CASE WHEN UPPER(i.[Inventory Posting Group])='JF-SAUSAGE' THEN 'B' ELSE e.${partCol} END AS PartNo,
+             x.${extCol('Bar Code No_')} Barcode,l.[Qty_ per Unit of Measure] QtyPerUom,i.[Base Unit of Measure] BaseUom
       FROM ${slTable} l
+      LEFT JOIN ${bcTable(company,'Item')} i ON i.[No_]=l.[No_]
+      LEFT JOIN ${bcTable(company,'Item',{coreExt:true})} x ON x.[No_]=l.[No_]
       LEFT JOIN ${slExtTable} e
         ON e.[Document Type]=l.[Document Type] AND e.[Document No_]=l.[Document No_] AND e.[Line No_]=l.[Line No_]
-      WHERE l.[Document No_]=@no AND l.[Type]=2 AND l.[Quantity] <> 0
+      WHERE l.[Document Type]=1 AND l.[Document No_]=@no AND l.[Type]=2 AND l.[Quantity] <> 0
       ORDER BY l.[Line No_]
     `);
   return r.recordset;
@@ -401,10 +413,13 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         .input('weighted', sql.Bit, isWeightUom(uom) ? 1 : 0)
         .input('part',     sql.Char(1), part)
         .input('sort',     sql.Int, Number(ln.LineNo) || i)
+        .input('barcode',sql.NVarChar(50),ln.Barcode || null)
+        .input('baseUom',sql.NVarChar(20),ln.BaseUom || null)
+        .input('factor',sql.Decimal(18,6),ln.QtyPerUom || null)
         .query(`
           INSERT INTO [dbo].[DispatchOrderLine]
-            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[Part],[SortOrder])
-          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@part,@sort)
+            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[Part],[SortOrder],[Barcode],[BaseUom],[QtyPerUom])
+          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@part,@sort,@barcode,@baseUom,@factor)
         `);
     }
     // A part is Active only if the order actually has line(s) of it.
@@ -422,20 +437,22 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
 }
 
 /**
- * Pull today's (Shipment Date = today) BC sales orders at the "Execute" status
+ * Pull missing BC sales orders at the "Execute" status
  * into the dispatch pipeline as pending-confirmation orders. Idempotent per
  * (Company, OrderNo). Reads BC live (bcDb); writes the app DB.
  */
-export async function importFromBc({ companies } = {}) {
+async function importFromBcWork({ companies } = {}) {
   const status = EXECUTE_STATUS();
   const comps = (Array.isArray(companies) && companies.length) ? companies : ALL_COMPANIES;
   const bcPool = await bcDb.getPool();
   const appP = await appPool();
+
   let imported = 0, skipped = 0;
+  const errors = [];
   const byCompany = {};
 
   for (const c of comps) {
-    byCompany[c] = { found: 0, imported: 0 };
+    byCompany[c] = { found: 0, imported: 0, skipped: 0 };
     let headers = [];
     try {
       const sh = bcTable(c, 'Sales Header');
@@ -449,10 +466,11 @@ export async function importFromBc({ companies } = {}) {
                  h.[Shipment Date] AS ShipmentDate, h.[External Document No_] AS Lpo
           FROM ${sh} h
           LEFT JOIN ${sp} sp ON sp.[Code] = h.[Salesperson Code]
-          WHERE h.[Status]=@st AND CAST(h.[Shipment Date] AS date)=CAST(GETDATE() AS date)
+          WHERE h.[Document Type]=1 AND h.[Status]=@st
         `);
       headers = hRes.recordset;
     } catch (e) {
+      errors.push({company:c,error:e.message});
       logger.warn('dispatch importFromBc: header query failed', { company: c, error: e.message });
       continue;
     }
@@ -467,17 +485,18 @@ export async function importFromBc({ companies } = {}) {
     const sl = bcTable(c, 'Sales Line');
     const slExt = bcTable(c, 'Sales Line', { coreExt: true });
     for (const h of headers) {
-      if (existing.has(h.OrderNo)) { skipped++; continue; }
+      if (existing.has(h.OrderNo)) { skipped++; byCompany[c].skipped++; continue; }
       try {
-        const lines = await fetchBcOrderLines(bcPool, sl, slExt, h.OrderNo);
+        const lines = await fetchBcOrderLines(bcPool, sl, slExt, h.OrderNo, c);
         await insertBcDispatchOrder(appP, c, h, lines);
         imported++; byCompany[c].imported++;
       } catch (e) {
+        errors.push({company:c,orderNo:h.OrderNo,error:e.message});
         logger.warn('dispatch importFromBc: order import failed', { company: c, orderNo: h.OrderNo, error: e.message });
       }
     }
   }
-  return { imported, skipped, byCompany, executeStatus: status };
+  return { imported, skipped, byCompany, executeStatus: status, errors };
 }
 
 /**
@@ -554,83 +573,35 @@ export async function getAssemblyOrder(dispatchOrderId, userId) {
     .query(`SELECT * FROM [dbo].[DispatchOrder] WHERE [DispatchOrderId]=@id`);
   if (!hdr.recordset.length) return null;
   const linesRes = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId).query(`
-    SELECT l.*, a.[AssembledQty], a.[AssembledWeight], a.[ReturnReasonCode], a.[ReturnReasonName], a.[AssembledByName]
+    SELECT l.*, COALESCE(NULLIF(o.Company,''),NULLIF(pi.SourceCompany,''),'FCL') BarcodeCompany, a.[AssembledQty], a.[AssembledWeight], a.[ReturnReasonCode], a.[ReturnReasonName], a.[AssembledByName],a.AssembledByUserId,a.Pieces,a.BatchNo,ISNULL(a.Revision,0) Revision,a.SessionId, a.[Completed], COALESCE(a.[Chiller],r.Chiller,m.[Chiller],'UNMAPPED') Chiller
     FROM [dbo].[DispatchOrderLine] l
     LEFT JOIN [dbo].[DispatchAssemblyLine] a ON a.[LineId]=l.[LineId]
+    JOIN dbo.DispatchOrder o ON o.DispatchOrderId=l.DispatchOrderId
+    LEFT JOIN dbo.PosItem pi ON pi.ItemNo=l.ItemNo
+    LEFT JOIN dbo.DispatchItemRule r ON r.Company=COALESCE(NULLIF(o.Company,''),NULLIF(pi.SourceCompany,''),'FCL') AND r.ItemNo=l.ItemNo
+    LEFT JOIN dbo.DispatchItemChiller m ON m.ItemNo=l.ItemNo
     WHERE l.[DispatchOrderId]=@id ORDER BY l.[Part], l.[SortOrder]
   `);
   const partsRes = await pool.request().input('id', sql.UniqueIdentifier, dispatchOrderId)
     .query(`SELECT * FROM [dbo].[DispatchOrderPart] WHERE [DispatchOrderId]=@id ORDER BY [Part]`);
   let parts = partsRes.recordset.filter((p) => p.Active);
   let lines = linesRes.recordset;
-  if (userId) {
+  if (userId && !(await chillerConfiguration()).BypassAssignment) {
     parts = parts.filter((p) => String(p.AssignedToUserId || '') === String(userId));
     const mine = new Set(parts.map((p) => p.Part));
     lines = lines.filter((l) => mine.has(l.Part));
   }
-  return { ...hdr.recordset[0], lines, parts };
+  return { ...hdr.recordset[0], lines:await withUnitConversions(lines), parts };
 }
 
 /** Upsert a line's assembled qty/weight/return-reason. Moves order to 'assembling'. */
 export async function saveAssemblyLine(lineId, dispatchOrderId, body = {}, user = {}) {
-  const pool = await appPool();
-  const qty = num(body.assembledQty);
-  const weight = num(body.assembledWeight);
-  const rc = str(body.returnReasonCode, 20);
-  const rn = str(body.returnReasonName, 200);
-  const exists = await pool.request().input('lid', sql.UniqueIdentifier, lineId)
-    .query(`SELECT TOP 1 [AssemblyLineId] FROM [dbo].[DispatchAssemblyLine] WHERE [LineId]=@lid`);
-  const r = pool.request()
-    .input('lid',   sql.UniqueIdentifier, lineId)
-    .input('doid',  sql.UniqueIdentifier, dispatchOrderId)
-    .input('qty',   sql.Decimal(18, 4), qty)
-    .input('wt',    sql.Decimal(18, 4), weight)
-    .input('rc',    sql.NVarChar(20), rc)
-    .input('rn',    sql.NVarChar(200), rn)
-    .input('uid',   sql.NVarChar(100), str(user.userId, 100))
-    .input('uname', sql.NVarChar(200), str(user.userName, 200));
-  if (exists.recordset.length) {
-    await r.query(`
-      UPDATE [dbo].[DispatchAssemblyLine]
-      SET [AssembledQty]=@qty,[AssembledWeight]=@wt,[ReturnReasonCode]=@rc,[ReturnReasonName]=@rn,
-          [AssembledByUserId]=@uid,[AssembledByName]=@uname,[AssembledAt]=GETUTCDATE()
-      WHERE [LineId]=@lid`);
-  } else {
-    await r.query(`
-      INSERT INTO [dbo].[DispatchAssemblyLine]
-        ([DispatchOrderId],[LineId],[AssembledQty],[AssembledWeight],[ReturnReasonCode],[ReturnReasonName],[AssembledByUserId],[AssembledByName])
-      VALUES (@doid,@lid,@qty,@wt,@rc,@rn,@uid,@uname)`);
-  }
-  await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
-    .query(`UPDATE [dbo].[DispatchOrder] SET [Status]='assembling',[UpdatedAt]=GETUTCDATE()
-            WHERE [DispatchOrderId]=@doid AND [Status]='assigned'`);
-  return { ok: true };
+  return completeLine({ lineId, dispatchOrderId, body, user });
 }
-
-/** Mark a part assembled; flips the order to 'assembled' when all active parts are done. */
 export async function markPartAssembled(dispatchOrderId, part, user = {}) {
-  const pool = await appPool();
-  const P = String(part || '').toUpperCase();
-  const res = await pool.request()
-    .input('doid', sql.UniqueIdentifier, dispatchOrderId).input('part', sql.Char(1), P)
-    .input('uid', sql.NVarChar(100), str(user.userId, 100)).input('uname', sql.NVarChar(200), str(user.userName, 200))
-    .query(`
-      UPDATE [dbo].[DispatchOrderPart]
-      SET [Assembled]=1,[AssembledByUserId]=@uid,[AssembledByName]=@uname,[AssembledAt]=GETUTCDATE(),[UpdatedAt]=GETUTCDATE()
-      WHERE [DispatchOrderId]=@doid AND [Part]=@part AND [Active]=1 AND [Assembled]=0`);
-  if (!res.rowsAffected[0]) { const e = new Error(`Part ${P} can't be marked assembled (inactive or already done)`); e.code = 'INVALID'; throw e; }
-  const chk = await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
-    .query(`SELECT SUM(CASE WHEN [Assembled]=1 AND [Active]=1 THEN 1 ELSE 0 END) c, SUM(CASE WHEN [Active]=1 THEN 1 ELSE 0 END) t
-            FROM [dbo].[DispatchOrderPart] WHERE [DispatchOrderId]=@doid`);
-  const c = Number(chk.recordset[0]?.c || 0), t = Number(chk.recordset[0]?.t || 0);
-  if (t > 0 && c >= t) {
-    await pool.request().input('doid', sql.UniqueIdentifier, dispatchOrderId)
-      .query(`UPDATE [dbo].[DispatchOrder] SET [Assembled]=1,[Status]='assembled',[UpdatedAt]=GETUTCDATE() WHERE [DispatchOrderId]=@doid`);
-  }
-  return { assembledParts: c, activeParts: t, fullyAssembled: t > 0 && c >= t };
+  throw new Error('Complete each line in an assembly session; parts complete automatically');
 }
 
-// ── Packing / boxing (packer + checker) ──────────────────────────────────────
 const DEFAULT_VESSELS = [
   { code: 'CRATE',    description: 'Standard crate', tare: 1.5 },
   { code: 'CARTON-S', description: 'Small carton',   tare: 0.3 },
@@ -660,7 +631,7 @@ export async function listForPacking(userId) {
   const pool = await appPool();
   const r = pool.request();
   let filter = '';
-  if (userId) { r.input('uid', sql.NVarChar(100), String(userId)); filter = 'AND o.[AssignedToUserId]=@uid'; }
+  if (userId) { r.input('uid', sql.NVarChar(100), String(userId)); filter = 'AND (o.[AssignedToUserId]=@uid OR o.[AssignedToUserId] IS NULL)'; }
   return (await r.query(`
     SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[Status],o.[AssignedToName],
            (SELECT COUNT(*) FROM [dbo].[DispatchBox] b WHERE b.[DispatchOrderId]=o.[DispatchOrderId]) AS BoxCount
@@ -751,7 +722,7 @@ export async function getBox(boxId) {
   const pool = await appPool();
   const b = await pool.request().input('id', sql.UniqueIdentifier, boxId).query(`SELECT * FROM [dbo].[DispatchBox] WHERE [BoxId]=@id`);
   if (!b.recordset.length) return null;
-  const lines = await pool.request().input('id', sql.UniqueIdentifier, boxId).query(`SELECT * FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id ORDER BY [CreatedAt]`);
+  const lines = await pool.request().input('id', sql.UniqueIdentifier, boxId).query(`SELECT * FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id AND [VoidedAt] IS NULL ORDER BY [CreatedAt]`);
   return { ...b.recordset[0], lines: lines.recordset };
 }
 
@@ -802,7 +773,7 @@ export async function getBoxByQr(scanned) {
     WHERE b.[QrToken]=@qr OR b.[BoxNo]=@bn`);
   if (!b.recordset.length) return null;
   const lines = await pool.request().input('id', sql.UniqueIdentifier, b.recordset[0].BoxId)
-    .query(`SELECT [ItemNo],[Description],[Qty],[Weight] FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id`);
+    .query(`SELECT [ItemNo],[Description],[Qty],[Weight] FROM [dbo].[DispatchBoxLine] WHERE [BoxId]=@id AND [VoidedAt] IS NULL`);
   return { ...b.recordset[0], lines: lines.recordset };
 }
 
@@ -962,4 +933,15 @@ export async function closeLoadingSession(sessionId) {
     AND NOT EXISTS (SELECT 1 FROM [dbo].[DispatchBox] bx WHERE bx.[DispatchOrderId]=o.[DispatchOrderId] AND bx.[Status] <> 'loaded')
   `);
   return { ordersLoaded: r.rowsAffected[0] || 0 };
+}
+
+export async function importFromBc({ companies, trigger='manual' } = {}){
+  if(companies!=null&&(!Array.isArray(companies)||!companies.length||companies.some(c=>!ALL_COMPANIES.includes(c))))throw new Error('Select valid BC companies');
+  const lock=new sql.Transaction(await appPool());await lock.begin();
+  try {
+    const result=await new sql.Request(lock).query("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='dispatch-bc-order-pull',@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; SELECT @r Result");
+    if(result.recordset[0].Result<0)throw new Error('A BC order pull is already running. Check sync history.');
+    const pulled=await trackSync('BC dispatch orders',()=>importFromBcWork({companies}),{trigger,companies:companies||ALL_COMPANIES});
+    await lock.commit();return pulled;
+  }catch(e){try{await lock.rollback()}catch{}throw e;}
 }

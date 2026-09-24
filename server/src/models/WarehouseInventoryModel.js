@@ -36,6 +36,41 @@ const GRAINS = {
   year:  'DATEFROMPARTS(YEAR(f.[PostingDate]), 1, 1)',
 };
 
+// ── Pending WMS production (not yet posted to the item ledger) ───────────────
+// Live BC (172.16.10.8 / FCL) per-company tables, reached via the warehouse's
+// linked server. Status=0 = pending; WMS EntryType 0=Output→ILE 6, 1=Consumption
+// →ILE 5 (consumption is negated so it draws stock down like the ledger). No cost
+// on the journal, so cost is ESTIMATED as qty × item unit/standard cost.
+const WMS_COMPANIES = [['FCL', 'FCL1'], ['CM', 'CM3'], ['RMK', 'RMK'], ['FLM', 'FLM1']];
+const WMS_GUID = '23dc970e-11e8-4d9b-8613-b7582aec86ba';
+const FACT_COLS = 'Company, ItemNo, PostingDate, EntryType, LocationCode, InventoryPostingGroup, Quantity, InvoicedQuantity, CostAmountActual, SalesAmountActual';
+
+function pendingWmsUnion() {
+  return WMS_COMPANIES.map(([co, prefix]) => `
+    SELECT '${co}' AS Company,
+      w.[Item No_] COLLATE DATABASE_DEFAULT AS ItemNo,
+      CAST(w.[Date Time] AS date) AS PostingDate,
+      CASE w.[EntryType] WHEN 0 THEN 6 ELSE 5 END AS EntryType,
+      w.[Location Code] COLLATE DATABASE_DEFAULT AS LocationCode,
+      di.[Inventory Posting Group] AS InventoryPostingGroup,
+      CASE WHEN w.[EntryType]=0 THEN w.[Quantity] ELSE -w.[Quantity] END AS Quantity,
+      CAST(0 AS decimal(18,4)) AS InvoicedQuantity,
+      (CASE WHEN w.[EntryType]=0 THEN w.[Quantity] ELSE -w.[Quantity] END)
+        * COALESCE(NULLIF(di.[Unit Cost],0), di.[Standard Cost], 0) AS CostAmountActual,
+      CAST(0 AS decimal(18,4)) AS SalesAmountActual
+    FROM [FC-BC-DEV-DB01].[FCL].[dbo].[${prefix}$WMS Production Journal Line$${WMS_GUID}] w
+    LEFT JOIN dbo.dim_ALLITEMS_MV di
+      ON di.[No_] COLLATE DATABASE_DEFAULT = w.[Item No_] COLLATE DATABASE_DEFAULT AND di.[COMPANY]='${co}'
+    WHERE w.[Status]=0 AND w.[EntryType] IN (0,1)`).join('\n    UNION ALL\n');
+}
+
+/** FROM source: the posted fact, optionally UNIONed with pending WMS production. */
+function factSource(includePendingWms) {
+  return includePendingWms
+    ? `(SELECT ${FACT_COLS} FROM dbo.fact_ILE_MV UNION ALL ${pendingWmsUnion()}) f`
+    : 'dbo.fact_ILE_MV f';
+}
+
 /** Distinct filter values for the report UI (from the fact). */
 export async function dimensions() {
   const p = await pool();
@@ -63,7 +98,7 @@ export async function dimensions() {
  * type (signed qty + cost), and the closing balance as at dateTo. Reconciles:
  * opening + Σ(entry-type movements) = closing, in both qty and cost.
  */
-export async function stockCard({ locations, dateFrom, dateTo, companies, postingGroups, items } = {}) {
+export async function stockCard({ locations, dateFrom, dateTo, companies, postingGroups, items, includePendingWms } = {}) {
   const p = await pool();
   const req = p.request();
   const to   = dateTo   || new Date().toISOString().slice(0, 10);
@@ -93,7 +128,7 @@ export async function stockCard({ locations, dateFrom, dateTo, companies, postin
       ${etCols},
       SUM(f.[Quantity])         AS closeQty,
       SUM(f.[CostAmountActual]) AS closeCost
-    FROM dbo.fact_ILE_MV f
+    FROM ${factSource(includePendingWms)}
     LEFT JOIN (SELECT [No_], MAX([Description]) AS [Description] FROM dbo.dim_ALLITEMS_MV GROUP BY [No_]) i ON i.[No_] = f.[ItemNo]
     WHERE ${where.join(' AND ')}
     GROUP BY f.[LocationCode], f.[ItemNo]
@@ -188,6 +223,9 @@ export async function report(o = {}) {
   const pg  = inClause(req, o.postingGroups, 'pg',  sql.NVarChar(40));  if (pg)  where.push(`f.[InventoryPostingGroup] IN (${pg})`);
   const et  = inClause(req, o.entryTypes,    'et',  sql.Int);           if (et)  where.push(`f.[EntryType] IN (${et})`);
   const it  = inClause(req, o.items,         'it',  sql.NVarChar(40));  if (it)  where.push(`f.[ItemNo] IN (${it})`);
+  // Sellable-only: keep items flagged Sellable in the item dimension (mirrors the
+  // sales-report byproduct include/exclude).
+  if (o.sellableOnly) where.push(`EXISTS (SELECT 1 FROM dbo.dim_ALLITEMS_MV s WHERE s.[No_]=f.[ItemNo] AND s.[Sellable]=1)`);
 
   const selDims = dims.map((d) => `${DIMENSIONS[d].col} AS [${d}]`);
   const grpCols = dims.map((d) => DIMENSIONS[d].col);
@@ -213,7 +251,7 @@ export async function report(o = {}) {
       SUM(f.[CostAmountActual])  AS [cost],
       SUM(f.[SalesAmountActual]) AS [sales],
       COUNT(*)                   AS [entries]
-    FROM dbo.fact_ILE_MV f
+    FROM ${factSource(o.includePendingWms)}
     ${itemJoin}
     ${locJoin}
     WHERE ${where.join(' AND ')}

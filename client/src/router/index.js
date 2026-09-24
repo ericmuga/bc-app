@@ -1,3 +1,4 @@
+import { REPORT_GROUPS, reportGroupsForRole } from '../../../shared/reportAccess.mjs'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, ROLES } from '@/lib/access.js'
@@ -21,11 +22,14 @@ function defaultRouteForRole(role) {
   const r = normalizeRole(role)
   if (canAccessOrders(r))   return '/orders/scan'
   if (canAccessInvoices(r)) return '/invoices/scan'
-  if (canAccessReports(r))  return '/reports'
+  if (['sales', 'sales-admin', 'analyst', 'finance', 'costing', 'production'].includes(r)) return '/analytics'
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
   if (canAccessProduction(r)) return '/pos/production'
   if (canAccessCosting(r))  return '/costing'
+  if (r === 'chiller-attendant') return '/dispatch/chillers'
+  if (r === 'assembler') return '/dispatch/assembly'
+  if (r === 'packer') return '/dispatch/packing'
   if (canAccessDispatch(r)) return '/dispatch/registry'
   if (canAccessReporting(r)) return '/reporting/legacy'
   return '/login'
@@ -38,6 +42,7 @@ const routes = [
     path: '/',
     component: () => import('@/components/base/AppShell.vue'),
     children: [
+      { path: 'analytics', name: 'Analytics', component: () => import('@/pages/AnalyticsPage.vue') },
       { path: '', redirect: () => defaultRouteForRole(useAuthStore().effectiveRole) },
       { path: 'orders/scan',    name: 'OrderScan',    component: () => import('@/pages/OrderScanPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.DISPATCH] } },
       { path: 'orders',         name: 'Orders',       component: () => import('@/pages/OrdersListPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.DISPATCH] } },
@@ -72,13 +77,16 @@ const routes = [
       { path: 'pos/chef-reports',    name: 'ChefReports',     component: () => import('@/pages/ChefReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SALES_ADMIN_ROLE, CHEF_ROLE] } },
       { path: 'no-access',      name: 'NoAccess',     component: () => import('@/pages/AccessDenied.vue') },
       { path: 'releases',       name: 'Releases',     component: () => import('@/pages/ReleasesPage.vue') },
-      { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
+      { path: 'pos/reports',        name: 'PosReports',    component: () => import('@/pages/PosReportsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE, CHEF_ROLE] } },
       { path: 'pos/help',           name: 'PosHelp',       component: () => import('@/pages/HelpPage.vue'),       meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'dispatch/registry',   name: 'DispatchRegistry',   component: () => import('@/pages/DispatchRegistryPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'dispatch-registry'] } },
       { path: 'dispatch/assignment', name: 'DispatchAssignment', component: () => import('@/pages/DispatchAssignmentPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor'] } },
-      { path: 'dispatch/assembly',   name: 'DispatchAssembly',   component: () => import('@/pages/DispatchAssemblyPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'packer'] } },
+      { path: 'dispatch/assembly',   name: 'DispatchAssembly',   component: () => import('@/pages/DispatchAssemblyPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'assembler', 'packer'] } },
       { path: 'dispatch/packing',    name: 'DispatchPacking',    component: () => import('@/pages/DispatchPackingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'packer', 'checker'] } },
       { path: 'dispatch/loading',    name: 'DispatchLoading',    component: () => import('@/pages/DispatchLoadingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'loader'] } },
+      { path: 'dispatch/chiller-movements', name: 'DispatchChillerMovements', component: () => import('@/pages/DispatchChillerMovementsPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant'] } },
+      { path: 'dispatch/chillers', name: 'DispatchChillers', component: () => import('@/pages/DispatchChillersPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant'] } },
+      { path: 'dispatch/reports', name: 'DispatchReports', component: () => import('@/pages/DispatchReportsPage.vue'), meta: { roles: ['admin','dispatch-supervisor','assembler','packer','checker','loader','dispatch-registry','chiller-attendant'] } },
       { path: 'dispatch/setup',      name: 'DispatchSetup',      component: () => import('@/pages/DispatchSetupPage.vue'),      meta: { roles: ['admin', 'dispatch-supervisor'] } },
       { path: 'admin/setup',          name: 'AdminSetup',    component: () => import('@/pages/AdminSetupPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'admin/audit',          name: 'AuditLog',      component: () => import('@/pages/AuditLogPage.vue'),      meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
@@ -88,6 +96,12 @@ const routes = [
 
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ]
+
+// Use the same report policy for direct URLs and visible navigation.
+for (const route of routes.find(r => r.path === '/').children) {
+  const report = REPORT_GROUPS.flatMap(g => g.reports).find(r => r.path === '/' + route.path)
+  if (report) route.meta = { ...route.meta, roles: report.roles }
+}
 
 const router = createRouter({
   history: createWebHistory(),

@@ -77,7 +77,7 @@ export const auditApi = {
 
 // ── POS terminal ──────────────────────────────────────────────────────────────
 export const posApi = {
-  getItems:       (company)    => api.get('/pos/items', { params: company ? { company } : {} }),
+  getItems:       (company, orderId) => api.get('/pos/items', { params: { company: company || undefined, orderId: orderId || undefined } }),
   getPaymentTypes:()           => api.get('/pos/payment-types'),
   getMyShop:      ()           => api.get('/pos/my-shop'),
   listMyShops:    ()           => api.get('/pos/my-shops'),

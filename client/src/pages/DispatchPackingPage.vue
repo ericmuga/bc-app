@@ -1,381 +1,116 @@
 <template>
-  <div class="pk-page">
-    <div class="pk-head">
-      <div>
-        <h2>Packing</h2>
-        <p class="sub">Box assembled orders: open a box, add items, checker confirms, close to print the QR label.</p>
-      </div>
-      <div class="head-actions">
-        <Select v-if="isElevated" v-model="viewAs" :options="packers" option-label="name" option-value="userId"
-                show-clear placeholder="View as packer…" class="view-as" filter @change="loadList" />
-        <Button icon="pi pi-refresh" size="small" severity="secondary" :loading="loading" @click="reload" />
-      </div>
+  <div class="packing-page">
+    <header><div><h2>Packing</h2><p>Pack assembled orders into vessels, confirm boxes and print labels.</p></div><Button label="Refresh" icon="pi pi-refresh" :loading="loading" @click="load" /></header>
+    <Message v-if="error" severity="error">{{ error }}</Message>
+    <div class="session">
+      <template v-if="run"><div><strong>Packing session</strong><p>Confirmer: {{ run.CheckerName }}</p><small>Started {{ time(run.StartedAt) }}</small></div><output>{{ elapsed }}</output><Button label="End session" severity="secondary" :disabled="busy" @click="endRun" /></template>
+      <template v-else><Select v-model="checkerId" :options="checkers" option-label="name" option-value="userId" placeholder="Select confirmer" filter /><Button label="Start packing session" icon="pi pi-play" :disabled="!checkerId" :loading="busy" @click="startRun" /></template>
     </div>
-
-    <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-
-    <!-- Worklist -->
-    <div v-if="!order">
-      <div v-if="!loading && !orders.length" class="empty">No orders ready for packing.</div>
-      <div class="cards">
-        <button v-for="o in orders" :key="o.DispatchOrderId" class="ord-card" @click="openOrder(o)">
-          <div class="oc-top"><span class="oc-no">{{ o.DispatchNo }}</span><span class="oc-co">{{ o.Company }}</span></div>
-          <div class="oc-cust">{{ o.CustomerName }}</div>
-          <div class="oc-meta"><span>{{ o.Status }}</span><span class="oc-box">{{ o.BoxCount }} boxes</span></div>
-        </button>
-      </div>
-    </div>
-
-    <!-- Packing detail -->
-    <div v-else class="detail">
-      <div class="det-bar">
-        <Button icon="pi pi-arrow-left" label="Back" text size="small" @click="closeOrder" />
-        <div class="det-title">{{ order.DispatchNo }} · {{ order.CustomerName }} <span class="muted">({{ order.Company }})</span></div>
-        <div class="spacer" />
-        <Button label="Complete packing" icon="pi pi-check-circle" size="small" severity="success"
-                :disabled="!order.session || anyOpenBox || allPacked === false && false" :loading="busyComplete" @click="complete" />
-      </div>
-
-      <!-- Session -->
-      <div v-if="!order.session" class="session-start">
-        <span>Checker:</span>
-        <Select v-model="checkerId" :options="checkers" option-label="name" option-value="userId" placeholder="Select checker…" filter class="chk" />
-        <Button label="Start packing session" icon="pi pi-play" size="small" :disabled="!checkerId" :loading="busySession" @click="startSession" />
-      </div>
-      <div v-else class="session-info">
-        <span><i class="pi pi-user" /> Packer: <strong>{{ order.session.PackerName || '—' }}</strong></span>
-        <span><i class="pi pi-verified" /> Checker: <strong>{{ order.session.CheckerName || '—' }}</strong></span>
-      </div>
-
-      <div v-if="order.session" class="pos-grid">
-        <!-- Items panel -->
-        <div class="panel">
-          <div class="panel-head">Order items <span class="muted">(tap to add to the open box)</span></div>
-          <div class="scan-row">
-            <i class="pi pi-qrcode" />
-            <InputText v-model="scan" placeholder="Scan / type item…" @keyup.enter="onScan" />
+    <nav class="tabs"><button v-for="t in tabs" :key="t.key" :class="{active:tab===t.key}" @click="tab=t.key;load()">{{ t.label }}</button><RouterLink to="/dispatch/reports">Reports</RouterLink></nav>
+    <div class="filters"><InputText v-model="search" placeholder="Search order / customer" /><InputText v-model="date" type="date" /></div>
+    <div v-if="!visibleOrders.length && !loading" class="empty">No orders for this selection.</div>
+    <div class="view-toggle" role="group" aria-label="Order display"><button type="button" :aria-pressed="orderView==='cards'" @click="setOrderView('cards')"><i class="pi pi-th-large" aria-hidden="true" /> Cards</button><button type="button" :aria-pressed="orderView==='list'" @click="setOrderView('list')"><i class="pi pi-list" aria-hidden="true" /> List</button></div>
+      <div v-if="orderView==='cards'" class="order-grid"><article v-for="o in visibleOrders" :key="o.DispatchOrderId" class="card"><strong>{{ o.OrderNo }}</strong><span>{{ o.CustomerName }}</span><small>{{ o.Company }} · {{ o.Status }} · {{ o.BoxCount }} boxes</small><Button :label="tab==='packed'?'View packed order':'Pick order'" :disabled="tab!=='packed'&&!run" @click="openOrder(o)" /></article></div>
+    <div v-else class="order-list" tabindex="0" role="region" aria-label="Orders list"><table><thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Company</th><th scope="col">Shipment</th><th scope="col">Status</th><th scope="col">Boxes</th><th scope="col">Action</th></tr></thead><tbody><tr v-for="o in visibleOrders" :key="o.DispatchOrderId"><td>{{ o.OrderNo }}</td><td>{{ o.CustomerNo }} - {{ o.CustomerName }}</td><td>{{ o.Company }}</td><td>{{ String(o.ShipmentDate||'').slice(0,10) }}</td><td>{{ o.Status }}</td><td>{{ o.BoxCount }}</td><td><Button :label="tab==='packed'?'View packed order':'Pick order'" :disabled="tab!=='packed'&&!run" @click="openOrder(o)" /></td></tr></tbody></table></div>
+    <Dialog v-model:visible="orderVisible" modal :header="order ? `${order.OrderNo} · ${order.CustomerName}`:'Order'" :style="{width:'68rem'}" :breakpoints="{'800px':'98vw'}" :closable="!busy">
+      <template v-if="order">
+        <div class="toolbar"><span>{{ order.Company }} · {{ order.Status }} · {{ elapsed }}</span><Button v-if="editable" label="Release order" severity="secondary" @click="release" /><Button v-if="editable" label="Complete packing" :disabled="!allPacked||!!currentBox" @click="complete" /></div>
+        <Message v-if="orderError" severity="error">{{ orderError }}</Message>
+        <template v-if="editable">
+          <div class="toolbar" v-if="!currentBox"><Select v-model="vesselId" :options="vessels" option-label="Description" option-value="VesselTypeId" placeholder="Choose vessel" filter /><Button label="Open box" :disabled="!vesselId" :loading="busy" @click="openBox" /></div>
+          <div v-else class="box-banner"><strong>{{ currentBox.BoxNo }} · {{ currentBox.VesselCode }}</strong><Button label="Confirm, close and label" icon="pi pi-lock" :disabled="!currentBox.lines.length" :loading="busy" @click="closeBox" /></div>
+          <div class="toolbar"><InputText v-model="scan" placeholder="Scan barcode / item number" @keyup.enter="scanItem" /><Button label="Find" @click="scanItem" /><Button label="Correct barcode" severity="secondary" @click="barcodeVisible=true" /></div>
+        </template>
+        <h3>Items</h3><div class="line-grid"><article v-for="line in order.lines" :key="line.LineId" class="card" :class="{done:remaining(line)<=0}">
+          <strong>{{ line.ItemNo }} · {{ line.Description }}</strong><span>{{ line.PackedQty }} / {{ line.AssembledQty ?? 0 }} {{ line.Uom }} packed</span>
+          <small>Assembly batch {{ line.BatchNo || 'not recorded' }} · {{ line.PackedPieces }} / {{ line.AssembledPieces ?? '—' }} pieces</small>
+          <Button :label="remaining(line)<=0?'Packed':'Pack item'" :disabled="!editable||!currentBox||remaining(line)<=0" @click="editLine(line)" />
+        </article></div>
+        <h3>Boxes</h3><article v-for="b in order.boxes" :key="b.BoxId" class="box-card">
+          <div class="toolbar"><strong>{{ b.BoxNo }} · {{ b.VesselCode }} · {{ b.Status }}</strong><span>{{ b.GrossWeight }} kg gross</span>
+            <Button v-if="b.Status==='closed'||b.Status==='loaded'" label="Label" icon="pi pi-print" @click="showLabel(b)" />
+            <Button v-if="b.Status==='closed'&&!b.LoadedAt&&!b.LoadingSessionId" label="Unpack (supervisor)" severity="warn" :disabled="!run" @click="requestUnpack(b)" />
           </div>
-          <div class="item-list">
-            <button v-for="l in order.lines" :key="l.LineId" class="item"
-                    :class="{ done: remaining(l) <= 0, hl: highlight === l.ItemNo }"
-                    :disabled="!currentBox || remaining(l) <= 0" @click="addItem(l)">
-              <div class="i-main"><span class="i-no">{{ l.ItemNo }}</span><span class="i-part" v-if="l.Part">{{ l.Part }}</span></div>
-              <div class="i-desc">{{ l.Description }}</div>
-              <div class="i-qty">packed {{ fmt(l.PackedQty) }} / {{ fmt(l.AssembledQty ?? l.OrderQty) }} {{ l.Uom }}
-                <span v-if="remaining(l) > 0" class="i-rem">· {{ fmt(remaining(l)) }} left</span></div>
-            </button>
-          </div>
-        </div>
-
-        <!-- Box panel -->
-        <div class="panel">
-          <div class="panel-head">
-            Current box
-            <Button v-if="!currentBox" label="Open box" icon="pi pi-plus" size="small" @click="showOpenBox = true" />
-          </div>
-
-          <div v-if="showOpenBox && !currentBox" class="open-box">
-            <Select v-model="vesselTypeId" :options="vesselTypes" option-label="Code" option-value="VesselTypeId" placeholder="Vessel size…" class="vsel" />
-            <Button label="Create" size="small" :disabled="!vesselTypeId" :loading="busyBox" @click="openBox" />
-          </div>
-
-          <div v-if="currentBox">
-            <div class="box-no">{{ currentBox.boxNo }} · {{ currentBoxVessel }}</div>
-            <table class="box-lines">
-              <thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Weight</th><th></th></tr></thead>
-              <tbody>
-                <tr v-for="bl in currentBox.lines" :key="bl.BoxLineId">
-                  <td>{{ bl.ItemNo }}</td><td class="n">{{ fmt(bl.Qty) }}</td><td class="n">{{ fmt(bl.Weight) }}</td>
-                  <td><Button icon="pi pi-times" text size="small" severity="danger" @click="removeLine(bl)" /></td>
-                </tr>
-                <tr v-if="!currentBox.lines.length"><td colspan="4" class="muted">Tap items on the left to add…</td></tr>
-              </tbody>
-            </table>
-            <div class="box-close">
-              <span>Gross weight</span>
-              <InputNumber v-model="grossWeight" :min="0" :maxFractionDigits="4" inputClass="gw-in" />
-              <Button label="Checker confirm & close" icon="pi pi-lock" size="small" severity="success"
-                      :disabled="!currentBox.lines.length" :loading="busyClose" @click="closeBox" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Closed boxes -->
-      <div v-if="order.boxes.length" class="closed-boxes">
-        <div class="panel-head">Boxes</div>
-        <div class="box-cards">
-          <div v-for="b in order.boxes" :key="b.BoxId" class="box-card" :class="{ closed: b.Status === 'closed' }">
-            <div class="bc-no">{{ b.BoxNo }}</div>
-            <div class="bc-meta">{{ b.VesselCode || '—' }} · {{ b.LineCount }} items · {{ b.Status }}</div>
-            <div v-if="b.Status === 'closed'" class="bc-gw">{{ fmt(b.GrossWeight) }} kg</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- QR label dialog after close -->
-    <Dialog v-model:visible="qr.open" modal header="Box label" :style="{ width: '360px' }">
-      <div v-if="qr.label" class="qr-wrap">
-        <img v-if="qr.image" :src="qr.image" class="qr-img" />
-        <div class="qr-box">{{ qr.label.boxNo }}</div>
-        <div class="qr-fields">
-          <div><strong>Order {{ qr.label.orderNo }}</strong> · Part {{ qr.label.part }}</div>
-          <div>Est. weight <strong>{{ fmt(qr.label.estWeight) }} kg</strong></div>
-          <div class="q-sub">{{ qr.label.customerName }}</div>
-          <div class="q-sub">Salesperson: {{ qr.label.salesperson || '—' }}</div>
-          <div class="q-sub">Route: {{ qr.label.route || '—' }} · Ship: {{ qr.label.shipmentDate || '—' }}</div>
-          <div class="q-sub">LPO: {{ qr.label.lpo || '—' }}</div>
-        </div>
-      </div>
-      <template #footer>
-        <Button label="Print" icon="pi pi-print" @click="printQr" />
-        <Button label="Done" text @click="qr.open = false" />
+          <div v-for="line in b.lines" :key="line.BoxLineId" class="box-line"><span>{{ line.ItemNo }} · {{ line.Qty }} · {{ line.Pieces }} pieces · {{ line.Weight }} kg · Batch {{ line.BatchNo }}</span><Button v-if="b.Status==='open'&&editable" icon="pi pi-times" aria-label="Remove from box" severity="danger" text @click="removeLine(line)" /></div>
+        </article>
       </template>
     </Dialog>
+    <Dialog v-model:visible="lineVisible" modal header="Pack item" :style="{width:'30rem'}" :breakpoints="{'640px':'98vw'}" :closable="!busy">
+      <form v-if="editing" class="entry" @submit.prevent="saveLine"><strong>{{ editing.ItemNo }} · {{ editing.Description }}</strong><p>Remaining {{ remaining(editing) }} {{ editing.Uom }}. Assembly values are prefilled and editable.</p>
+        <label v-if="weighted">Weight ({{ editing.Uom }})<InputNumber v-model="form.assembledWeight" :min="0" :maxFractionDigits="4" fluid /></label>
+        <label>Pieces<InputNumber v-model="form.pieces" :min="0" :maxFractionDigits="0" fluid /></label><DispatchUnitTranslation :line="editing" :pieces="form.pieces" :weight="form.assembledWeight" :weighted="weighted" @weight="form.assembledWeight=$event" />
+        <label>Batch<InputText v-model="form.batchNo" maxlength="5" fluid /></label>
+        <Message v-if="lineError" severity="error">{{ lineError }}</Message><Button type="submit" label="Mark packed into box" icon="pi pi-check" :loading="busy" />
+      </form>
+    </Dialog>
+    <Dialog v-model:visible="unpackVisible" modal header="Supervisor authorization" :style="{width:'30rem'}" :breakpoints="{'640px':'98vw'}">
+      <form class="entry" @submit.prevent="unpack"><p>Reopen {{ unpackTarget?.BoxNo }}. The old label will be invalidated.</p>
+        <label>Supervisor / admin username<InputText v-model="credentials.username" autocomplete="username" /></label><label>Password<InputText v-model="credentials.password" type="password" autocomplete="current-password" /></label><label>Reason<InputText v-model="credentials.reason" maxlength="250" /></label>
+        <Message v-if="unpackError" severity="error">{{ unpackError }}</Message><Button type="submit" label="Authorize unpacking" severity="warn" :loading="busy" /></form>
+    </Dialog>
+    <Dialog v-model:visible="labelVisible" modal header="Box label" :style="{width:'360px'}"><div v-if="labelData" class="label"><img :src="labelData.qrImage" alt="Box QR code" /><strong>{{ labelData.label.boxNo }}</strong><span>Order {{ labelData.label.orderNo }}</span><span>{{ labelData.label.customerName }}</span><span>{{ labelData.label.estWeight }} kg net · {{ labelData.label.grossWeight }} kg gross</span><span>Batch {{ labelData.label.batches }}</span><span>Confirmed by {{ labelData.label.confirmer }}</span></div><template #footer><Button label="Print" icon="pi pi-print" @click="printLabel" /></template></Dialog>
+    <DispatchBarcodeDialog v-model="barcodeVisible" :items="order?.lines||[]" :company="order?.Company||'FCL'" :scanned="lastScan" @saved="refreshOrder" />
   </div>
 </template>
-
 <script setup>
-import { ref, computed, reactive } from 'vue'
-import { useToast } from 'primevue/usetoast'
-import { useAuthStore } from '@/stores/auth.js'
-import { dispatchApi } from '@/services/dispatch.js'
+import DispatchUnitTranslation from '@/components/DispatchUnitTranslation.vue'
+import {useDispatchOrderView} from '@/lib/useDispatchOrderView.js'
+const {orderView,setOrderView}=useDispatchOrderView()
+import {ref,computed,onMounted,onUnmounted,watch} from 'vue'
+import {dispatchApi} from '@/services/dispatch.js'
+import {assemblyValues,isWeightUnit} from '../../../shared/dispatchAssembly.mjs'
+import DispatchBarcodeDialog from '@/components/DispatchBarcodeDialog.vue'
+import Button from 'primevue/button'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
-import Button from 'primevue/button'
 import Message from 'primevue/message'
 import Dialog from 'primevue/dialog'
-
-const auth = useAuthStore()
-const toast = useToast()
-const isElevated = computed(() => ['admin', 'dispatch-supervisor'].includes(String(auth.effectiveRole || '').toLowerCase()))
-
-const orders = ref([])
-const packers = ref([])
-const vesselTypes = ref([])
-const checkers = ref([])
-const viewAs = ref(null)
-const order = ref(null)
-const loading = ref(false)
-const error = ref(null)
-
-const checkerId = ref(null)
-const showOpenBox = ref(false)
-const vesselTypeId = ref(null)
-const currentBox = ref(null)
-const grossWeight = ref(null)
-const scan = ref('')
-const highlight = ref(null)
-const busySession = ref(false), busyBox = ref(false), busyClose = ref(false), busyComplete = ref(false)
-const qr = reactive({ open: false, image: null, label: null })
-
-const fmt = (n) => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 4 })
-const remaining = (l) => Number(l.AssembledQty ?? l.OrderQty ?? 0) - Number(l.PackedQty || 0)
-const anyOpenBox = computed(() => !!currentBox.value)
-const allPacked = computed(() => (order.value?.lines || []).every(l => remaining(l) <= 0))
-const currentBoxVessel = computed(() => vesselTypes.value.find(v => v.VesselTypeId === currentBox.value?.vesselTypeId)?.Code || currentBox.value?.vesselCode || '')
-
-async function loadList() {
-  loading.value = true; error.value = null
-  try { orders.value = (await dispatchApi.packing(viewAs.value)).data || [] }
-  catch (e) { error.value = e.response?.data?.error || e.message }
-  finally { loading.value = false }
-}
-function reload() { order.value ? refreshOrder() : loadList() }
-
-async function openOrder(row) {
-  currentBox.value = null; showOpenBox.value = false
-  try { order.value = (await dispatchApi.packingOrder(row.DispatchOrderId)).data }
-  catch (e) { toast.add({ severity: 'error', summary: 'Open failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-}
-async function refreshOrder() { if (order.value) { const id = order.value.DispatchOrderId; order.value = (await dispatchApi.packingOrder(id)).data } }
-function closeOrder() { order.value = null; currentBox.value = null; loadList() }
-
-async function startSession() {
-  busySession.value = true
-  try {
-    const checker = checkers.value.find(c => c.userId === checkerId.value)
-    await dispatchApi.startSession(order.value.DispatchOrderId, { checkerUserId: checkerId.value, checkerName: checker?.name })
-    await refreshOrder()
-  } catch (e) { toast.add({ severity: 'error', summary: 'Failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-  finally { busySession.value = false }
-}
-
-async function openBox() {
-  busyBox.value = true
-  try {
-    const vessel = vesselTypes.value.find(v => v.VesselTypeId === vesselTypeId.value)
-    const { data } = await dispatchApi.openBox(order.value.DispatchOrderId, { sessionId: order.value.session.SessionId, vesselTypeId: vesselTypeId.value, vesselCode: vessel?.Code })
-    currentBox.value = { ...data, vesselTypeId: vesselTypeId.value, vesselCode: vessel?.Code, lines: [] }
-    showOpenBox.value = false; vesselTypeId.value = null
-  } catch (e) { toast.add({ severity: 'error', summary: 'Open box failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-  finally { busyBox.value = false }
-}
-
-async function addItem(l) {
-  if (!currentBox.value) { toast.add({ severity: 'warn', summary: 'Open a box first', life: 2500 }); return }
-  const qty = remaining(l)
-  if (qty <= 0) return
-  const weight = l.IsWeighted ? qty : 0
-  try {
-    await dispatchApi.addBoxLine(currentBox.value.boxId, { itemNo: l.ItemNo, description: l.Description, qty, weight })
-    currentBox.value.lines.push({ BoxLineId: `tmp-${Date.now()}-${l.ItemNo}`, ItemNo: l.ItemNo, Qty: qty, Weight: weight })
-    await refreshOrder() // updates packed qty on the item list
-  } catch (e) { toast.add({ severity: 'error', summary: 'Add failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-}
-
-async function removeLine(bl) {
-  if (String(bl.BoxLineId).startsWith('tmp-')) { currentBox.value.lines = currentBox.value.lines.filter(x => x !== bl); return }
-  try { await dispatchApi.removeBoxLine(bl.BoxLineId); currentBox.value.lines = currentBox.value.lines.filter(x => x.BoxLineId !== bl.BoxLineId); await refreshOrder() }
-  catch (e) { toast.add({ severity: 'error', summary: 'Remove failed', detail: e.message, life: 3000 }) }
-}
-
-async function closeBox() {
-  busyClose.value = true
-  try {
-    const { data } = await dispatchApi.closeBox(currentBox.value.boxId, {
-      checkerUserId: order.value.session.CheckerUserId, checkerName: order.value.session.CheckerName, grossWeight: grossWeight.value,
-    })
-    qr.image = data.qrImage; qr.label = data.label; qr.open = true
-    currentBox.value = null; grossWeight.value = null
-    await refreshOrder()
-  } catch (e) { toast.add({ severity: 'error', summary: 'Close failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-  finally { busyClose.value = false }
-}
-
-async function complete() {
-  busyComplete.value = true
-  try {
-    await dispatchApi.completePacking(order.value.DispatchOrderId)
-    toast.add({ severity: 'success', summary: 'Packed', detail: 'Order marked packed — ready for loading.', life: 3000 })
-    closeOrder()
-  } catch (e) { toast.add({ severity: 'error', summary: 'Failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
-  finally { busyComplete.value = false }
-}
-
-function onScan() {
-  const q = scan.value.trim().toLowerCase(); scan.value = ''
-  if (!q) return
-  const hit = (order.value?.lines || []).find(l => String(l.Barcode || '').toLowerCase() === q || String(l.ItemNo || '').toLowerCase() === q)
-  if (!hit) { toast.add({ severity: 'warn', summary: 'Not found', detail: q, life: 2500 }); return }
-  highlight.value = hit.ItemNo
-  addItem(hit)
-}
-
-function printQr() {
-  const L = qr.label; if (!L) return
-  const w = window.open('', '_blank'); if (!w) return
-  const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
-  w.document.write(`<html><head><title>${esc(L.boxNo)}</title>
-    <style>
-      body{font-family:Segoe UI,Arial,sans-serif;text-align:center;margin:8mm;color:#111;}
-      img{width:230px;height:230px;}
-      .b{font-weight:800;font-size:20px;margin:6px 0 2px;}
-      .big{font-size:15px;font-weight:700;}
-      .r{font-size:13px;margin:2px 0;}
-      @media print{@page{margin:6mm;}}
-    </style></head><body>
-    <img src="${qr.image}" />
-    <div class="b">${esc(L.boxNo)}</div>
-    <div class="big">Order ${esc(L.orderNo)} &middot; Part ${esc(L.part)}</div>
-    <div class="r">Est. weight <b>${fmt(L.estWeight)} kg</b></div>
-    <div class="r">${esc(L.customerName)}</div>
-    <div class="r">Salesperson: ${esc(L.salesperson || '—')}</div>
-    <div class="r">Route: ${esc(L.route || '—')} &nbsp; Ship: ${esc(L.shipmentDate || '—')}</div>
-    <div class="r">LPO: ${esc(L.lpo || '—')}</div>
-    <script>window.onload=function(){window.print()}<\/script>
-    </body></html>`)
-  w.document.close()
-}
-
-async function loadRefData() {
-  try { vesselTypes.value = (await dispatchApi.vesselTypes()).data || [] } catch { /* */ }
-  try { checkers.value = (await dispatchApi.checkers()).data || [] } catch { /* */ }
-  if (isElevated.value) { try { packers.value = (await dispatchApi.assemblers()).data || [] } catch { /* */ } }
-}
-
-loadRefData(); loadList()
+const tabs=[{key:'pending',label:'Pending packing'},{key:'ongoing',label:'Ongoing'},{key:'packed',label:'Packed'}]
+const tab=ref('pending'),run=ref(null),checkerId=ref(null),checkers=ref([]),vessels=ref([]),vesselId=ref(null),orders=ref([]),loading=ref(false),busy=ref(false),error=ref(''),search=ref(''),date=ref(''),now=ref(Date.now())
+const order=ref(null),orderVisible=ref(false),orderError=ref(''),editing=ref(null),lineVisible=ref(false),lineError=ref(''),form=ref({}),requestId=ref(''),scan=ref(''),lastScan=ref(''),barcodeVisible=ref(false)
+const unpackVisible=ref(false),unpackTarget=ref(null),credentials=ref({}),unpackError=ref(''),labelVisible=ref(false),labelData=ref(null)
+const msg=e=>e.response?.data?.error||e.message,time=v=>new Date(v).toLocaleString('en-KE',{timeZone:'Africa/Nairobi'})
+const elapsed=computed(()=>{const s=Math.max(0,Math.floor((now.value-new Date(run.value?.StartedAt||now.value).getTime())/1000));return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map(n=>String(n).padStart(2,'0')).join(':')})
+const visibleOrders=computed(()=>orders.value.filter(o=>`${o.OrderNo} ${o.CustomerName}`.toLowerCase().includes(search.value.toLowerCase())&&(!date.value||String(o.ShipmentDate||'').slice(0,10)===date.value)))
+const currentBox=computed(()=>order.value?.boxes.find(b=>b.Status==='open'))
+const editable=computed(()=>!!run.value&&['assembled','packing'].includes(order.value?.Status))
+const remaining=l=>Math.max(0,Number(l.AssembledQty||0)-Number(l.PackedQty||0))
+const allPacked=computed(()=>order.value?.lines.every(l=>remaining(l)<0.00005&&(l.AssembledPieces==null||Number(l.AssembledPieces)===Number(l.PackedPieces))))
+const weighted=computed(()=>isWeightUnit(editing.value?.Uom)||!!editing.value?.IsWeighted)
+watch(unpackVisible,v=>{if(!v)credentials.value={}})
+async function load(){loading.value=true;error.value='';try{const [r,o,v,c]=await Promise.all([dispatchApi.currentPackingRun(),dispatchApi.packing(tab.value),dispatchApi.vesselTypes(),dispatchApi.checkers()]);run.value=r.data;orders.value=o.data;vessels.value=v.data;checkers.value=c.data}catch(e){error.value=msg(e)}finally{loading.value=false}}
+async function startRun(){busy.value=true;try{run.value=(await dispatchApi.startPackingRun(checkerId.value)).data}catch(e){error.value=msg(e)}finally{busy.value=false}}
+async function endRun(){busy.value=true;try{await dispatchApi.endPackingRun(run.value.RunId);run.value=null;orderVisible.value=false;await load()}catch(e){error.value=msg(e)}finally{busy.value=false}}
+async function openOrder(o){orderError.value='';try{if(o.Status!=='packed'&&o.Status!=='loaded')await dispatchApi.claimOrder(o.DispatchOrderId,'packing',run.value.RunId);order.value=(await dispatchApi.packingOrder(o.DispatchOrderId)).data;orderVisible.value=true}catch(e){error.value=msg(e)}}
+async function refreshOrder(){if(order.value)order.value=(await dispatchApi.packingOrder(order.value.DispatchOrderId)).data}
+async function release(){try{await dispatchApi.releaseOrder(order.value.DispatchOrderId);orderVisible.value=false;await load()}catch(e){orderError.value=msg(e)}}
+async function openBox(){busy.value=true;try{await dispatchApi.openBox(order.value.DispatchOrderId,{vesselTypeId:vesselId.value});await refreshOrder()}catch(e){orderError.value=msg(e)}finally{busy.value=false}}
+function newRequestId(){const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const h=[...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`}
+function editLine(l){editing.value=l;form.value={pieces:l.AssembledPieces==null?(isWeightUnit(l.Uom)?null:remaining(l)):Math.max(0,l.AssembledPieces-l.PackedPieces),assembledWeight:remaining(l),batchNo:l.BatchNo||''};requestId.value=newRequestId();lineError.value='';lineVisible.value=true}
+async function saveLine(){lineError.value='';try{assemblyValues(editing.value,form.value)}catch(e){lineError.value=e.message;return}busy.value=true;try{await dispatchApi.addBoxLine(currentBox.value.BoxId,{...form.value,lineId:editing.value.LineId,requestId:requestId.value});lineVisible.value=false;await refreshOrder()}catch(e){lineError.value=msg(e)}finally{busy.value=false}}
+async function removeLine(l){try{await dispatchApi.removeBoxLine(l.BoxLineId);await refreshOrder()}catch(e){orderError.value=msg(e)}}
+async function closeBox(){busy.value=true;try{labelData.value=(await dispatchApi.closeBox(currentBox.value.BoxId,{})).data;labelVisible.value=true;await refreshOrder();await load()}catch(e){orderError.value=msg(e)}finally{busy.value=false}}
+async function complete(){try{await dispatchApi.completePacking(order.value.DispatchOrderId);await refreshOrder();await load()}catch(e){orderError.value=msg(e)}}
+async function showLabel(b){try{labelData.value=(await dispatchApi.boxLabel(b.BoxId)).data;labelVisible.value=true}catch(e){orderError.value=msg(e)}}
+function requestUnpack(b){unpackTarget.value=b;credentials.value={username:'',password:'',reason:''};unpackError.value='';unpackVisible.value=true}
+async function unpack(){busy.value=true;try{await dispatchApi.unpackBox(unpackTarget.value.BoxId,credentials.value);credentials.value={};unpackVisible.value=false;if(run.value)await dispatchApi.claimOrder(order.value.DispatchOrderId,'packing',run.value.RunId);await refreshOrder();await load()}catch(e){unpackError.value=msg(e);credentials.value.password=''}finally{busy.value=false}}
+function scanItem(){lastScan.value=scan.value.trim();const q=lastScan.value.toLowerCase();scan.value='';if(!q)return;const hits=order.value.lines.filter(l=>[l.ItemNo,l.Barcode].some(v=>String(v||'').toLowerCase()===q));const hit=hits.find(l=>remaining(l)>0)||hits[0];if(!hit){barcodeVisible.value=true;return}if(!currentBox.value){orderError.value='Open a box first';return}if(remaining(hit)>0)editLine(hit)}
+function printLabel(){if(!labelData.value)return;const w=window.open('','_blank');if(!w)return;const l=labelData.value.label;const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));w.document.write(`<html><head><title>${esc(l.boxNo)}</title><style>body{font:14px Arial;text-align:center;margin:6mm}img{width:220px}h2{font-size:16px}
+/* Keep order and part cards readable regardless of the surrounding theme. */
+.card,.box-card{background:#fff;color:#111;border-color:#94a3b8}.card small,.box-card small,.card p,.box-card p{color:#374151}
+</style></head><body><img src="${labelData.value.qrImage}"/><h2>${esc(l.boxNo)}</h2><p>Order ${esc(l.orderNo)} · ${esc(l.customerName)}</p><p>${esc(l.estWeight)} kg net / ${esc(l.grossWeight)} kg gross</p><p>Batch ${esc(l.batches)}</p><p>Confirmer ${esc(l.confirmer)}</p><p>Route ${esc(l.route)} · ${esc(l.salesperson)}</p></body></html>`);w.document.close();w.onload=()=>w.print()}
+let timer
+onMounted(()=>{load();timer=setInterval(()=>now.value=Date.now(),1000)})
+onUnmounted(()=>clearInterval(timer))
 </script>
-
 <style scoped>
-.pk-page { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
-.pk-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
-.pk-head h2 { margin: 0; font-size: 20px; }
-.pk-head .sub { margin: 2px 0 0; color: #6b7280; font-size: 13px; max-width: 560px; }
-.head-actions { display: flex; gap: 8px; align-items: center; }
-.view-as { min-width: 190px; }
-.empty { padding: 30px; text-align: center; color: #9ca3af; }
-.muted { color: #98a2b3; }
-.spacer { flex: 1; }
+.order-card,.line-card,.card,.box-card,.session-bar,.session,.box-banner{color:var(--bc-text)}
+.view-toggle{display:flex;gap:.4rem}.view-toggle button{padding:.6rem .9rem;border:1px solid var(--bc-border);border-radius:6px;background:var(--bc-surface-card);color:var(--bc-text);cursor:pointer}.view-toggle button[aria-pressed="true"]{background:var(--bc-surface-raised);border-color:var(--p-primary-color);box-shadow:inset 0 -2px var(--p-primary-color)}
+.order-list{overflow-x:auto;border:1px solid var(--bc-border);border-radius:10px;background:var(--bc-surface-card);color:var(--bc-text)}.order-list table{width:100%;border-collapse:collapse;text-align:left}.order-list th,.order-list td{padding:.8rem;border-bottom:1px solid var(--bc-border)}.order-list th{background:var(--bc-surface-raised);white-space:nowrap}.order-list td:last-child{white-space:nowrap}.order-list tbody tr:hover{background:var(--bc-surface-raised)}
 
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.ord-card { text-align: left; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; background: #fff; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
-.ord-card:hover { border-color: #93c5fd; background: #f8fbff; }
-.oc-top { display: flex; justify-content: space-between; font-size: 12px; }
-.oc-no { font-weight: 700; color: #1e40af; } .oc-co { color: #94a3b8; }
-.oc-cust { font-weight: 700; font-size: 15px; color: #111827; }
-.oc-meta { display: flex; gap: 10px; font-size: 12px; color: #667085; }
+.packing-page{padding:1rem;display:grid;gap:1rem;min-width:0;--packing-accent:#b45309}header,.toolbar,.filters,.session,.box-banner{display:flex;gap:.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap}h2,p{margin:.25rem 0}.session,.box-banner{padding:1rem;border:1px solid #e6b97d;border-left:5px solid var(--packing-accent);border-radius:12px;background:var(--bc-surface-card)}output{font-size:1.7rem;font-variant-numeric:tabular-nums;font-weight:700}.tabs{display:flex;gap:.5rem;border-bottom:1px solid var(--bc-border);overflow-x:auto}.tabs button,.tabs a{border:0;background:transparent;padding:1rem;color:inherit;white-space:nowrap;cursor:pointer;text-decoration:none}.tabs .active{border-bottom:3px solid var(--packing-accent);color:var(--packing-accent);font-weight:700}.order-grid,.line-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem}.card,.box-card{display:grid;gap:.6rem;border:1px solid var(--bc-border);border-radius:10px;padding:1rem;background:var(--bc-surface-card)}.done{border-left:4px solid var(--p-green-500)}.toolbar{margin:.75rem 0}.box-card{margin:.75rem 0}.box-line{display:flex;justify-content:space-between;gap:.5rem;padding:.5rem;border-top:1px solid var(--bc-border)}.entry,.entry label,.label{display:grid;gap:.65rem}.label{text-align:center}.label img{margin:auto;width:220px}.empty{padding:2rem;text-align:center}small{color:var(--bc-text-muted)}@media(max-width:640px){.packing-page{padding:.6rem}.line-grid,.order-grid{grid-template-columns:1fr}.toolbar :deep(input){width:100%}.entry :deep(input){font-size:16px;min-height:44px}.card :deep(button){min-height:44px}}
 
-.det-bar { display: flex; align-items: center; gap: 10px; }
-.det-title { font-weight: 700; }
-.session-start, .session-info { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #eef2f7; border-radius: 10px; font-size: 13px; }
-.session-info span { display: flex; align-items: center; gap: 5px; }
-.chk { min-width: 200px; }
-
-.pos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.panel { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #eef0f3; font-weight: 700; font-size: 13px; }
-.scan-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
-.scan-row :deep(input) { flex: 1; }
-.item-list { display: flex; flex-direction: column; max-height: 52vh; overflow: auto; }
-.item { text-align: left; border: none; border-bottom: 1px solid #f0f2f5; padding: 8px 12px; background: #fff; cursor: pointer; }
-.item:hover:not(:disabled) { background: #f0f7ff; }
-.item:disabled { opacity: .5; cursor: default; }
-.item.done { background: #f0fdf4; }
-.item.hl { background: #eff6ff; }
-.i-main { display: flex; gap: 8px; align-items: center; }
-.i-no { font-weight: 700; }
-.i-part { font-size: 10px; font-weight: 700; background: #e5e7eb; padding: 0 6px; border-radius: 999px; }
-.i-desc { font-size: 11px; color: #98a2b3; }
-.i-qty { font-size: 12px; color: #667085; } .i-rem { color: #b45309; font-weight: 600; }
-
-.open-box { display: flex; gap: 8px; padding: 10px; align-items: center; }
-.vsel { flex: 1; }
-.box-no { padding: 8px 12px; font-weight: 700; color: #1e40af; }
-.box-lines { width: 100%; border-collapse: collapse; font-size: 13px; }
-.box-lines th, .box-lines td { padding: 5px 10px; border-bottom: 1px solid #f0f2f5; text-align: left; }
-.box-lines .n { text-align: right; }
-.box-close { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
-:deep(.gw-in) { width: 110px; text-align: right; }
-
-.closed-boxes { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
-.box-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; padding: 10px; }
-.box-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; }
-.box-card.closed { border-color: #86efac; background: #f0fdf4; }
-.bc-no { font-weight: 700; }
-.bc-meta { font-size: 11px; color: #667085; }
-.bc-gw { font-size: 12px; font-weight: 600; }
-
-.qr-wrap { text-align: center; }
-.qr-img { width: 220px; height: 220px; }
-.qr-box { font-weight: 800; font-size: 16px; margin-top: 6px; }
-.qr-fields { margin-top: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
-.qr-fields .q-sub { color: #667085; font-size: 12px; }
-
-@media (max-width: 820px) { .pos-grid { grid-template-columns: 1fr; } }
-@media (prefers-color-scheme: dark) {
-  .pk-head .sub, .muted { color: #94a3b8; }
-  .ord-card, .panel, .box-card, .closed-boxes { background: #131a26; border-color: #2c3a4f; }
-  .ord-card:hover { background: #18222f; }
-  .oc-cust, .det-title { color: #f1f5f9; }
-  .session-start, .session-info, .panel-head, .scan-row { background: #1f2937; }
-  .panel-head { border-bottom-color: #2c3a4f; }
-  .item { background: #131a26; border-bottom-color: #212b3a; color: #e5e7eb; }
-  .item:hover:not(:disabled) { background: #17233a; }
-  .item.done { background: #10231a; }
-  .box-lines th, .box-lines td { border-bottom-color: #212b3a; color: #e5e7eb; }
-  .box-card.closed { background: #10231a; border-color: #16653480; }
-}
+/* Keep order and part cards readable regardless of the surrounding theme. */
+.card,.box-card{background:#fff;color:#111;border-color:#94a3b8}.card small,.box-card small,.card p,.box-card p{color:#374151}
 </style>

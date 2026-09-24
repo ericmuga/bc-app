@@ -1,11 +1,15 @@
+import { priceWindowSql, pricePrioritySql } from '../services/posPricePolicy.js';
+import { syncShopPricesFromBc } from './PosShopPriceModel.js';
+import { paymentReference } from '../../../shared/paymentReference.mjs';
 /**
  * models/PosModel.js
  * POS module — app-DB CRUD for categories, items, payment types, orders, payments.
  * BC queries for listing PDA items available to add to the POS catalogue.
  */
 import { db as appDb, sql } from '../db/pool.js';
+import { CONTACT_ROUTE_LENGTH, contactRoute } from '../services/contactRoute.js';
 import { bcDb } from '../db/bcPool.js';
-import { bcTable, extCol, resolveCompanies, ALL_COMPANIES } from '../services/bcTables.js';
+import { bcTable, extCol, resolveCompanies } from '../services/bcTables.js';
 import logger from '../services/logger.js';
 import bcrypt from 'bcryptjs';
 
@@ -133,7 +137,7 @@ export async function listPosItems(opts = {}) {
   return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
-export async function listPosItemsGrouped({ shopCode = null, userId = null, company = null } = {}) {
+export async function listPosItemsGrouped({ shopCode = null, userId = null, company = null, orderId = null } = {}) {
   const pool = await appPool();
   const companyFilter = company ? String(company).toUpperCase() : null;
 
@@ -156,6 +160,15 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
   if (userId)        req.input('userId',   sql.UniqueIdentifier, userId);
   if (companyFilter) req.input('company',  sql.NVarChar(20), companyFilter);
 
+  req.input('priceDate', sql.Date, new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0,10));
+  if (orderId) {
+    const order = await pool.request().input('id',sql.UniqueIdentifier,orderId)
+      .input('shop',sql.NVarChar(50),shopCode)
+      .query(`SELECT CAST(DATEADD(HOUR,3,CreatedAt) AS date) PriceDate FROM dbo.PosOrder WHERE OrderId=@id AND ShopCode=@shop`);
+    if (!order.recordset.length) throw new Error('Order not found for this shop');
+    req.replaceInput('priceDate',sql.Date,order.recordset[0].PriceDate);
+  }
+
   // Active special price subquery: matches by item, optionally by shop, within date range.
   // Picks the most specific match (shop-specific beats global).
   const r = await req.query(`
@@ -165,13 +178,10 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
              sp.[Description],
              ROW_NUMBER() OVER (
                PARTITION BY sp.[ItemNo]
-               ORDER BY CASE WHEN sp.[ShopCode] IS NULL THEN 1 ELSE 0 END,
-                        sp.[StartingDate] DESC
+               ORDER BY ${pricePrioritySql}
              ) AS rn
       FROM [dbo].[PosSpecialPrice] sp
-      WHERE sp.[IsActive] = 1
-        AND sp.[StartingDate] <= CAST(GETDATE() AS DATE)
-        AND (sp.[EndingDate] IS NULL OR sp.[EndingDate] >= CAST(GETDATE() AS DATE))
+      WHERE ${priceWindowSql}
         ${shopCode ? "AND (sp.[ShopCode] IS NULL OR sp.[ShopCode] = @shopCode)" : "AND sp.[ShopCode] IS NULL"}
     )
     ${
@@ -351,6 +361,12 @@ export async function listBcShopPaymentTypes(companyId = 'FCL') {
 // The ext table CustomerNo field is the walk-in customer for that shop.
 
 export async function listBcShopSalespersons(companyId = 'FCL') {
+  if (String(companyId).toUpperCase() === 'RMK') {
+    const { listRmkShopCustomers } = await import('./RmkShopImportModel.js');
+    return (await listRmkShopCustomers()).map(c => ({ code: `RMK-${c.No}`, name: c.Name,
+      walkInCustomerNo: c.No, salespersonCode: c.SalespersonCode, defaultLocation: c.LocationCode,
+      vatBusPostingGroup: c.VatBusPostingGroup, email: c.Email, phone: c.MobileNo }));
+  }
   // The source of truth for shops is now the BC Customer table — every customer
   // in the 'FCL SHOPS' price group is one POS shop. We expose the same shape as
   // before (code/name/walkInCustomerNo/defaultLocation/...) so downstream
@@ -1381,6 +1397,14 @@ async function loadVatRateMap() {
 // Each step returns { count, errors[] } so the admin UI can run them independently.
 
 export async function syncShopsFromBc(companyId = 'FCL', { wipe = false } = {}) {
+  if (String(companyId).toUpperCase() === 'FLM') {
+    const { syncFlmShops } = await import('./FlmShopImportModel.js');
+    return syncFlmShops();
+  }
+  if (String(companyId).toUpperCase() === 'RMK') {
+    const { syncRmkShops } = await import('./RmkShopImportModel.js');
+    return syncRmkShops();
+  }
   const out = { count: 0, errors: [], wiped: 0, shops: [] };
   try {
     const pool = await appPool();
@@ -1464,6 +1488,10 @@ export async function syncShopsFromBc(companyId = 'FCL', { wipe = false } = {}) 
 }
 
 export async function syncWalkInCustomersFromBc(companyId = 'FCL') {
+  if (String(companyId).toUpperCase() === 'RMK') {
+    const { syncRmkShops } = await import('./RmkShopImportModel.js');
+    return syncRmkShops();
+  }
   const out = { count: 0, deleted: 0, terminals: 0, errors: [] };
   try {
     const pool = await appPool();
@@ -1480,10 +1508,8 @@ export async function syncWalkInCustomersFromBc(companyId = 'FCL') {
         .map(x => x.trim().toUpperCase()));
     out.terminals = termRes.recordset.length;
 
-    // Wipe every existing walk-in before reinserting (regular contacts untouched).
-    const delRes = await pool.request().query(
-      `DELETE FROM [dbo].[PosContact] WHERE [IsWalkIn]=1; SELECT @@ROWCOUNT AS N;`);
-    out.deleted = Number(delRes.recordset?.[0]?.N || 0);
+    // Upsert the selected company's customers below. A company refresh must
+    // preserve other companies' walk-ins, including RMK SHOP accounts.
     if (!termKeys.size) return out;
 
     // Keep only BC shop-salespersons that map to an existing terminal.
@@ -1539,6 +1565,10 @@ export async function syncWalkInCustomersFromBc(companyId = 'FCL') {
 }
 
 export async function syncContactsFromBc(companyId = 'FCL') {
+  if (String(companyId).toUpperCase() === 'RMK') {
+    const { syncRmkContacts } = await import('./RmkContactModel.js');
+    return syncRmkContacts();
+  }
   const out = { count: 0, errors: [] };
   try {
     const pool    = await appPool();
@@ -1565,7 +1595,7 @@ export async function syncContactsFromBc(companyId = 'FCL') {
           .input('kraPin',       sql.NVarChar(30),  ct.kraPin || null)
           .input('spCode',       sql.NVarChar(20),  ct.salespersonCode || spCode)
           .input('shopCode',     sql.NVarChar(50),  spCode)
-          .input('routeCode',    sql.NVarChar(20),  ct.routeCode || null)
+          .input('routeCode',    sql.NVarChar(CONTACT_ROUTE_LENGTH), contactRoute(ct.routeCode))
           .input('contactType',  sql.NVarChar(20),  ct.contactType || null)
           .input('companyName',  sql.NVarChar(200), ct.companyName || null)
           .query(`
@@ -1800,169 +1830,8 @@ export async function syncPaymentTypesFromBc(companyId = 'FCL') {
   return out;
 }
 
-// ── Shop prices (BC Sales Price → PosSpecialPrice, per shop) ───────────────────
-// Pulls every BC Sales Price row for each shop's customer price group and writes
-// it as a date-bound PosSpecialPrice (Source='BC'). At sell time the existing
-// ActivePrice CTE in listPosItemsGrouped picks the row whose [StartingDate..EndingDate]
-// covers the selling date; outside any window the POS falls back to the item-card
-// price (PosItem.UnitPrice).
-//
-// VAT: BC prices (both the item card and the Sales Price table) are VAT-EXCLUSIVE,
-// but PosItem.UnitPrice is stored VAT-INCLUSIVE — so we gross each Sales Price up by
-// the item's VatPercent to keep both on the same basis for the receipt VAT split.
-//
-// Price group per shop: resolved from the BC Customer table via the shop's walk-in
-// customer no (which itself comes from the salesperson's CustomerNo). Shops with no
-// resolvable group fall back to 'FCL SHOPS'.
-export async function syncShopPricesFromBc(companyId = 'FCL') {
-  const out = { count: 0, shops: 0, priceGroups: [], pruned: 0, byCompany: {}, errors: [] };
-  try {
-    const pool = await appPool();
-    // companyId only drives the per-shop price-group lookup below; Sales Prices are
-    // pulled from ALL companies' tables (each item priced from its own SourceCompany).
-    const c = resolveCompanies([companyId])[0] || 'FCL';
-
-    // 1. Active shops + their walk-in customer no.
-    const shopRes = await pool.request().query(`
-      SELECT [Code], [WalkInCustomerNo] FROM [dbo].[PosShop] WHERE [IsActive]=1`);
-    const shops = shopRes.recordset;
-    out.shops = shops.length;
-    if (!shops.length) return out;
-
-    // 2. Resolve each shop's BC customer price group.
-    const custNos = [...new Set(shops.map(s => (s.WalkInCustomerNo || '').trim()).filter(Boolean))];
-    const groupByCust = new Map();
-    if (custNos.length) {
-      const bcPool = await bcDb.getPool();
-      const custTable = bcTable(c, 'Customer');
-      const req = bcPool.request();
-      const params = custNos.map((no, i) => { req.input(`cn${i}`, sql.NVarChar(20), no); return `@cn${i}`; }).join(',');
-      const gr = await req.query(`
-        SELECT [No_] AS No, [Customer Price Group] AS Grp
-        FROM ${custTable} WHERE [No_] IN (${params})`);
-      gr.recordset.forEach(r => groupByCust.set((r.No || '').trim(), (r.Grp || '').trim()));
-    }
-    const groupByShop = new Map();
-    for (const s of shops) {
-      const grp = (groupByCust.get((s.WalkInCustomerNo || '').trim()) || 'FCL SHOPS').toUpperCase();
-      groupByShop.set(s.Code, grp);
-    }
-    const groups = [...new Set([...groupByShop.values()])];
-    out.priceGroups = groups;
-
-    // 3. POS catalogue: VAT% + which company each item was synced from.
-    //    (only items we actually sell get a synced price)
-    const itemRes = await pool.request().query(
-      `SELECT [ItemNo],[VatPercent],[SourceCompany] FROM [dbo].[PosItem] WHERE [IsActive]=1`);
-    const vatByItem = new Map();
-    const compByItem = new Map();
-    for (const r of itemRes.recordset) {
-      const no = (r.ItemNo || '').toUpperCase();
-      vatByItem.set(no, Number(r.VatPercent || 0));
-      compByItem.set(no, (r.SourceCompany || 'FCL').toUpperCase());
-    }
-
-    // 4. Pull Sales Price rows for those groups across EVERY company's table
-    //    (FCL1, CM3, FLM1, RMK — all live in the same DB). Each item's price comes
-    //    from the company it was synced from (PosItem.SourceCompany). Local currency,
-    //    no variant; dedupe to the lowest Minimum Quantity per (item, group, start date).
-    const bcPool = await bcDb.getPool();
-    const rowsByGroup = new Map();
-    out.byCompany = {};
-    for (const comp of ALL_COMPANIES) {
-      let priceTable;
-      try { priceTable = bcTable(comp, 'Sales Price'); } catch { continue; }
-      const preq = bcPool.request();
-      const gparams = groups.map((g, i) => { preq.input(`g${i}`, sql.NVarChar(40), g); return `@g${i}`; }).join(',');
-      let priceRes;
-      try {
-        priceRes = await preq.query(`
-          WITH P AS (
-            SELECT
-              UPPER(LTRIM(RTRIM([Item No_])))   AS ItemNo,
-              UPPER(LTRIM(RTRIM([Sales Code]))) AS SalesCode,
-              [Unit Price]                      AS UnitPrice,
-              ISNULL([Price Includes VAT], 0)   AS PriceInclVat,
-              CAST([Starting Date] AS DATE)     AS StartingDate,
-              CASE WHEN [Ending Date] IS NULL OR [Ending Date] <= '1753-01-01'
-                   THEN NULL ELSE CAST([Ending Date] AS DATE) END AS EndingDate,
-              ROW_NUMBER() OVER (
-                PARTITION BY UPPER(LTRIM(RTRIM([Item No_]))), UPPER(LTRIM(RTRIM([Sales Code]))), CAST([Starting Date] AS DATE)
-                ORDER BY ISNULL([Minimum Quantity], 0) ASC, [Unit Price] ASC
-              ) AS rn
-            FROM ${priceTable}
-            WHERE [Sales Type] = 1
-              AND UPPER(LTRIM(RTRIM([Sales Code]))) IN (${gparams})
-              AND [Unit Price] <> 0
-              AND ISNULL(LTRIM(RTRIM([Variant Code])), '') = ''
-              AND ISNULL(LTRIM(RTRIM([Currency Code])), '') = ''
-          )
-          SELECT ItemNo, SalesCode, UnitPrice, PriceInclVat, StartingDate, EndingDate
-          FROM P WHERE rn = 1`);
-      } catch (e) {
-        out.errors.push(`${comp} sales price: ${e.message}`);
-        continue;
-      }
-      let kept = 0;
-      for (const r of priceRes.recordset) {
-        if (compByItem.get(r.ItemNo) !== comp) continue;   // item belongs to another company (or not a POS item)
-        if (!rowsByGroup.has(r.SalesCode)) rowsByGroup.set(r.SalesCode, []);
-        rowsByGroup.get(r.SalesCode).push(r);
-        kept++;
-      }
-      out.byCompany[comp] = kept;
-    }
-
-    // 5. Fan out to shops, grossing to VAT-inclusive.
-    const toInsert = [];
-    for (const [shopCode, grp] of groupByShop) {
-      for (const r of (rowsByGroup.get(grp) || [])) {
-        const vat = vatByItem.get(r.ItemNo) || 0;
-        const incl = r.PriceInclVat
-          ? Number(r.UnitPrice)
-          : Math.round(Number(r.UnitPrice) * (1 + vat / 100) * 10000) / 10000;
-        toInsert.push({
-          itemNo: r.ItemNo, shopCode, unitPrice: incl,
-          startingDate: r.StartingDate, endingDate: r.EndingDate,
-          description: `BC ${grp}`,
-        });
-      }
-    }
-
-    // 6. Replace this run's BC rows for the synced shops; manual offers untouched.
-    const delReq = pool.request();
-    const codeParams = shops.map((s, i) => { delReq.input(`sh${i}`, sql.NVarChar(50), s.Code); return `@sh${i}`; }).join(',');
-    const delRes = await delReq.query(`
-      DELETE FROM [dbo].[PosSpecialPrice]
-      WHERE [Source]='BC' AND [ShopCode] IN (${codeParams});
-      SELECT @@ROWCOUNT AS N;`);
-    out.pruned = Number(delRes.recordset?.[0]?.N || 0);
-
-    const CHUNK = 100;
-    for (let i = 0; i < toInsert.length; i += CHUNK) {
-      const chunk = toInsert.slice(i, i + CHUNK);
-      const rq = pool.request();
-      const values = chunk.map((row, j) => {
-        rq.input(`in${j}`, sql.NVarChar(30),   row.itemNo);
-        rq.input(`sc${j}`, sql.NVarChar(50),   row.shopCode);
-        rq.input(`up${j}`, sql.Decimal(18, 4), row.unitPrice);
-        rq.input(`sd${j}`, sql.Date,           row.startingDate);
-        rq.input(`ed${j}`, sql.Date,           row.endingDate);
-        rq.input(`ds${j}`, sql.NVarChar(200),  row.description);
-        return `(@in${j},@sc${j},@up${j},@sd${j},@ed${j},@ds${j},1,'BC')`;
-      }).join(',');
-      await rq.query(`
-        INSERT INTO [dbo].[PosSpecialPrice]
-          ([ItemNo],[ShopCode],[UnitPrice],[StartingDate],[EndingDate],[Description],[IsActive],[Source])
-        VALUES ${values}`);
-      out.count += chunk.length;
-    }
-    logger.info('pos/syncShopPricesFromBc', { shops: out.shops, groups, byCompany: out.byCompany, inserted: out.count, pruned: out.pruned });
-  } catch (e) {
-    out.errors.push(e.message);
-  }
-  return out;
-}
+// Company-scoped customer prices and price-group prices are refreshed together.
+export { syncShopPricesFromBc } from './PosShopPriceModel.js';
 
 // ── Bulk sync from BC: shops, walk-in customers, contacts, categories, items, payment types
 //    Composes the per-step helpers above; preserves the legacy { shops, walkInCustomers, … } shape.
@@ -2298,6 +2167,17 @@ export async function listContacts({ shopCode = null, activeOnly = true, page, p
 export async function getWalkInForShop(shopCode) {
   if (!shopCode) return null;
   const pool = await appPool();
+  // FLM and RMK can share customer numbers (e.g. C00600). Resolve the FLM
+  // account through its company mapping instead of overwriting PosContact.
+  const flm = (await pool.request().input('shop', sql.NVarChar(50), shopCode).query(`
+    SELECT c.CustomerNo FROM dbo.PosShopCompany c JOIN dbo.PosShop s ON s.Code=c.ShopCode
+    WHERE c.ShopCode=@shop AND c.Company='FLM' AND c.IsActive=1
+      AND NULLIF(s.FclCustomerNo,'') IS NULL AND NULLIF(s.CmCustomerNo,'') IS NULL AND NULLIF(s.RmkCustomerNo,'') IS NULL`)).recordset[0];
+  if (flm?.CustomerNo) {
+    const customer = (await listBcCustomersByNo('FLM', [flm.CustomerNo]))[0];
+    if (customer) return { BcContactNo: customer.no, Name: customer.name, MobileNo: customer.mobileNo || customer.phoneNo,
+      Email: customer.email, KraPin: customer.kraPin, ShopCode: shopCode, CompanyName: 'FLM', IsWalkIn: true };
+  }
   const r = await pool.request()
     .input('shopCode', sql.NVarChar(50), shopCode)
     .query(`
@@ -2353,7 +2233,7 @@ export async function upsertContacts(contacts, shopCode) {
       .input('kraPin',       sql.NVarChar(30),  str(c.kraPin || c.KraPin || '', 30) || null)
       .input('spCode',       sql.NVarChar(20),  str(c.salespersonCode || c.SalespersonCode || '', 20).toUpperCase() || null)
       .input('shopCode',     sql.NVarChar(50),  shopCode || null)
-      .input('routeCode',    sql.NVarChar(20),  str(c.routeCode || c.RouteCode || '', 20).toUpperCase() || null)
+      .input('routeCode',    sql.NVarChar(CONTACT_ROUTE_LENGTH), contactRoute(c.routeCode || c.RouteCode))
       .input('contactType',  sql.NVarChar(20),  str(c.contactType || c.ContactType || '', 20) || null)
       .input('companyName',  sql.NVarChar(200), str(c.companyName || c.CompanyName || '') || null)
       .query(`
@@ -2590,7 +2470,38 @@ export async function dailySalesSummary({ shopCode = null, dateFrom, dateTo } = 
     orders: rows.length,
     totalAmount: rows.reduce((s, x) => s + x.totalAmount, 0),
   };
-  return { rows, totals };
+
+  // Per-mirror (per-company) breakdown of what was sold/due, from the order
+  // lines' Company tag (NULL/blank → the shop's primary company). A shop with
+  // mirrors (e.g. Kasarani: FCL + CM) shows one row per company + a total.
+  const bcReq = pool.request()
+    .input('from', sql.Date, dateFrom ? new Date(dateFrom) : new Date('2000-01-01'))
+    .input('to',   sql.Date, dateTo ? new Date(dateTo) : new Date());
+  if (shopCode) bcReq.input('shop', sql.NVarChar(50), String(shopCode).toUpperCase());
+  const bcRes = await bcReq.query(`
+    SELECT COALESCE(NULLIF(l.[Company], ''), sh.[Company], 'FCL') AS Company,
+           COUNT(DISTINCT o.[OrderId]) AS Orders,
+           SUM(l.[LineAmount])         AS Amount
+    FROM [dbo].[PosOrderLine] l
+    JOIN [dbo].[PosOrder] o  ON o.[OrderId] = l.[OrderId]
+    LEFT JOIN [dbo].[PosShop] sh ON sh.[Code] = o.[ShopCode]
+    WHERE o.[Status]='paid'
+      AND CAST(DATEADD(HOUR, 3, o.[CreatedAt]) AS date) BETWEEN @from AND @to
+      ${shopFilter}
+    GROUP BY COALESCE(NULLIF(l.[Company], ''), sh.[Company], 'FCL')
+    ORDER BY Amount DESC
+  `);
+  const byCompany = bcRes.recordset.map((x) => ({
+    company: x.Company || 'FCL',
+    orders:  Number(x.Orders) || 0,
+    amount:  Number(x.Amount) || 0,
+  }));
+  const byCompanyTotal = {
+    orders: totals.orders,
+    amount: byCompany.reduce((s, x) => s + x.amount, 0),
+  };
+
+  return { rows, totals, byCompany, byCompanyTotal, shopCode: shopCode || null };
 }
 
 export async function setOrderLines(orderId, lines) {
@@ -2655,7 +2566,7 @@ export async function checkoutOrder(orderId, { paymentTypeCode, paymentTypeName,
     .input('paymentTypeName',  sql.NVarChar(200), str(paymentTypeName))
     .input('amount',           sql.Decimal(18, 4), Math.round(num(amount)))   // KES rounded to whole at checkout
     .input('mobileNo',         sql.NVarChar(30),  str(mobileNo, 30) || null)
-    .input('reference',        sql.NVarChar(100), str(reference, 100) || null)
+    .input('reference',        sql.NVarChar(100), paymentReference(reference))
     .query(`
       INSERT INTO [dbo].[PosPayment]([OrderId],[PaymentTypeCode],[PaymentTypeName],[Amount],[MobileNo],[Reference],[Status])
       OUTPUT INSERTED.[PaymentId]
@@ -2686,7 +2597,7 @@ export async function confirmPayment(paymentId, reference = null) {
   await assertOrderHasStock({ shopCode: order.shopCode, lines: order.lines });
 
   const req2 = pool.request().input('paymentId', sql.UniqueIdentifier, paymentId);
-  if (reference) req2.input('ref', sql.NVarChar(100), str(reference, 100));
+  if (reference) req2.input('ref', sql.NVarChar(100), paymentReference(reference));
   await req2.query(`
     UPDATE [dbo].[PosPayment]
     SET [Status]='confirmed'

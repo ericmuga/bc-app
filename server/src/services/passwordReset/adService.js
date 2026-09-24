@@ -11,6 +11,7 @@
  * "constraint violation". Configure AD_LDAPS_URL.
  */
 import ldap   from 'ldapjs';
+import { createManagedLdapClient } from '../ldapClient.js';
 import logger from '../logger.js';
 import { db, sql } from '../../db/pool.js';
 
@@ -37,7 +38,7 @@ function createClient({ forReset = false } = {}) {
   if (process.env.AD_TLS_REJECT_UNAUTHORIZED === 'false') {
     tlsOptions.rejectUnauthorized = false;
   }
-  return ldap.createClient({
+  return createManagedLdapClient({
     url,
     reconnect:      false,
     connectTimeout: 8000,

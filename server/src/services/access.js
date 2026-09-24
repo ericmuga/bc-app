@@ -1,3 +1,4 @@
+import { SALES_REPORT_ROLES, LEGACY_REPORT_ROLES } from '../../../shared/reportAccess.mjs';
 export const ROLES = {
   ADMIN: 'admin',
   SALES: 'sales',
@@ -14,14 +15,16 @@ export const ROLES = {
   // Dispatch / pick-and-pack fulfilment (distinct from DISPATCH which is BC order scanning)
   DISPATCH_REGISTRY: 'dispatch-registry',
   DISPATCH_SUPERVISOR: 'dispatch-supervisor',
+  CHILLER_ATTENDANT: 'chiller-attendant',
+  ASSEMBLER: 'assembler',
   PACKER: 'packer',
   CHECKER: 'checker',
   LOADER: 'loader',
 };
 
-export const REPORT_ROLES = [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, ROLES.SALES_ADMIN, ROLES.FINANCE];
+export const REPORT_ROLES = SALES_REPORT_ROLES;
 // Reporting → Legacy Downloads (read-only exports over legacy BC databases).
-export const REPORTING_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.ANALYST];
+export const REPORTING_ROLES = LEGACY_REPORT_ROLES;
 // Warehouse Sync Center (FCLWHS ETL monitoring) — analytics-facing: admin + analyst.
 export const WAREHOUSE_ROLES = [ROLES.ADMIN, ROLES.ANALYST];
 export const ORDER_ROLES = [ROLES.ADMIN, ROLES.DISPATCH];
@@ -49,11 +52,11 @@ export const CHEF_REPORT_ROLES = [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADM
 // Module access (any dispatch role) + per-stage guards.
 export const DISPATCH_ROLES = [
   ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.DISPATCH_REGISTRY,
-  ROLES.PACKER, ROLES.CHECKER, ROLES.LOADER,
+  ROLES.ASSEMBLER, ROLES.PACKER, ROLES.CHECKER, ROLES.LOADER, ROLES.CHILLER_ATTENDANT,
 ];
 export const DISPATCH_SUPERVISOR_ROLES = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR];
 export const DISPATCH_REGISTRY_ROLES   = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.DISPATCH_REGISTRY];
-export const DISPATCH_ASSEMBLE_ROLES   = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.PACKER];
+export const DISPATCH_ASSEMBLE_ROLES   = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.ASSEMBLER, ROLES.PACKER];
 export const DISPATCH_PACK_ROLES       = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.PACKER, ROLES.CHECKER];
 export const DISPATCH_LOAD_ROLES       = [ROLES.ADMIN, ROLES.DISPATCH_SUPERVISOR, ROLES.LOADER];
 

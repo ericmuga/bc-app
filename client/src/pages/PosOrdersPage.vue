@@ -15,9 +15,9 @@
 
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
-    <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center">
+    <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <InputText v-model="orderFilters.global.value" placeholder="Search all columns…" style="max-width:320px" />
-      <span class="text-muted text-sm">{{ orders.length }} order(s)</span>
+      <Button label="Clear filters" icon="pi pi-filter-slash" text severity="secondary" @click="orderFilters=makeOrderFilters()" /><span class="text-muted text-sm">{{ orders.length }} loaded order(s)</span>
     </div>
 
     <DataTable
@@ -30,25 +30,29 @@
       selection-mode="single"
       paginator :rows="25"
       v-model:filters="orderFilters" filterDisplay="row" removableSort
-      :globalFilterFields="['OrderNo','ShopCode','CashierName','Status','Label']"
+      :globalFilterFields="['OrderNo','ShopCode','CashierName','Status','Label','LineCount','TotalAmount','CreatedDate']"
     >
+      <template #empty>No orders match the selected filters.</template>
       <Column field="OrderNo"     header="Order No"  sortable style="width:150px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
-          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="No" style="width:100%" />
+          <Select v-model="filterModel.value" :options="columnOptions.OrderNo" filter show-clear editable :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search no" aria-label="Filter No" style="width:100%;min-width:150px" />
         </template>
       </Column>
       <Column field="ShopCode"    header="Shop"      sortable style="width:90px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
-          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Shop" style="width:100%" />
+          <Select v-model="filterModel.value" :options="columnOptions.ShopCode" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search shop" aria-label="Filter Shop" style="width:100%;min-width:150px" />
         </template>
       </Column>
       <Column field="CashierName" header="Cashier"   sortable style="min-width:130px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
-          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Cashier" style="width:100%" />
+          <Select v-model="filterModel.value" :options="columnOptions.CashierName" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search cashier" aria-label="Filter Cashier" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="LineCount"   header="Lines"     sortable style="width:65px;text-align:right" />
-      <Column field="TotalAmount" header="Total"     sortable style="width:120px;text-align:right">
+      <Column field="LineCount" header="Lines" sortable style="min-width:120px;text-align:right" :showFilterMenu="false">
+        <template #filter="{filterModel,filterCallback}"><InputNumber v-model="filterModel.value" :maxFractionDigits="0" :min="0" fluid placeholder="Equals" aria-label="Filter line count" @update:modelValue="filterCallback()" /></template>
+      </Column>
+      <Column field="TotalAmount" header="Total" sortable style="min-width:160px;text-align:right" :showFilterMenu="false">
+        <template #filter="{filterModel,filterCallback}"><InputNumber v-model="filterModel.value" :maxFractionDigits="2" fluid placeholder="Equals" aria-label="Filter total amount" @update:modelValue="filterCallback()" /></template>
         <template #body="{ data }">{{ fmt(data.TotalAmount) }}</template>
       </Column>
       <Column field="Status" header="Status" sortable style="width:110px" :showFilterMenu="false">
@@ -56,13 +60,15 @@
           <Tag :value="data.Status" :severity="statusSeverity(data.Status)" />
         </template>
         <template #filter="{ filterModel, filterCallback }">
-          <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Status" style="width:100%" />
+          <Select v-model="filterModel.value" :options="columnOptions.Status" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search status" aria-label="Filter Status" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="CreatedAt" header="Created" sortable style="min-width:130px">
+      <Column field="CreatedAt" filterField="CreatedDate" header="Created" sortable style="min-width:160px" :showFilterMenu="false">
+        <template #filter="{filterModel,filterCallback}"><InputText v-model="filterModel.value" type="date" aria-label="Filter created date (Nairobi)" @change="filterCallback()" /></template>
         <template #body="{ data }">{{ fmtTime(data.CreatedAt) }}</template>
       </Column>
-      <Column header="Label" style="min-width:130px">
+      <Column field="Label" header="Label" style="min-width:180px" :showFilterMenu="false">
+        <template #filter="{filterModel,filterCallback}"><Select v-model="filterModel.value" :options="columnOptions.Label" editable filter show-clear placeholder="Search label" aria-label="Filter label" fluid @change="filterCallback()" /></template>
         <template #body="{ data }">
           <span v-if="data.Label" class="cart-label">{{ data.Label }}</span>
         </template>
@@ -331,6 +337,8 @@ import Tag from 'primevue/tag'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
+import InputNumber from 'primevue/inputnumber'
 import { posApi, posSetupApi } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
@@ -339,13 +347,17 @@ const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
 const isManager = computed(() => ['admin', 'shop-admin', 'sales-admin'].includes(auth.user?.role))
 const orders        = ref([])
-const orderFilters  = ref({
-  global:      { value: null, matchMode: 'contains' },
-  OrderNo:     { value: null, matchMode: 'contains' },
-  ShopCode:    { value: null, matchMode: 'contains' },
-  CashierName: { value: null, matchMode: 'contains' },
-  Status:      { value: null, matchMode: 'contains' },
+const makeOrderFilters=()=>({
+  global:{value:null,matchMode:'contains'},OrderNo:{value:null,matchMode:'contains'},
+  ShopCode:{value:null,matchMode:'equals'},CashierName:{value:null,matchMode:'equals'},
+  Status:{value:null,matchMode:'equals'},Label:{value:null,matchMode:'contains'},
+  LineCount:{value:null,matchMode:'equals'},TotalAmount:{value:null,matchMode:'equals'},
+  CreatedDate:{value:null,matchMode:'equals'},
 })
+const orderFilters=ref(makeOrderFilters())
+const columnOptions=computed(()=>Object.fromEntries(['OrderNo','ShopCode','CashierName','Status','Label'].map(field=>[field,[...new Set(orders.value.map(o=>o[field]).filter(v=>v!=null&&v!==''))].sort((a,b)=>String(a).localeCompare(String(b)))])))
+const createdDate=value=>value?new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Nairobi',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):''
+
 const loading       = ref(false)
 const error         = ref('')
 const detailVisible = ref(false)
@@ -368,7 +380,7 @@ async function load() {
   loading.value = true; error.value = ''
   try {
     const { data } = await posApi.listOrders()
-    orders.value = data
+    orders.value = data.map(row=>({...row,CreatedDate:createdDate(row.CreatedAt)}))
   } catch (e) {
     error.value = e.message
   } finally {
@@ -645,7 +657,7 @@ function fmt(v) {
 }
 function fmtTime(v) {
   if (!v) return ''
-  return new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })
+  return new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Nairobi' })
 }
 </script>
 

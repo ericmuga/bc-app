@@ -1,3 +1,4 @@
+import { paymentReference, combinePaymentReferences } from '../../../shared/paymentReference.mjs';
 /**
  * controllers/posController.js
  * POS module REST handlers.
@@ -56,7 +57,7 @@ export async function getItems(req, res) {
     // Optional company toggle: when the terminal selects a company, show only that
     // company's items (PosItem.SourceCompany; NULL treated as FCL).
     const company = (req.query?.company || '').trim().toUpperCase() || null;
-    ok(res, await Pos.listPosItemsGrouped({ shopCode, userId: req.user.userId, company }));
+    ok(res, await Pos.listPosItemsGrouped({ shopCode, userId: req.user.userId, company, orderId: req.query?.orderId || null }));
   } catch (e) { err(res, e); }
 }
 
@@ -129,9 +130,10 @@ export async function checkout(req, res) {
     if (!amount || isNaN(Number(amount))) return res.status(400).json({ error: 'amount required' });
 
     // Coupon tender — debit the coupon ledger atomically before recording the payment row.
-    let actualReference = reference;
+    let actualReference = paymentReference(reference);
     if (String(paymentTypeCode).toUpperCase() === 'COUPON' || couponCode) {
       const code = String(couponCode || reference || '').trim().toUpperCase();
+      paymentReference(combinePaymentReferences(code, reference));
       if (!code) return res.status(400).json({ error: 'couponCode is required for coupon payments' });
       const order = await Pos.getOrder(req.params.orderId);
       if (!order)  return res.status(404).json({ error: 'Order not found' });
@@ -150,7 +152,7 @@ export async function checkout(req, res) {
             applied: r.applied, balance: r.balance,
           });
         }
-        actualReference = code;
+        actualReference = paymentReference(combinePaymentReferences(code, reference));
       } catch (e) {
         return res.status(400).json({ error: e.message });
       }
@@ -405,6 +407,7 @@ export async function checkoutMulti(req, res) {
     if (!tenders || !tenders.length) {
       return res.status(400).json({ error: 'tenders[] required' });
     }
+    for (const t of tenders) paymentReference(combinePaymentReferences(t.couponCode, t.reference));
     const order = await Pos.getOrder(req.params.orderId);
     if (!order)                       return res.status(404).json({ error: 'Order not found' });
     if (order.status !== 'open')      return res.status(409).json({ error: `Order is already ${order.status}` });
@@ -449,7 +452,7 @@ export async function checkoutMulti(req, res) {
         });
         if (r.applied < amt) throw new Error(`Coupon ${couponCode} only had ${r.applied}, short of ${amt - r.applied}.`);
         couponDebits.push({ couponCode, amt });
-        reference = couponCode;
+        reference = paymentReference(combinePaymentReferences(couponCode, t.reference));
       }
 
       // Insert + confirm in two model calls
@@ -861,6 +864,13 @@ export async function syncStepFromBc(req, res) {
       });
     }
     const result = await fn(company);
+    if (kind === 'shops' && String(company).toUpperCase() === 'RMK') {
+      try {
+        const { refreshRmkShopData } = await import('../services/rmkShopRefresh.js');
+        result.refresh = await refreshRmkShopData();
+        result.errors.push(...result.refresh.errors);
+      } catch (error) { result.errors.push(`Shops imported; refresh failed: ${error.message}`); }
+    }
     ok(res, { kind, ...result });
   } catch (e) { err(res, e); }
 }
@@ -903,9 +913,12 @@ export async function completeOrder(req, res) {
 export async function listContacts(req, res) {
   try {
     const shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
+    const { listSharedRmkContacts } = await import('../models/RmkContactModel.js');
+    const shared = await listSharedRmkContacts(shopCode);
+    if (shared !== null) return ok(res, shared);
     const all = await Pos.listContacts({ shopCode, activeOnly: true });
-    // Walk-ins are umbrella accounts shown separately; exclude from selectable list
-    ok(res, all.filter(c => !c.IsWalkIn));
+    // RMK SHOP customers are also selectable; other walk-ins remain in the banner.
+    ok(res, all.filter(c => !c.IsWalkIn || (c.CompanyName === 'RMK' && String(c.CustomerType) === '3')));
   } catch (e) { err(res, e); }
 }
 

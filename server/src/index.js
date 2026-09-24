@@ -1,3 +1,4 @@
+import {startDispatchPullScheduler,stopDispatchPullScheduler} from './services/dispatchPullScheduler.js';
 /**
  * server/src/index.js
  */
@@ -10,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
 import { db } from './db/pool.js';
+import { migrateDispatchChillers } from './db/dispatchChillers.js';
+import { migrateContactRoute } from './db/contactRoute.js';
+import { migrateRmkContacts } from './db/rmkContacts.js';
 import routes from './routes/index.js';
 import logger from './services/logger.js';
 import swaggerSpec from './docs/swagger.js';
@@ -403,6 +407,13 @@ async function ensurePosItemColumns() {
 async function start() {
   await db.connect();
   await ensurePosItemColumns();
+  // Existing dispatch deployments need this additive upgrade before serving requests.
+  const pool = await db.getPool();
+  const dispatchSchema = await pool.request().query("SELECT OBJECT_ID('dbo.DispatchAssemblyLine') AS Id");
+  if (dispatchSchema.recordset[0]?.Id) await migrateDispatchChillers(pool);
+  await migrateContactRoute(pool);
+  await migrateRmkContacts(pool);
+  if (dispatchSchema.recordset[0]?.Id) startDispatchPullScheduler();
   startReportScheduler();
   startBcPullScheduler();
   startInvoiceImportScheduler();
@@ -416,6 +427,7 @@ start().catch((err) => {
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
+  stopDispatchPullScheduler();
   logger.info('SIGTERM received, shutting down');
   await db.close();
   process.exit(0);

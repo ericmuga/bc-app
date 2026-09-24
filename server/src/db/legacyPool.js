@@ -20,9 +20,9 @@ dotenv.config();
 /** database name → ConnectionPool */
 const pools = new Map();
 
-function makeConfig(database) {
+function makeConfig(database, server) {
   return {
-    server:   process.env.LEGACY_DB_HOST || '172.16.10.9',
+    server:   server || process.env.LEGACY_DB_HOST || '172.16.10.9',
     port:     parseInt(process.env.DB_PORT) || 1433,
     database,
     user:     process.env.DB_USER,
@@ -40,20 +40,24 @@ function makeConfig(database) {
 }
 
 /** Get (or lazily create) a cached pool for a legacy database. */
-export async function getLegacyPool(database) {
+export async function getLegacyPool(database, server) {
   if (!database) throw new Error('legacy database name is required');
-  const existing = pools.get(database);
+  const key = `${server || process.env.LEGACY_DB_HOST || '172.16.10.9'}|${database}`;
+  const existing = pools.get(key);
   if (existing) return existing;
   try {
-    const pool = await new sql.ConnectionPool(makeConfig(database)).connect();
+    const connecting = new sql.ConnectionPool(makeConfig(database, server)).connect();
+    pools.set(key, connecting); // share concurrent lookup connections
+    const pool = await connecting;
     pool.on('error', (err) => {
       logger.error('Legacy SQL pool error', { database, error: err.message });
-      pools.delete(database);
+      if (pools.get(key) === pool) pools.delete(key);
     });
-    pools.set(database, pool);
-    logger.info('Legacy SQL pool connected', { server: makeConfig(database).server, database });
+    pools.set(key, pool);
+    logger.info('Legacy SQL pool connected', { server: makeConfig(database, server).server, database });
     return pool;
   } catch (err) {
+    pools.delete(key);
     logger.error('Legacy SQL pool connect failed', { database, error: err.message });
     throw err;
   }

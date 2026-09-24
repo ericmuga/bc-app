@@ -1,3 +1,5 @@
+import { DOWNLOAD_CUTOFF, downloadTable } from './warehouseDownloadTables.js';
+import { bcTable } from './bcTables.js';
 /**
  * services/legacyReports.js
  * ---------------------------------------------------------------------------
@@ -106,7 +108,46 @@ const inventoryPostingGroupFilter = (itemNoCol) => ({
   join: { table: 'Item', alias: 'it', on: `it.[No_] = ${itemNoCol}`, type: 'LEFT' },
 });
 
+const VALUE_ENTRIES = {
+  key: 'valueEntries', label: 'Value Entries', header: 'Value Entry', line: null,
+  dateColumn: POSTING_DATE, order: 'h.[Entry No_]',
+  columns: [
+    ['Entry No_', 'EntryNo'], ['Posting Date', 'PostingDate'], ['Item No_', 'ItemNo'],
+    ['Description', 'Description'], ['Item Ledger Entry No_', 'ItemLedgerEntryNo'],
+    ['Item Ledger Entry Type', 'ItemLedgerEntryType'], ['Entry Type', 'ValueEntryType'],
+    ['Document No_', 'DocumentNo'], ['Document Type', 'DocumentType'], ['Document Line No_', 'DocumentLineNo'],
+    ['Source Type', 'SourceType'], ['Source No_', 'SourceNo'], ['Location Code', 'LocationCode'],
+    ['Inventory Posting Group', 'InventoryPostingGroup'], ['Source Posting Group', 'SourcePostingGroup'],
+    ['Gen_ Bus_ Posting Group', 'GenBusPostingGroup'], ['Gen_ Prod_ Posting Group', 'GenProdPostingGroup'],
+    ['Valued Quantity', 'ValuedQuantity'], ['Item Ledger Entry Quantity', 'ItemLedgerEntryQuantity'],
+    ['Invoiced Quantity', 'InvoicedQuantity'], ['Cost per Unit', 'CostPerUnit'],
+    ['Cost Amount (Actual)', 'CostAmountActual'], ['Cost Amount (Expected)', 'CostAmountExpected'],
+    ['Cost Amount (Non-Invtbl_)', 'CostAmountNonInventoriable'], ['Cost Posted to G_L', 'CostPostedToGL'],
+    ['Sales Amount (Actual)', 'SalesAmountActual'], ['Sales Amount (Expected)', 'SalesAmountExpected'],
+    ['Purchase Amount (Actual)', 'PurchaseAmountActual'], ['Purchase Amount (Expected)', 'PurchaseAmountExpected'],
+    ['Discount Amount', 'DiscountAmount'], ['Expected Cost', 'ExpectedCost'], ['Adjustment', 'Adjustment'],
+    ['External Document No_', 'ExternalDocumentNo'], ['Valuation Date', 'ValuationDate'],
+  ].map(([name, as]) => ({ col: `h.[${name}]`, as })),
+  filters: {
+    documentNo: { col: 'h.[Document No_]', label: 'Document No.' },
+    itemNo: { col: 'h.[Item No_]', label: 'Item No.' },
+    sourceNo: { col: 'h.[Source No_]', label: 'Source No.' },
+    customerNo: { col: 'h.[Source No_]', label: 'Customer No.', condition: 'h.[Source Type]=1' },
+    inventoryPostingGroup: { col: 'h.[Inventory Posting Group]', label: 'Inventory Posting Group' },
+    entryTypes: { type: 'enum', multi: true, col: 'h.[Item Ledger Entry Type]', label: 'Item Ledger Entry Type', options: ENTRY_TYPE_OPTIONS },
+  },
+  summary: {
+    label: 'Summary by Item / Posting Group',
+    groupBy: [{ col: 'h.[Item No_]', as: 'ItemNo' }, { col: 'h.[Inventory Posting Group]', as: 'InventoryPostingGroup' }],
+    aggregates: [ { expr: 'COUNT_BIG(*)', as: 'EntryCount' },
+      ...['Valued Quantity', 'Invoiced Quantity', 'Cost Amount (Actual)', 'Cost Amount (Expected)', 'Sales Amount (Actual)', 'Purchase Amount (Actual)']
+        .map(name => ({ expr: `SUM(h.[${name}])`, as: name.replace(/[^a-zA-Z]/g, '') })) ],
+    order: 'h.[Item No_], h.[Inventory Posting Group]',
+  },
+};
+
 const LEGACY_DATASETS = [
+  VALUE_ENTRIES,
   {
     key: 'postedPurchaseInvoices',
     label: 'Posted Purchase Invoices',
@@ -342,6 +383,7 @@ const LEGACY_DATASETS = [
       // Cost is therefore intentionally omitted here (single-table dataset).
     ],
     filters: {
+      customerNo: { col: 'h.[Source No_]', label: 'Customer No.', condition: 'h.[Source Type]=1' },
       itemNo:     { col: 'h.[Item No_]',    label: 'Item No.' },
       documentNo: { col: 'h.[Document No_]', label: 'Document No.' },
       sourceNo:   { col: 'h.[Source No_]',  label: 'Source No.' },
@@ -442,23 +484,52 @@ const LEGACY_DATASETS = [
   },
 ];
 
-// ─── SOURCES ─────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// Current datasets use identical ERP and download-mirror layouts.
+// ════════════════════════════════════════════════════════════════════════════
+const LOOKUPS = {
+  glAccountNo: { table: 'G_L Account', code: 'No_', description: 'Name' },
+  inventoryPostingGroup: { table: 'Inventory Posting Group', code: 'Code', description: 'Description' },
+  itemNo: { table: 'Item', code: 'No_', description: 'Description' },
+  customerNo: { table: 'Customer', code: 'No_', description: 'Name' },
+  vendorNo: { table: 'Vendor', code: 'No_', description: 'Name' },
+};
+for (const datasets of [LEGACY_DATASETS]) {
+  for (const dataset of datasets) {
+    for (const [key, filter] of Object.entries(dataset.filters || {})) {
+      if (LOOKUPS[key]) filter.lookup = LOOKUPS[key];
+    }
+  }
+}
+const LIVE_DATASETS = LEGACY_DATASETS.map(d => d.key === 'slaughterData'
+  ? { ...d, sources: ['CM-CUR', 'FCL-CUR', 'FLM-CUR', 'RMK-CUR'] } : d);
+const salesInvoice = LEGACY_DATASETS.find(d => d.key === 'postedSalesInvoices');
+LIVE_DATASETS.push({ ...salesInvoice, key: 'postedSalesCreditMemos', label: 'Posted Sales Credit Memos',
+  header: 'Sales Cr_Memo Header', line: 'Sales Cr_Memo Line',
+  columns: salesInvoice.columns.filter(c => c.as !== 'OrderNo'),
+});
+
 // server: same box the weekly-targets feature already reaches (172.16.10.9).
 // database: the physical legacy DB. prefix: the NAV company table prefix.
 const LEGACY_SERVER = process.env.LEGACY_DB_HOST || '172.16.10.9';
 
 export const SOURCES = [
-  { key: 'RMK', label: 'RMK — Rosemark (legacy)',        server: LEGACY_SERVER, database: 'rm-bc',       prefix: 'RMK', datasets: LEGACY_DATASETS },
-  { key: 'FCL', label: "FCL — Farmer's Choice (legacy)", server: LEGACY_SERVER, database: 'fcl-bc-main', prefix: 'FCL', datasets: LEGACY_DATASETS },
-  // fcl-bc-main also physically holds the CM and FLM companies — enabled here to
-  // demonstrate how cheap adding a source is (same DB, different NAV prefix):
-  { key: 'CM',  label: 'CM — Choice Meats (legacy)',     server: LEGACY_SERVER, database: 'fcl-bc-main', prefix: 'CM',  datasets: LEGACY_DATASETS },
-  { key: 'FLM', label: 'FLM — Farmlands (legacy)',       server: LEGACY_SERVER, database: 'fcl-bc-main', prefix: 'FLM', datasets: LEGACY_DATASETS },
+  ...['CM', 'FCL', 'FLM', 'RMK'].map(company => ({
+    key: `${company}-CUR`, label: `${company} - Current (from 6 Jan 2025)`, pool: 'current', company,
+    server: process.env.LEGACY_LIVE_DB_HOST || '172.16.10.8', database: process.env.BC_DB_NAME || 'FCL',
+    prefix: company, minDate: DOWNLOAD_CUTOFF, datasets: LIVE_DATASETS,
+  })),
+  ...['CM', 'FCL', 'FLM', 'RMK'].map(company => ({
+    key: company, label: `${company} - Legacy (before 6 Jan 2025)`, server: LEGACY_SERVER,
+    database: company === 'RMK' ? 'rm-bc' : 'fcl-bc-main', prefix: company,
+    beforeDate: DOWNLOAD_CUTOFF, datasets: LEGACY_DATASETS,
+  })),
 ];
 
 /** Look up a source by key. */
 export function getSource(sourceKey) {
-  return SOURCES.find((s) => s.key === sourceKey) || null;
+  const key = String(sourceKey || '').replace(/-LIVE$/, '-CUR');
+  return SOURCES.find((s) => s.key === key) || null;
 }
 
 /** True when a dataset is available for a given source (some datasets, e.g.
@@ -484,6 +555,19 @@ export function legacyTable(prefix, tableName) {
 }
 
 /**
+ * Source-aware table reference. Warehouse sources (`rawTables`) use raw names
+ * where `{CO}` is replaced by the company prefix — e.g. `{CO}MAIN_SINVL` →
+ * `[dbo].[FCLMAIN_SINVL]`. Legacy sources fall back to the {prefix}$ NAV scheme.
+ * tableName always comes from the registry (whitelist), never user input.
+ */
+export function tableRef(source, tableName) {
+  if (source.pool === 'downloadWarehouse') return downloadTable(source.company, tableName);
+  if (['live', 'current'].includes(source.pool)) return bcTable(source.company, tableName, { ext: tableName === 'SlaughterData' });
+  if (source.rawTables) return `[dbo].[${tableName.split('{CO}').join(source.prefix)}]`;
+  return legacyTable(source.prefix, tableName);
+}
+
+/**
  * Client-facing catalogue: sources + datasets + the filter controls each
  * dataset supports (never leaks server / table names).
  */
@@ -502,6 +586,8 @@ export function catalogue() {
         label: meta.label,
         type: meta.type || 'text',                 // 'text' | 'enum'
         multi: !!meta.multi,
+        lookup: !!meta.lookup,
+        wildcard: meta.type !== 'enum',
         options: meta.options || null,             // [{ value, label }] for enum
         // Default selection the client should pre-apply (e.g. Slaughter → Settled).
         default: d.defaultFilters?.[key] != null ? String(d.defaultFilters[key]).split(',') : null,

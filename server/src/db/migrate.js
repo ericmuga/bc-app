@@ -1,3 +1,7 @@
+import { migrateDispatchPackingV2 } from './dispatchPackingV2.js';
+import { migrateDispatchChillers } from './dispatchChillers.js';
+import { migrateContactRoute } from './contactRoute.js';
+import { migrateRmkContacts } from './rmkContacts.js';
 /**
  * db/migrate.js
  * Run once per company to create all required tables.
@@ -430,7 +434,7 @@ async function migrate(companyId) {
       ALTER TABLE [dbo].[PosContact] ADD [IsWalkIn] BIT NOT NULL DEFAULT 0
   `);
   for (const [col, def] of [
-    ['RouteCode',       'NVARCHAR(20)  NULL'],
+    ['RouteCode',       'NVARCHAR(100) NULL'],
     ['CustomerType',    'NVARCHAR(20)  NULL'],
     ['CompanyName',     'NVARCHAR(200) NULL'],
     ['ParentContactNo', 'NVARCHAR(20)  NULL'],
@@ -442,6 +446,8 @@ async function migrate(companyId) {
         ALTER TABLE [dbo].[PosContact] ADD [${col}] ${def}
     `);
   }
+  await migrateContactRoute(await db.getPool());
+  await migrateRmkContacts(await db.getPool());
   console.log('  [dbo].[PosContact] OK');
 
   // ── [dbo].[PosCategory] ──────────────────────────────────────────────────────
@@ -1385,6 +1391,7 @@ async function migrate(companyId) {
     )
   `);
   console.log('  [dbo].[DispatchAssemblyLine] OK');
+  await migrateDispatchChillers(pool);
 
   // ── [dbo].[DispatchVesselType] (carton / vessel size master) ────────────────
   await run(`
@@ -1466,6 +1473,7 @@ async function migrate(companyId) {
     )
   `);
   console.log('  [dbo].[DispatchBoxLine] OK');
+  await migrateDispatchPackingV2(pool);
 
   // ── [dbo].[DispatchVehicle] (vehicle master) ────────────────────────────────
   await run(`

@@ -1,7 +1,7 @@
 <template>
   <div class="login-wrap">
     <div class="login-card bc-card">
-      <div class="login-logo">⬡</div>
+      <img class="login-logo" src="/branding/bc-console.png" alt="BC Console commerce and analytics" width="88" height="88" />
       <h1 class="login-title">BC Console</h1>
       <p class="login-sub text-muted">Sign in with your domain credentials</p>
 
@@ -86,9 +86,9 @@ async function submit() {
   gap: 14px;
 }
 
-.login-logo  { font-size: 36px; color: var(--bc-primary-light); line-height: 1; }
-.login-title { font-size: 22px; font-weight: 700; margin: 0; }
-.login-sub   { margin: -8px 0 4px; }
+.login-logo  { align-self: center; display: block; width: 88px; height: 88px; object-fit: contain; }
+.login-title { text-align: center; font-size: 22px; font-weight: 700; margin: 0; }
+.login-sub   { text-align: center; margin: -8px 0 4px; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label {

@@ -7,6 +7,11 @@
 import * as Wh from '../models/WarehouseSyncModel.js';
 import logger from '../services/logger.js';
 
+export async function getDownloadEtl(_req, res) {
+  try { res.json(await Wh.downloadEtlStatus()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+}
+
 export async function getJobs(_req, res) {
   try { res.json({ jobs: await Wh.listJobs() }); }
   catch (e) { logger.error('warehouse/jobs', { error: e.message }); res.status(500).json({ error: e.message }); }

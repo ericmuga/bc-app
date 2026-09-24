@@ -56,6 +56,10 @@
       <div class="s"><label>Rows</label>
         <label class="top-chk"><input type="checkbox" v-model="topOnly" /> Top 20</label>
       </div>
+      <div class="s"><label>Include</label>
+        <label class="top-chk"><input type="checkbox" v-model="sellableOnly" @change="run" /> Sellable only</label>
+        <label class="top-chk"><input type="checkbox" v-model="includePendingWms" @change="run" /> Pending WMS</label>
+      </div>
       <div class="s run">
         <Button label="Run report" icon="pi pi-play" :loading="loading" @click="run" />
         <Button label="Excel" icon="pi pi-file-excel" severity="secondary" outlined :disabled="!rows.length" @click="exportXlsx" />
@@ -160,6 +164,8 @@ const granularity = ref('none')
 const metric = ref('quantity')
 const viewType = ref('table')
 const topOnly = ref(false)
+const sellableOnly = ref(false)
+const includePendingWms = ref(false)
 
 const today = new Date()
 const to = ref(new Date(today))
@@ -214,6 +220,8 @@ async function run() {
       items: f.items,
       groupBy: groupBy.value.length ? groupBy.value : ['location'],
       granularity: granularity.value,
+      sellableOnly: sellableOnly.value,
+      includePendingWms: includePendingWms.value,
     }
     const { data } = await warehouseApi.invReport(body)
     result.value = data

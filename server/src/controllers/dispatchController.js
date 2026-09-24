@@ -1,8 +1,12 @@
+import * as Sessions from '../models/DispatchSessionModel.js';
+import * as Movements from '../models/DispatchMovementModel.js';
+import { syncItemRules } from '../models/DispatchItemRuleModel.js';
 /**
  * controllers/dispatchController.js
  * REST handlers for the dispatch / pick-and-pack pipeline.
  */
 import * as Dispatch from '../models/DispatchModel.js';
+import * as Chillers from '../models/DispatchChillerModel.js';
 import * as BcReport from '../models/BcReport.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 import logger from '../services/logger.js';
@@ -13,6 +17,28 @@ const err = (res, e, code = 500) => {
   res.status(code).json({ error: e.message });
 };
 const splitCSV = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : []);
+
+export async function chillerConfig(req, res) {
+  try { ok(res, await Chillers.configuration()); } catch (e) { err(res, e); }
+}
+export async function saveChillerConfig(req, res) {
+  try { ok(res, await Chillers.saveConfiguration(req.body)); } catch (e) { err(res, e, 400); }
+}
+export async function saveChillerMapping(req, res) {
+  try { ok(res, await Chillers.saveMapping(req.body)); } catch (e) { err(res, e, 400); }
+}
+export async function deleteChillerMapping(req, res) {
+  try { ok(res, await Chillers.deleteMapping(req.params.itemNo)); } catch (e) { err(res, e, 400); }
+}
+export async function chillerWorklist(req, res) {
+  try { ok(res, await Chillers.worklist(req.user, { userId: req.query.userId, status: req.query.status })); } catch (e) { err(res, e); }
+}
+export async function chillerMonitor(req, res) {
+  try { ok(res, await Chillers.worklist(req.user, { monitor: true })); } catch (e) { err(res, e); }
+}
+export async function chillerStock(req, res) {
+  try { ok(res, await Chillers.stockPosition(req.query)); } catch (e) { err(res, e); }
+}
 
 // ── Registry (confirm the 4 parts) ───────────────────────────────────────────
 export async function listConfirmation(req, res) {
@@ -88,7 +114,7 @@ export async function listUnassigned(_req, res) {
 }
 
 export async function listPackers(_req, res) {
-  try { ok(res, await Dispatch.listUsersByRole('packer')); }
+  try { ok(res, await Dispatch.listUsersByRole(['assembler','packer'])); }
   catch (e) { err(res, e); }
 }
 
@@ -148,9 +174,9 @@ export async function returnReasons(req, res) {
   catch (e) { err(res, e); }
 }
 
-// Assemblers list (for the elevated "view as" picker) = packers.
+// Assembly operators, including packers with existing assembly access.
 export async function listAssemblers(_req, res) {
-  try { ok(res, await Dispatch.listUsersByRole('packer')); }
+  try { ok(res, await Dispatch.listUsersByRole(['assembler','packer'])); }
   catch (e) { err(res, e); }
 }
 
@@ -281,3 +307,11 @@ export async function bcSalespersons(req, res) {
   try { ok(res, await BcReport.listSalespersons(splitCSV(req.query.companies))); }
   catch (e) { err(res, e); }
 }
+
+export async function currentAssemblySession(req,res) { try { ok(res,await Sessions.current(req.user)); } catch(e) { err(res,e); } }
+export async function startAssemblySession(req,res) { try { ok(res,await Sessions.start(req.user)); } catch(e) { err(res,e,400); } }
+export async function endAssemblySession(req,res) { try { ok(res,await Sessions.end(req.user,req.params.sessionId)); } catch(e) { err(res,e,400); } }
+export async function assemblySessions(req,res) { try { ok(res,await Sessions.report(req.user,req.query)); } catch(e) { err(res,e,400); } }
+export async function assemblySessionEvents(req,res) { try { ok(res,await Sessions.events(req.user,req.params.sessionId)); } catch(e) { err(res,e,400); } }
+export async function chillerMovements(req,res) { try { ok(res,await Movements.movements(req.query)); } catch(e) { err(res,e,400); } }
+export async function syncDispatchItemRules(req,res) { try { ok(res,await syncItemRules()); } catch(e) { err(res,e,400); } }

@@ -392,10 +392,12 @@
         </div>
       </div>
 
-      <!-- Reference for Card / Bank Deposit / Bank Transfer / Credit -->
-      <div v-if="needsRef" class="form-row">
-        <label>Reference {{ selectedPayType?.PaymentClass === 'BankDeposit' ? '(deposit slip no.)' : '' }}</label>
-        <InputText v-model="paymentRef" placeholder="transaction / slip / approval ref" fluid />
+      <!-- Reference is available for every payment method. -->
+      <div v-if="selectedPayType" class="form-row">
+        <label>Payment reference (optional) {{ selectedPayType?.PaymentClass === 'BankDeposit' ? '(deposit slip no.)' : '' }}</label>
+        <InputText v-model="paymentRef" placeholder="transaction / slip / approval ref" :maxlength="100" fluid />
+        <small v-if="isMpesa">If the payment is not listed, type its confirmation code here. It will be saved as a manual reference.</small>
+        <small v-if="currentPaymentReference.length > 100" class="mpesa-msg">Combined references exceed 100 characters. Shorten the typed reference.</small>
       </div>
 
       <!-- Cash tendered -->
@@ -421,6 +423,7 @@
         <div v-for="(t, i) in splitTenders" :key="i" class="split-row">
           <span>{{ t.paymentTypeCode || t.paymentTypeName }}</span>
           <span v-if="t.couponCode" class="text-muted text-sm">· {{ t.couponCode }}</span>
+          <span v-if="t.reference" class="text-muted text-sm">{{ t.reference }}</span>
           <span v-if="t.mobileNo"   class="text-muted text-sm">· {{ t.mobileNo }}</span>
           <strong style="margin-left:auto">{{ fmt(t.amount) }}</strong>
           <Button icon="pi pi-times" text severity="danger" size="small"
@@ -601,6 +604,7 @@
 </template>
 
 <script setup>
+import { combinePaymentReferences } from "../../../shared/paymentReference.mjs"
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
@@ -825,8 +829,7 @@ const filteredMpesaResults = computed(() => {
 const isMpesa = computed(() => selectedPayType.value?.PaymentClass === 'Mobile')
 // Non-cash, non-M-Pesa methods (Card / Bank Deposit / Bank Transfer / Credit) capture a free-text reference.
 const paymentRef = ref('')
-const REF_CLASSES = ['Card', 'BankDeposit', 'BankTransfer', 'Credit']
-const needsRef = computed(() => REF_CLASSES.includes(selectedPayType.value?.PaymentClass))
+const currentPaymentReference = computed(() => combinePaymentReferences(isMpesa.value ? mpesaCodes.value : '', paymentRef.value))
 
 // Allocate the target M-Pesa amount across the selected transactions, respecting
 // each one's available balance (a partially-used code contributes only its balance).
@@ -897,7 +900,7 @@ const checkoutPaymentLines = computed(() => {
   if (splitTenders.value.length) {
     return splitTenders.value.map(t => ({
       name: t.paymentTypeCode || t.paymentTypeName,
-      detail: t.couponCode || t.reference || t.mobileNo || '',
+      detail: combinePaymentReferences(t.couponCode, t.reference) || t.mobileNo || '',
       amount: Number(t.amount || 0),
     }))
   }
@@ -908,7 +911,7 @@ const checkoutPaymentLines = computed(() => {
     : payable.value
   return [{
     name: selectedPayType.value.Code || selectedPayType.value.Name,
-    detail: code === 'COUPON' ? 'Coupon code required at confirm' : (mpesaCodes.value || paymentRef.value || mobileNo.value || ''),
+    detail: code === 'COUPON' ? 'Coupon code required at confirm' : (currentPaymentReference.value || mobileNo.value || ''),
     amount,
   }]
 })
@@ -916,11 +919,22 @@ const checkoutAmountPaid = computed(() => checkoutPaymentLines.value.reduce((s, 
 const checkoutChangeDue = computed(() => Math.max(0, Math.round((checkoutAmountPaid.value - total.value) * 100) / 100))
 
 const canConfirm = computed(() => {
-  if (!selectedPayType.value) return false
+  if (!selectedPayType.value || currentPaymentReference.value.length > 100) return false
   // Mobile (M-Pesa): allow confirm with either a phone (STK) or matched transaction(s).
-  if (selectedPayType.value.PaymentClass === 'Mobile' && !mobileNo.value.trim() && mpesaMatchedTotal.value <= 0) return false
+  if (selectedPayType.value.PaymentClass === 'Mobile' && !mobileNo.value.trim() && mpesaMatchedTotal.value <= 0 && !paymentRef.value.trim()) return false
   if (selectedPayType.value.PaymentClass === 'Cash' && roundKes(tendered.value) < payable.value) return false
   return true
+})
+
+// A fresh cart must return to today's prices after a historical order is cleared.
+watch(orderId, async (id, previous) => {
+  if (id || !previous) return
+  try {
+    const { data } = await posApi.getItems()
+    if (!orderId.value) categories.value = data
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Price refresh failed', detail: e.message, life: 5000 })
+  }
 })
 
 // ── Load catalogue ────────────────────────────────────────────────
@@ -928,7 +942,7 @@ async function loadCatalogue() {
   loading.value = true
   try {
     const [itemsRes, ptRes, shopRes, contactsRes, walkInRes] = await Promise.all([
-      posApi.getItems(), posApi.getPaymentTypes(), posApi.getMyShop(),
+      posApi.getItems(null, orderId.value), posApi.getPaymentTypes(), posApi.getMyShop(),
       posApi.listContacts(), posApi.getWalkIn(),
     ])
     categories.value  = itemsRes.data
@@ -1149,6 +1163,7 @@ async function loadResumedOrder(oid) {
       lineAmount: Number(l.lineAmount ?? l.LineAmount ?? ((l.quantity || 0) * (l.unitPrice || 0))) || 0,
       company:    (l.company || l.Company || '').toUpperCase(),
     }))
+    categories.value = (await posApi.getItems(null, orderId.value)).data
     const cName = data.contactName || data.ContactName
     if (cName) contactDraft.value = { name: cName, phone: data.contactPhone || '', pin: data.contactPin || '' }
     toast.add({ severity: 'success', summary: 'Cart resumed', detail: `${orderNo.value} — add items and check out`, life: 2500 })
@@ -1462,7 +1477,7 @@ const splitTenders = ref([])
 const splitPaid = computed(() => splitTenders.value.reduce((s, t) => s + Number(t.amount || 0), 0))
 const splitRemaining = computed(() => Math.max(0, total.value - splitPaid.value))
 const canAddTender = computed(() => {
-  if (!selectedPayType.value) return false
+  if (!selectedPayType.value || currentPaymentReference.value.length > 100) return false
   if (splitRemaining.value <= 0) return false
   if (selectedPayType.value.PaymentClass === 'Cash' && (!tendered.value || tendered.value <= 0)) return false
   return true
@@ -1473,9 +1488,10 @@ function defaultTenderAmount() {
   return splitRemaining.value
 }
 async function addTender() {
+  if (currentPaymentReference.value.length > 100) { payError.value = 'Payment reference must be at most 100 characters'; return }
   const isMobile = selectedPayType.value.PaymentClass === 'Mobile'
   // For M-Pesa, the tender amount is what the matched transaction(s) cover.
-  const amt = isMobile && mpesaMatchedTotal.value > 0 ? mpesaMatchedTotal.value : defaultTenderAmount()
+  const amt = isMobile ? (paymentRef.value.trim() ? Number(mpesaAmount.value || 0) : (mpesaMatchedTotal.value || defaultTenderAmount())) : defaultTenderAmount()
   if (!(amt > 0)) { payError.value = 'Tender amount must be positive'; return }
   let couponCode = null
   const code = String(selectedPayType.value.Code || '').toUpperCase()
@@ -1488,7 +1504,7 @@ async function addTender() {
     paymentTypeName: selectedPayType.value.Name,
     amount: Math.round(amt * 100) / 100,
     mobileNo: isMobile ? (mobileNo.value || null) : null,
-    reference: isMobile ? (mpesaCodes.value || null) : (needsRef.value ? (paymentRef.value.trim() || null) : null),
+    reference: currentPaymentReference.value || null,
     matches: isMobile ? mpesaMatched.value.slice() : null,
     couponCode,
   })
@@ -1560,6 +1576,7 @@ async function payWithTenders() {
 }
 
 async function doCheckout() {
+  if (currentPaymentReference.value.length > 100) { payError.value = 'Payment reference must be at most 100 characters'; return }
   paying.value = true
   payError.value = ''
   if (!(await ensureProduced(orderId.value))) { paying.value = false; return }
@@ -1577,7 +1594,7 @@ async function doCheckout() {
       ? roundKes(tendered.value)
       : payable.value
     const oid = orderId.value
-    const mpesaRef = isMpesa.value ? (mpesaCodes.value || null) : (needsRef.value ? (paymentRef.value.trim() || null) : null)
+    const mpesaRef = currentPaymentReference.value || null
     const matches  = isMpesa.value ? mpesaMatched.value.slice() : []
     const { data: co } = await posApi.checkout(oid, {
       paymentTypeCode: selectedPayType.value.Code,
@@ -1587,7 +1604,7 @@ async function doCheckout() {
       reference: mpesaRef,
       couponCode,
     })
-    const { data: confirmRes } = await posApi.confirmPayment(co.paymentId, mpesaRef)
+    const { data: confirmRes } = await posApi.confirmPayment(co.paymentId, null)
     // Record M-Pesa code→invoice matches (non-fatal if it fails).
     if (matches.length) {
       try { await posApi.recordMpesaMatch(oid, matches) }
