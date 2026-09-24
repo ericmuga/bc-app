@@ -22,7 +22,7 @@
  *   AD_TLS_REJECT_UNAUTHORIZED  false  (dev only, self-signed certs)
  */
 
-import ldap   from 'ldapjs';
+import { createManagedLdapClient } from './ldapClient.js';
 import logger from './logger.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ function createClient() {
   if (process.env.AD_TLS_REJECT_UNAUTHORIZED === 'false') {
     tlsOptions.rejectUnauthorized = false;
   }
-  return ldap.createClient({
+  return createManagedLdapClient({
     url:            process.env.AD_URL,
     reconnect:      false,
     connectTimeout: 8000,
@@ -88,7 +88,6 @@ export async function authenticateAD(username, password) {
     await bindAsync(userClient, upn, password);
     logger.info('AD user bind OK', { upn });
   } catch (err) {
-    destroy(userClient);
     if (err.code === 49) throw new Error('Invalid credentials.');
     logger.error('AD user bind failed', { upn, code: err.code, error: err.message });
     throw new Error('Active Directory authentication failed. Contact your administrator.');
