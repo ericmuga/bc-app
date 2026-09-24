@@ -1,3 +1,5 @@
+import * as dispatchFlow from '../controllers/dispatchWorkflowController.js';
+import { INVENTORY_REPORT_ROLES, POS_REPORT_ROLES, POS_REPORT_ALL_SHOPS_ROLES, canReadLegacyDataset } from '../../../shared/reportAccess.mjs';
 /**
  * routes/index.js
  */
@@ -125,9 +127,14 @@ router.post('/admin/report-schedules/:scheduleId/run', ...adminOnly, adminCtrl.r
 
 // ── Reporting → Legacy Downloads (read-only exports over legacy BC DBs) ───────
 const canLegacyReport = [authMiddleware, requireRole(...REPORTING_ROLES)];
+const canLegacyDataset = [...canLegacyReport, (req, res, next) => {
+  if (!canReadLegacyDataset(req.user.role, req.query.dataset)) return res.status(403).json({ error: 'This dataset is not available for your role' });
+  next();
+}];
 router.get('/reporting/legacy/sources',  ...canLegacyReport, legacyReportCtrl.listSources);
-router.get('/reporting/legacy/run',      ...canLegacyReport, legacyReportCtrl.run);
-router.get('/reporting/legacy/download', ...canLegacyReport, legacyReportCtrl.download);
+router.get('/reporting/legacy/lookup',   ...canLegacyDataset, legacyReportCtrl.lookup);
+router.get('/reporting/legacy/run',      ...canLegacyDataset, legacyReportCtrl.run);
+router.get('/reporting/legacy/download', ...canLegacyDataset, legacyReportCtrl.download);
 
 // ── Reporting → Warehouse Sync Center (FCLWHS ETL monitoring) ────────────────
 // Separate from the POS Sync Center: watches SQL Agent jobs + refresh procs on
@@ -137,12 +144,14 @@ router.get( '/reporting/warehouse/jobs',              ...canWarehouse, warehouse
 router.get( '/reporting/warehouse/jobs/:name/history',...canWarehouse, warehouseSyncCtrl.getJobHistory);
 router.get( '/reporting/warehouse/procedures',        ...canWarehouse, warehouseSyncCtrl.getProcedures);
 router.get( '/reporting/warehouse/facts',             ...canWarehouse, warehouseSyncCtrl.getFacts);
+router.get( '/reporting/warehouse/download-etl',      ...canWarehouse, warehouseSyncCtrl.getDownloadEtl);
 router.post('/reporting/warehouse/jobs/:name/run',    ...canWarehouse, warehouseSyncCtrl.runJob);
+const canInventoryReport = [authMiddleware, requireRole(...INVENTORY_REPORT_ROLES)];
 // Inventory analytics over the materialised item-ledger fact (fact_ILE_MV)
-router.get( '/reporting/warehouse/inventory/dimensions', ...canWarehouse, warehouseInvCtrl.getDimensions);
-router.get( '/reporting/warehouse/inventory/items',      ...canWarehouse, warehouseInvCtrl.getItems);
-router.post('/reporting/warehouse/inventory/report',     ...canWarehouse, warehouseInvCtrl.getReport);
-router.post('/reporting/warehouse/inventory/stock-card', ...canWarehouse, warehouseInvCtrl.getStockCard);
+router.get( '/reporting/warehouse/inventory/dimensions', ...canInventoryReport, warehouseInvCtrl.getDimensions);
+router.get( '/reporting/warehouse/inventory/items',      ...canInventoryReport, warehouseInvCtrl.getItems);
+router.post('/reporting/warehouse/inventory/report',     ...canInventoryReport, warehouseInvCtrl.getReport);
+router.post('/reporting/warehouse/inventory/stock-card', ...canInventoryReport, warehouseInvCtrl.getStockCard);
 
 // ── Finance Reports ──────────────────────────────────────────────────────────
 const canFinance = [authMiddleware, requireRole(...FINANCE_ROLES)];
@@ -195,6 +204,10 @@ const canBom       = [authMiddleware, requireRole(...BOM_ROLES)];
 // Store ops (requisitions + stock takes) shared with the chef; chef reports.
 const canStoreOps  = [authMiddleware, requireRole(...STORE_OPS_ROLES)];
 const canChefRpt   = [authMiddleware, requireRole(...CHEF_REPORT_ROLES)];
+// POS reports viewable by POS roles + chef (chef gets reports without full POS).
+const canPosReport = [authMiddleware, requireRole(...POS_REPORT_ROLES)];
+const canAllShopReport = [authMiddleware, requireRole(...POS_REPORT_ALL_SHOPS_ROLES)];
+router.get('/pos/reports/shops', ...canAllShopReport, posCtrl.listShops);
 router.get( '/pos/items',                          ...canStoreOps, posCtrl.getItems);
 router.get( '/pos/payment-types',                  ...canPos, posCtrl.getPaymentTypes);
 router.get( '/pos/my-shop',                        ...canStoreOps, posCtrl.getMyShop);
@@ -309,15 +322,15 @@ router.get(  '/pos/stock/snapshot',                            ...canPos,    pos
 router.post( '/pos/stock/upload',                              ...canManage, posStockCtrl.uploadStock);
 
 // ── POS Reports hub (admin / shop-admin shop-comparison; others scope to own shop) ──
-router.get(  '/pos/reports/daily-sales',                       ...canPos,    posStockCtrl.dailySalesSummary);
-router.get(  '/pos/reports/stock-position',                    ...canPos,    posStockCtrl.reportStockPosition);
-router.get(  '/pos/reports/sales-by-item',                     ...canPos,    posStockCtrl.reportSalesByItem);
-router.get(  '/pos/reports/sales-by-contact',                  ...canPos,    posStockCtrl.reportSalesByContact);
-router.get(  '/pos/reports/shop-comparison',                   ...canManage, posStockCtrl.reportShopComparison);
+router.get(  '/pos/reports/daily-sales',                       ...canPosReport, posStockCtrl.dailySalesSummary);
+router.get(  '/pos/reports/stock-position',                    ...canPosReport, posStockCtrl.reportStockPosition);
+router.get(  '/pos/reports/sales-by-item',                     ...canPosReport, posStockCtrl.reportSalesByItem);
+router.get(  '/pos/reports/sales-by-contact',                  ...canPosReport, posStockCtrl.reportSalesByContact);
+router.get(  '/pos/reports/shop-comparison',                   ...canAllShopReport, posStockCtrl.reportShopComparison);
 // Chef reports: raw-material consumption (at cost) + cooked-product profitability.
 router.get(  '/pos/reports/chef/consumption',                  ...canChefRpt, posStockCtrl.reportChefConsumption);
 router.get(  '/pos/reports/chef/product-profit',               ...canChefRpt, posStockCtrl.reportChefProductProfit);
-router.get(  '/pos/reports/cash-movement',                     ...canPos,    posTillCtrl.reportCashMovement);
+router.get(  '/pos/reports/cash-movement',                     ...canPosReport, posTillCtrl.reportCashMovement);
 router.get(  '/pos/stock/daily-movements.csv',                 ...canPos, posStockCtrl.dailyReportCsv);
 router.get(  '/pos/stock/item-transactions',                   ...canStoreOps, posStockCtrl.itemTransactions);
 
@@ -504,6 +517,22 @@ router.get(  '/dispatch/packers',             ...canDispSuper,    dispatchCtrl.l
 router.post( '/dispatch/orders/:id/assign',   ...canDispSuper,    dispatchCtrl.assign);
 // Assembly (packer; admin/supervisor can view any assembler via ?userId=)
 const canDispAssemble = [authMiddleware, requireRole(...DISPATCH_ASSEMBLE_ROLES)];
+const canDispChiller = [authMiddleware, requireRole('admin', 'dispatch-supervisor', 'chiller-attendant')];
+router.get('/dispatch/chillers/config', ...canDispatch, dispatchCtrl.chillerConfig);
+router.put('/dispatch/chillers/config', ...canDispSuper, dispatchCtrl.saveChillerConfig);
+router.post('/dispatch/chillers/mappings', ...canDispSuper, dispatchCtrl.saveChillerMapping);
+router.delete('/dispatch/chillers/mappings/:itemNo', ...canDispSuper, dispatchCtrl.deleteChillerMapping);
+router.get('/dispatch/chillers/worklist', ...canDispAssemble, dispatchCtrl.chillerWorklist);
+router.get('/dispatch/chillers/monitor', ...canDispChiller, dispatchCtrl.chillerMonitor);
+router.get('/dispatch/chillers/stock', ...canDispChiller, dispatchCtrl.chillerStock);
+const canAssemblyReport = [authMiddleware, requireRole('admin','dispatch-supervisor','assembler','packer','chiller-attendant')];
+router.get('/dispatch/assembly-sessions/current', ...canDispAssemble, dispatchCtrl.currentAssemblySession);
+router.post('/dispatch/assembly-sessions', ...canDispAssemble, dispatchCtrl.startAssemblySession);
+router.post('/dispatch/assembly-sessions/:sessionId/end', ...canDispAssemble, dispatchCtrl.endAssemblySession);
+router.get('/dispatch/assembly-sessions', ...canAssemblyReport, dispatchCtrl.assemblySessions);
+router.get('/dispatch/assembly-sessions/:sessionId/events', ...canAssemblyReport, dispatchCtrl.assemblySessionEvents);
+router.get('/dispatch/chillers/movements', ...canDispChiller, dispatchCtrl.chillerMovements);
+router.post('/dispatch/chillers/sync-item-rules', ...canDispSuper, dispatchCtrl.syncDispatchItemRules);
 router.get(  '/dispatch/assembly',                 ...canDispAssemble, dispatchCtrl.listAssembly);
 router.get(  '/dispatch/assemblers',               ...canDispSuper,    dispatchCtrl.listAssemblers);
 router.get(  '/dispatch/return-reasons',           ...canDispAssemble, dispatchCtrl.returnReasons);
@@ -512,17 +541,36 @@ router.put(  '/dispatch/assembly/lines/:lineId',   ...canDispAssemble, dispatchC
 router.post( '/dispatch/assembly/:id/complete-part', ...canDispAssemble, dispatchCtrl.completeAssemblyPart);
 // Packing / boxing (packer + checker)
 const canDispPack = [authMiddleware, requireRole(...DISPATCH_PACK_ROLES)];
-router.get(  '/dispatch/packing',              ...canDispPack, dispatchCtrl.listPacking);
+router.get(  '/dispatch/packing',              ...canDispPack, dispatchFlow.list);
 router.get(  '/dispatch/vessel-types',         ...canDispPack, dispatchCtrl.vesselTypes);
 router.get(  '/dispatch/checkers',             ...canDispPack, dispatchCtrl.listCheckers);
-router.get(  '/dispatch/packing/:id',          ...canDispPack, dispatchCtrl.getPackingOrder);
-router.post( '/dispatch/packing/:id/session',  ...canDispPack, dispatchCtrl.startPackingSession);
-router.post( '/dispatch/packing/:id/boxes',    ...canDispPack, dispatchCtrl.openBox);
-router.post( '/dispatch/boxes/:boxId/lines',   ...canDispPack, dispatchCtrl.addBoxLine);
-router.delete('/dispatch/box-lines/:boxLineId', ...canDispPack, dispatchCtrl.removeBoxLine);
-router.post( '/dispatch/boxes/:boxId/close',   ...canDispPack, dispatchCtrl.closeBox);
+router.get(  '/dispatch/packing/:id',          ...canDispPack, dispatchFlow.detail);
+router.post('/dispatch/packing/:id/session', ...canDispPack, (_req,res)=>res.status(400).json({error:'Start a packing session and pick the order from the updated packing screen'}));
+router.post( '/dispatch/packing/:id/boxes',    ...canDispPack, dispatchFlow.openBox);
+router.post( '/dispatch/boxes/:boxId/lines',   ...canDispPack, dispatchFlow.addLine);
+router.delete('/dispatch/box-lines/:boxLineId', ...canDispPack, dispatchFlow.removeLine);
+router.post( '/dispatch/boxes/:boxId/close',   ...canDispPack, dispatchFlow.closeBox);
 router.get(  '/dispatch/box-by-qr/:qr',        ...canDispPack, dispatchCtrl.boxByQr);
-router.post( '/dispatch/packing/:id/complete', ...canDispPack, dispatchCtrl.completePacking);
+router.post( '/dispatch/packing/:id/complete', ...canDispPack, dispatchFlow.complete);
+router.get('/dispatch/packing-runs/current', ...canDispPack, dispatchFlow.currentRun);
+router.post('/dispatch/packing-runs', ...canDispPack, dispatchFlow.startRun);
+router.post('/dispatch/packing-runs/:runId/end', ...canDispPack, dispatchFlow.endRun);
+router.get('/dispatch/boxes/:boxId/label', ...canDispPack, dispatchFlow.label);
+router.post('/dispatch/boxes/:boxId/unpack', ...canDispPack, dispatchFlow.unpack);
+const canDispatchWork = [authMiddleware, requireRole('admin','dispatch-supervisor','assembler','packer','checker')];
+router.post('/dispatch/orders/:id/claim', ...canDispatchWork, dispatchFlow.claim);
+router.post('/dispatch/orders/:id/release', ...canDispatchWork, dispatchFlow.release);
+router.put('/dispatch/item-barcode', ...canDispatchWork, dispatchFlow.barcode);
+router.get('/dispatch/report-lookups', ...canDispatch, dispatchFlow.lookups);
+router.get('/dispatch/sync-schedules', ...canDispSuper, dispatchFlow.getSchedules);
+router.put('/dispatch/sync-schedules/:company', ...canDispSuper, dispatchFlow.setSchedule);
+router.post('/dispatch/packed-export', ...canDispSuper, dispatchFlow.pushPacked);
+router.get('/dispatch/packed-export', ...canDispSuper, dispatchFlow.packedExport);
+router.get('/dispatch/sync-status', ...canDispatch, dispatchFlow.syncs);
+router.get('/dispatch/reports', ...canDispatch, dispatchFlow.reports);
+router.get('/dispatch/setup/staff', ...canDispSuper, dispatchFlow.staff);
+router.put('/dispatch/setup/staff/:userId/role', ...canDispSuper, dispatchFlow.assignRole);
+router.post('/dispatch/setup/refresh-uoms', ...canDispSuper, dispatchFlow.units);
 // Loading (vehicle + driver + route + ship date; scan boxes on)
 const canDispLoad = [authMiddleware, requireRole(...DISPATCH_LOAD_ROLES)];
 router.get(  '/dispatch/vehicles',                    ...canDispLoad, dispatchCtrl.listVehicles);
@@ -543,7 +591,7 @@ router.get(  '/dispatch/bc-routes',       ...canDispatch,  dispatchCtrl.bcRoutes
 router.get(  '/dispatch/bc-salespersons', ...canDispatch,  dispatchCtrl.bcSalespersons);
 
 // ── Weekly domestic sales targets (upload to FCLWHS.FACT_WEEKLYTARGETS) ──────
-const canSalesTargets = [authMiddleware, requireRole('admin', 'sales')];
+const canSalesTargets = [authMiddleware, requireRole('admin', 'sales', 'sales-admin')];
 router.get( '/weekly-targets',         ...canSalesTargets, weeklyTargetsCtrl.list);
 router.get( '/weekly-targets/summary', ...canSalesTargets, weeklyTargetsCtrl.summary);
 router.get( '/weekly-targets/months',  ...canSalesTargets, weeklyTargetsCtrl.months);

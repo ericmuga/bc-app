@@ -947,6 +947,8 @@ GROUP BY [G_L Account No_]</pre>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
               <h4>Shops / Terminals</h4>
+              <Button label="Import RMK shops" icon="pi pi-cloud-download" size="small" :loading="importingRmkShops" @click="importRmkShops" />
+              <Button label="Import FLM shops" icon="pi pi-cloud-download" size="small" :loading="importingFlmShops" @click="importFlmShops" />
               <Button icon="pi pi-plus" text size="small" v-tooltip="'New shop'" @click="newPosShop" />
             </div>
             <p class="text-muted text-sm">Each shop is a distinct terminal. Assign a Shop Code to users to restrict their POS access to that shop only.</p>
@@ -1635,6 +1637,8 @@ const roleOptions = [
   { label: 'Costing',  value: 'costing' },
   { label: 'Dispatch Registry',   value: 'dispatch-registry' },
   { label: 'Dispatch Supervisor', value: 'dispatch-supervisor' },
+  { label: 'Chiller attendant', value: 'chiller-attendant' },
+  { label: 'Assembler', value: 'assembler' },
   { label: 'Packer',   value: 'packer' },
   { label: 'Checker',  value: 'checker' },
   { label: 'Loader',   value: 'loader' },
@@ -2978,6 +2982,32 @@ async function syncFromBc() {
 async function loadPosShopsOnly() {
   try { posShops.value = (await posSetupApi.listShops()).data }
   catch (e) { error.value = e.response?.data?.error || e.message }
+}
+
+const importingRmkShops = ref(false)
+const importingFlmShops = ref(false)
+async function importFlmShops() {
+  importingFlmShops.value = true
+  try {
+    const { data } = await posSetupApi.syncStepFromBc('shops', 'FLM')
+    await loadPosShopsOnly()
+    const missing = data.shops.filter(s => !s.LocationCode).map(s => s.Code)
+    toast.add({ severity: missing.length ? 'warn' : 'success', summary: 'FLM shops imported',
+      detail: `${data.count} shops. ${missing.length ? 'Location needed: ' + missing.join(', ') : ''}`, life: 8000 })
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { importingFlmShops.value = false }
+}
+async function importRmkShops() {
+  importingRmkShops.value = true
+  try {
+    const { data } = await posSetupApi.syncStepFromBc('shops', 'RMK')
+    await loadPosShopsOnly()
+    const notices = [...(data.errors || []), ...(data.refresh?.skipped || []).map(s => `${s.shopCode}: ${s.reason}`)]
+    toast.add({ severity: notices.length ? 'warn' : 'success', summary: 'RMK shops imported',
+      detail: `${data.inserted} added, ${data.updated} updated. ${data.refresh?.items || 0} items refreshed; ${data.refresh?.locations?.length || 0} stock locations refreshed. ${notices.join('; ')}`, life: 10000 })
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally { importingRmkShops.value = false }
 }
 
 // All POS-Setup heavy loads — fired the first time the POS Setup accordion opens.

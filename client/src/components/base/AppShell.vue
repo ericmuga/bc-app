@@ -63,60 +63,19 @@
           </RouterLink>
         </details>
 
-        <details v-if="canViewReports || canViewFinance || canViewTargets || canViewWarehouseSync" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
-          <summary class="section-label">Analytics</summary>
-          <RouterLink v-if="canViewReports" to="/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-chart-bar" />
-            <span>Reports</span>
+        <details v-if="reportGroups.length" class="nav-section" :open="navOpen.analytics" @toggle="onNavToggle('analytics', $event)">
+          <summary class="section-label">Reporting &amp; Analytics</summary>
+          <RouterLink to="/analytics" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-th-large" /><span>All Reports</span>
           </RouterLink>
-          <RouterLink v-if="canViewTargets" to="/weekly-targets" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-bullseye" />
-            <span>Sales Targets</span>
-          </RouterLink>
-          <RouterLink v-if="canViewReports" to="/bc-reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-database" />
-            <span>Sales Reports</span>
-          </RouterLink>
-          <RouterLink v-if="canViewFinance" to="/finance" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-money-bill" />
-            <span>Finance Reports</span>
-          </RouterLink>
-          <RouterLink v-if="canViewWarehouseSync" to="/reporting/inventory" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-chart-bar" />
-            <span>Inventory Analytics</span>
-          </RouterLink>
-          <RouterLink v-if="canViewWarehouseSync" to="/reporting/stock-position" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-box" />
-            <span>Stock Position</span>
-          </RouterLink>
-        </details>
-
-        <details v-if="canViewReporting" class="nav-section" :open="navOpen.reporting" @toggle="onNavToggle('reporting', $event)">
-          <summary class="section-label">Reporting</summary>
-          <RouterLink to="/reporting/legacy" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-database" />
-            <span>Legacy Downloads</span>
-          </RouterLink>
-          <RouterLink v-if="canViewWarehouseSync" to="/reporting/warehouse-sync" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-server" />
-            <span>Warehouse Sync</span>
-          </RouterLink>
-        </details>
-
-        <details v-if="canViewCosting" class="nav-section" :open="navOpen.costing" @toggle="onNavToggle('costing', $event)">
-          <summary class="section-label">Costing</summary>
-          <RouterLink to="/costing" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-calculator" />
-            <span>Recipe Data (FCL)</span>
-          </RouterLink>
-          <RouterLink to="/costing/cm" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-calculator" />
-            <span>Recipe Data (CM)</span>
-          </RouterLink>
-          <RouterLink to="/costing/templates" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-clone" />
-            <span>Templates</span>
-          </RouterLink>
+          <details v-for="group in reportGroups" :key="group.key" class="nav-section report-group"
+            :open="navOpen['reports-' + group.key] !== false" @toggle.stop="onNavToggle('reports-' + group.key, $event)">
+            <summary class="section-label">{{ group.label }}</summary>
+            <RouterLink v-for="report in group.reports" :key="report.path" :to="report.path"
+              class="nav-item" exact-active-class="active" @click="closeSidebarOnMobile">
+              <i :class="report.icon" /><span>{{ report.label }}</span>
+            </RouterLink>
+          </details>
         </details>
 
         <details v-if="canViewDispatch" class="nav-section" :open="navOpen.dispatch" @toggle="onNavToggle('dispatch', $event)">
@@ -141,9 +100,16 @@
             <i class="pi pi-truck" />
             <span>Loading</span>
           </RouterLink>
+          <RouterLink v-if="['admin', 'dispatch-supervisor', 'chiller-attendant'].includes(auth.effectiveRole)" to="/dispatch/chillers" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-th-large" /><span>Chiller attendant</span>
+          </RouterLink>
+          <RouterLink v-if="['admin', 'dispatch-supervisor', 'chiller-attendant'].includes(auth.effectiveRole)" to="/dispatch/chiller-movements" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-arrows-h" /><span>Chiller movements</span>
+          </RouterLink>
+          <RouterLink v-if="canViewDispatch" to="/dispatch/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile"><i class="pi pi-chart-bar" /><span>Reports</span></RouterLink>
           <RouterLink v-if="canDispAssign" to="/dispatch/setup" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-cog" />
-            <span>Setup</span>
+            <span>Admin setup</span>
           </RouterLink>
         </details>
 
@@ -160,10 +126,6 @@
           <RouterLink to="/pos/stock-requests" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-truck" />
             <span>Stock Requests</span>
-          </RouterLink>
-          <RouterLink to="/pos/stock-report" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-chart-line" />
-            <span>Stock Movements</span>
           </RouterLink>
           <RouterLink to="/pos/stock-take" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-clipboard" />
@@ -193,10 +155,6 @@
             <i class="pi pi-money-bill" />
             <span>M-Pesa Reconciliation</span>
           </RouterLink>
-          <RouterLink to="/pos/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-chart-bar" />
-            <span>POS Reports</span>
-          </RouterLink>
           <RouterLink to="/pos/help" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-book" />
             <span>Documentation</span>
@@ -221,10 +179,6 @@
           <RouterLink to="/pos/chef-stock-take" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-check-square" />
             <span>Stock Take</span>
-          </RouterLink>
-          <RouterLink to="/pos/chef-reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-chart-bar" />
-            <span>Kitchen Reports</span>
           </RouterLink>
         </details>
 
@@ -283,6 +237,7 @@ import { useAuthStore } from '@/stores/auth.js'
 import { useCompanyStore } from '@/stores/company.js'
 import { companiesApi } from '@/services/api.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/lib/access.js'
+import { reportGroupsForRole } from '../../../../shared/reportAccess.mjs'
 import { canAccessFinance } from '@/lib/financeAccess.js'
 import { canAccessPos, isGlobalAdmin } from '@/lib/posAccess.js'
 import { canAccessCosting } from '@/lib/costingAccess.js'
@@ -318,22 +273,13 @@ const role           = computed(() => auth.effectiveRole)
 // Show "Admin Setup" link for full admin, shop-admin and sales-admin (latter two see POS-only sections)
 const isAdmin       = computed(() => ['admin', 'shop-admin', 'sales-admin'].includes(String(role.value || '').toLowerCase()))
 const isFullAdmin   = computed(() => isGlobalAdmin(role.value))
+const reportGroups = computed(() => reportGroupsForRole(role.value))
 const canViewOrders = computed(() => canAccessOrders(role.value))
 const canViewInvoices = computed(() => canAccessInvoices(role.value))
-// sales-admin gets the reports section too (lib/access grants it server-side/route-side)
-const canViewReports = computed(() => canAccessReports(role.value) || ['sales-admin', 'finance'].includes(String(role.value || '').toLowerCase()))
-const canViewFinance = computed(() => canAccessFinance(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
-const canViewCosting = computed(() => canAccessCosting(role.value))
 // Recipes (BOM) + Production module — admin, sales-admin, chef (chef sees only this)
 const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
-const canViewDispatch = computed(() => canAccessDispatch(role.value))
-const canViewTargets  = computed(() => ['admin', 'sales'].includes(String(role.value || '').toLowerCase()))
-// Reporting → Legacy Downloads — admin, finance, analyst (string-matched here;
-// lib/access.js is owned by another account on this host and can't be edited).
-const canViewReporting = computed(() => ['admin', 'finance', 'analyst'].includes(String(role.value || '').toLowerCase()))
-// Warehouse Sync Center: admin + analyst only (not finance).
-const canViewWarehouseSync = computed(() => ['admin', 'analyst'].includes(String(role.value || '').toLowerCase()))
+const canViewDispatch = computed(() => canAccessDispatch(role.value) || role.value === 'chiller-attendant')
 const canDispRegistry = computed(() => canDispatchRegistry(role.value))
 const canDispAssign   = computed(() => canDispatchAssign(role.value))
 const canDispAssemble = computed(() => canDispatchAssemble(role.value))
@@ -353,8 +299,11 @@ const roleOptions = [
   { label: 'analyst',         value: 'analyst' },
   { label: 'finance',         value: 'finance' },
   { label: 'costing',         value: 'costing' },
+  { label: 'production',      value: 'production' },
   { label: 'dispatch-registry',   value: 'dispatch-registry' },
   { label: 'dispatch-supervisor', value: 'dispatch-supervisor' },
+  { label: 'chiller-attendant', value: 'chiller-attendant' },
+  { label: 'assembler',       value: 'assembler' },
   { label: 'packer',          value: 'packer' },
   { label: 'checker',         value: 'checker' },
   { label: 'loader',          value: 'loader' },
@@ -362,10 +311,13 @@ const roleOptions = [
 function defaultRouteForRole(r) {
   if (canAccessOrders(r))   return '/orders/scan'
   if (canAccessInvoices(r)) return '/invoices/scan'
-  if (canAccessReports(r))  return '/reports'
+  if (['sales', 'sales-admin', 'analyst', 'finance', 'costing', 'production'].includes(r)) return '/analytics'
   if (canAccessFinance(r))  return '/finance'
   if (canAccessPos(r))      return '/pos'
   if (canAccessCosting(r))  return '/costing'
+  if (r === 'chiller-attendant') return '/dispatch/chillers'
+  if (r === 'assembler') return '/dispatch/assembly'
+  if (r === 'packer') return '/dispatch/packing'
   if (canAccessDispatch(r)) return '/dispatch/registry'
   return '/'
 }
@@ -569,6 +521,8 @@ details.nav-section[open] { padding-bottom: 8px; }
 }
 .nav-item:hover { background: var(--bc-surface-raised); color: var(--bc-text); }
 .nav-item.active { background: rgba(15,113,115,0.2); color: var(--bc-primary-light); }
+.report-group { margin-left: 8px; }
+.report-group .nav-item { white-space: normal; font-size: 12px; }
 .nav-item .pi { font-size: 14px; width: 16px; flex-shrink: 0; }
 
 .sidebar-footer {
