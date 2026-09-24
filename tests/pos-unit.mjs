@@ -37,8 +37,8 @@ const POS_FEATURE_SECTIONS = [
 ];
 
 test('server role constants include POS rollout roles without widening global admin', () => {
-  assert.deepEqual(POS_ROLES, [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SHOP]);
-  assert.deepEqual(POS_MANAGER_ROLES, [ROLES.ADMIN, ROLES.SHOP_ADMIN]);
+  assert.deepEqual(POS_ROLES, [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.SHOP]);
+  assert.deepEqual(POS_MANAGER_ROLES, [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN]);
   assert.deepEqual(ADMIN_ROLES, [ROLES.ADMIN]);
 
   assert.ok(!ORDER_ROLES.includes(ROLES.SHOP_ADMIN), 'shop-admin must not access dispatch order queue');
@@ -54,16 +54,18 @@ test('role normalization is case and whitespace tolerant', () => {
 });
 
 test('client POS access helpers match the server POS role model', () => {
-  for (const role of [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SHOP]) {
+  for (const role of [ROLES.ADMIN, ROLES.SHOP_ADMIN, ROLES.SALES_ADMIN, ROLES.SHOP]) {
     assert.equal(canAccessPos(role), true, `${role} should enter POS`);
   }
 
   assert.equal(canManagePos(ROLES.ADMIN), true);
   assert.equal(canManagePos(ROLES.SHOP_ADMIN), true);
+  assert.equal(canManagePos(ROLES.SALES_ADMIN), true);
   assert.equal(canManagePos(ROLES.SHOP), false);
 
   assert.equal(isGlobalAdmin(ROLES.ADMIN), true);
   assert.equal(isGlobalAdmin(ROLES.SHOP_ADMIN), false);
+  assert.equal(isGlobalAdmin(ROLES.SALES_ADMIN), false);
   assert.equal(isGlobalAdmin(ROLES.SHOP), false);
 });
 

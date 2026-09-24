@@ -1270,6 +1270,7 @@ export async function stockPositionReport({ shopCode = null, dateFrom, dateTo, i
     )
     SELECT a.[ItemNo],
            pi.[Description] AS Description,
+           UPPER(ISNULL(NULLIF(pi.[SourceCompany],''),'FCL')) AS Company,
            ISNULL(o.Qty, 0)               AS Opening,
            ISNULL(p.TransferIn, 0)        AS TransferIn,
            ISNULL(p.ThirdPartyIn, 0)      AS ThirdPartyIn,
@@ -1291,6 +1292,7 @@ export async function stockPositionReport({ shopCode = null, dateFrom, dateTo, i
   return r.recordset.map(row => ({
     itemNo:       row.ItemNo,
     description:  row.Description || '',
+    company:      row.Company || 'FCL',
     opening:      Number(row.Opening || 0),
     transferIn:   Number(row.TransferIn   || 0) + Number(row.ThirdPartyIn || 0),
     positiveAdj:  Number(row.PositiveAdj  || 0),
@@ -1336,13 +1338,14 @@ export async function salesByItemReport({ shopCode = null, dateFrom, dateTo } = 
       GROUP BY ms.[ItemNo], ms.[Description]
     )
     SELECT c.[ItemNo], MAX(c.[Description]) AS Description,
+           UPPER(ISNULL(NULLIF(pi.[SourceCompany],''),'FCL')) AS Company,
            SUM(c.[Qty]) AS Qty, SUM(c.[Value]) AS Value,
            pi.[BaseUnitOfMeasure]  AS BaseUom,
            pi.[SalesUnitOfMeasure] AS SalesUom,
            ISNULL(NULLIF(pi.[QtyPerSalesUnit], 0), 1) AS Factor
     FROM   Combined c
     LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo] = c.[ItemNo]
-    GROUP BY c.[ItemNo], pi.[BaseUnitOfMeasure], pi.[SalesUnitOfMeasure], pi.[QtyPerSalesUnit]
+    GROUP BY c.[ItemNo], pi.[SourceCompany], pi.[BaseUnitOfMeasure], pi.[SalesUnitOfMeasure], pi.[QtyPerSalesUnit]
     ORDER BY SUM(c.[Value]) DESC
   `);
   const isKg = (u) => /^(KG|KGS|KGM|KILOGRAM|KILOGRAMME|KILO)$/.test(String(u || '').trim().toUpperCase());
@@ -1353,7 +1356,7 @@ export async function salesByItemReport({ shopCode = null, dateFrom, dateTo } = 
     // qtyKg = sold qty (sales units) × qty-per-sales-unit (base units per sale).
     const qtyKg  = isKg(x.BaseUom) ? qty * factor : null;
     return {
-      itemNo: x.ItemNo, description: x.Description || '',
+      itemNo: x.ItemNo, description: x.Description || '', company: x.Company || 'FCL',
       qty, value: Number(x.Value || 0),
       baseUom: x.BaseUom || '', salesUom: x.SalesUom || '', factor,
       qtyKg,
@@ -1461,20 +1464,28 @@ export async function salesByContactReport({ shopCode = null, dateFrom, dateTo }
   const req = pool.request().input('df', sql.Date, dateFrom).input('dt', sql.Date, dateTo);
   if (shopCode) req.input('shop', sql.NVarChar(50), shopCode.toUpperCase());
   const shopFilter = shopCode ? 'AND o.[ShopCode]=@shop' : '';
+  // Split per mirror: sum line amounts per contact per company (line company →
+  // shop's primary company when untagged), so a contact buying across mirrors
+  // shows one row per company.
   const r = await req.query(`
     SELECT COALESCE(o.[ContactNo],   '(walk-in)') AS ContactNo,
            COALESCE(o.[ContactName], '(walk-in)') AS ContactName,
+           COALESCE(NULLIF(ol.[Company], ''), sh.[Company], 'FCL') AS Company,
            COUNT(DISTINCT o.[OrderId]) AS Orders,
-           SUM(o.[TotalAmount])        AS Value
+           SUM(ol.[LineAmount])        AS Value
     FROM   [dbo].[PosOrder] o
+    JOIN   [dbo].[PosOrderLine] ol ON ol.[OrderId] = o.[OrderId]
+    LEFT JOIN [dbo].[PosShop] sh   ON sh.[Code] = o.[ShopCode]
     WHERE  o.[Status] = 'paid'
       AND  CAST(o.[CreatedAt] AS DATE) BETWEEN @df AND @dt
       ${shopFilter}
-    GROUP BY COALESCE(o.[ContactNo],'(walk-in)'), COALESCE(o.[ContactName],'(walk-in)')
-    ORDER BY SUM(o.[TotalAmount]) DESC
+    GROUP BY COALESCE(o.[ContactNo],'(walk-in)'), COALESCE(o.[ContactName],'(walk-in)'),
+             COALESCE(NULLIF(ol.[Company], ''), sh.[Company], 'FCL')
+    ORDER BY SUM(ol.[LineAmount]) DESC
   `);
   return r.recordset.map(x => ({
     contactNo:   x.ContactNo, contactName: x.ContactName,
+    company:     x.Company || 'FCL',
     orders:      Number(x.Orders || 0),
     value:       Number(x.Value  || 0),
   }));
@@ -1829,7 +1840,11 @@ export async function pullBcLedgerEntries({ shopCode, company = null, entryTypes
   let posDocNos = new Set();
   if (types.includes(1)) {
     const od = await pool.request().input('code', sql.NVarChar(50), code)
-      .query(`SELECT UPPER(LTRIM(RTRIM([OrderNo]))) AS OrderNo FROM [dbo].[PosOrder] WHERE [ShopCode]=@code AND [OrderNo] IS NOT NULL`);
+      .input('ledgerCompany', sql.NVarChar(20), cc).input('ledgerLocation', sql.NVarChar(20), loc)
+      .query(`SELECT UPPER(LTRIM(RTRIM(o.[OrderNo]))) AS OrderNo FROM [dbo].[PosOrder] o
+        WHERE o.[OrderNo] IS NOT NULL AND (o.[ShopCode]=@code OR
+          EXISTS (SELECT 1 FROM dbo.PosShopCompany sc WHERE sc.ShopCode=o.ShopCode
+            AND sc.Company=@ledgerCompany AND sc.LocationCode=@ledgerLocation))`);
     posDocNos = new Set(od.recordset.map(r => r.OrderNo));
   }
 
