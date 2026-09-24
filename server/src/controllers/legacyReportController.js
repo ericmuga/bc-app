@@ -1,3 +1,4 @@
+import { canReadLegacyDataset } from '../../../shared/reportAccess.mjs';
 /**
  * controllers/legacyReportController.js
  * Handlers for the "Reporting → Legacy Downloads" endpoints (/reporting/legacy/*).
@@ -13,8 +14,17 @@ import { catalogue } from '../services/legacyReports.js';
 import logger from '../services/logger.js';
 
 /** GET /api/reporting/legacy/sources → registry catalogue (sources + datasets). */
-export function listSources(_req, res) {
-  return res.json({ sources: catalogue() });
+export function listSources(req, res) {
+  return res.json({ sources: catalogue().map(source => ({ ...source, datasets: source.datasets.filter(d => canReadLegacyDataset(req.user.role, d.key)) })).filter(source => source.datasets.length) });
+}
+
+export async function lookup(req, res) {
+  try {
+    return res.json(await Legacy.lookupOptions({ sourceKey: req.query.source, datasetKey: req.query.dataset,
+      filterKey: req.query.filter, search: req.query.search }));
+  } catch (error) {
+    return res.status(/^(Unknown|Invalid filter)/.test(error.message) ? 400 : 500).json({ error: error.message });
+  }
 }
 
 function parseFilters(query) {
@@ -54,7 +64,7 @@ export async function run(req, res) {
     return res.json(result);
   } catch (err) {
     logger.error('reporting/legacy/run error', { error: err.message });
-    const status = /^Unknown (source|dataset)/.test(err.message) ? 400 : 500;
+    const status = /^(Unknown (source|dataset)|Invalid filter)/.test(err.message) ? 400 : 500;
     return res.status(status).json({ error: err.message });
   }
 }
@@ -180,7 +190,7 @@ export async function download(req, res) {
       try { res.end(); } catch { /* ignore */ }
       return;
     }
-    const status = /^Unknown (source|dataset)/.test(err.message) ? 400 : 500;
+    const status = /^(Unknown (source|dataset)|Invalid filter)/.test(err.message) ? 400 : 500;
     return res.status(status).json({ error: err.message });
   }
 }

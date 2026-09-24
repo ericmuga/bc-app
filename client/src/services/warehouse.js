@@ -11,6 +11,7 @@ export const warehouseApi = {
                  api.get(`/reporting/warehouse/jobs/${encodeURIComponent(name)}/history`, { params: { limit } }),
   procedures: ()            => api.get('/reporting/warehouse/procedures'),
   facts:      ()            => api.get('/reporting/warehouse/facts'),
+  downloadEtl: ()           => api.get('/reporting/warehouse/download-etl'),
   runJob:     (name)        => api.post(`/reporting/warehouse/jobs/${encodeURIComponent(name)}/run`),
 
   // Inventory analytics (item-ledger fact)

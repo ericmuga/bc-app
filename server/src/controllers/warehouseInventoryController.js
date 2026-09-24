@@ -24,6 +24,7 @@ export async function getStockCard(req, res) {
     res.json(await Inv.stockCard({
       locations: b.locations, dateFrom: b.dateFrom, dateTo: b.dateTo,
       companies: b.companies, postingGroups: b.postingGroups, items: b.items,
+      includePendingWms: b.includePendingWms,
     }));
   } catch (e) {
     const status = /Pick at least one location/.test(e.message) ? 400 : 500;
@@ -45,6 +46,8 @@ export async function getReport(req, res) {
       items:         b.items,
       groupBy:       b.groupBy,
       granularity:   b.granularity,
+      sellableOnly:      b.sellableOnly,
+      includePendingWms: b.includePendingWms,
     });
     res.json(result);
   } catch (e) {

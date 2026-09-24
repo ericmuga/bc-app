@@ -16,6 +16,23 @@ import logger from '../services/logger.js';
 
 async function pool() { return whsDb.getPool(); }
 
+export async function downloadEtlStatus() {
+  const p = await pool();
+  const exists = await p.request().query("SELECT OBJECT_ID('dbo.DL_TableState') AS Id");
+  if (!exists.recordset[0]?.Id) return { installed: false, companies: [], tables: [], runs: [] };
+  const [companies, tables, runs] = await Promise.all([
+    p.request().query('SELECT * FROM dbo.DL_CompanyState ORDER BY Company'),
+    p.request().query(`SELECT s.Company,s.TableKey,s.InitialComplete,s.RowsCopied,s.LastSuccessAt,s.LastError,
+      CASE WHEN s.WindowHigh IS NOT NULL THEN 1 ELSE 0 END HasCheckpoint,
+      ISNULL(p.Rows,0) StoredRows FROM dbo.DL_TableState s OUTER APPLY (
+        SELECT SUM(row_count) Rows FROM sys.dm_db_partition_stats
+        WHERE object_id=OBJECT_ID('dbo.DL_'+s.Company+'_'+s.TableKey) AND index_id IN (0,1)) p
+      ORDER BY s.Company,s.TableKey`),
+    p.request().query('SELECT TOP(20) * FROM dbo.DL_Run ORDER BY RunId DESC'),
+  ]);
+  return { installed: true, companies: companies.recordset, tables: tables.recordset, runs: runs.recordset };
+}
+
 // SQL Agent run_status → label. 0 Failed, 1 Succeeded, 2 Retry, 3 Canceled, 4 In progress.
 const RUN_STATUS = { 0: 'FAILED', 1: 'SUCCEEDED', 2: 'RETRY', 3: 'CANCELED', 4: 'IN PROGRESS' };
 

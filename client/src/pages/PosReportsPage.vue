@@ -29,6 +29,11 @@
         <div class="filters">
           <div class="filter-field"><label>From</label><DatePicker v-model="dateFrom" date-format="yy-mm-dd" /></div>
           <div class="filter-field"><label>To</label>  <DatePicker v-model="dateTo"   date-format="yy-mm-dd" /></div>
+          <div v-if="isMgr" class="filter-field" style="min-width:210px">
+            <label>Shop</label>
+            <Select v-model="selectedShop" :options="shopOptions" optionLabel="label" optionValue="code"
+                    placeholder="All shops" showClear filter :filterFields="['code','name']" />
+          </div>
           <div v-if="tab === 'stockPosition'" class="filter-field" style="min-width:160px">
             <label>Item No (optional)</label>
             <InputText v-model="itemNo" placeholder="Drill into one item" />
@@ -38,7 +43,7 @@
                   :disabled="!rows.length" :loading="exporting" @click="downloadCsv" />
           <Button label="PDF" icon="pi pi-file-pdf" severity="secondary"
                   :disabled="!rows.length" @click="downloadPdf" />
-          <template v-if="tab === 'stockPosition'">
+          <template v-if="tab === 'stockPosition' && canOperateStock">
             <span class="stk-sep" />
             <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />
             <Button label="Import stock" icon="pi pi-upload" severity="secondary" :loading="stkBusy" @click="stkFile?.click()" v-tooltip="'Upload a filled sheet to set on-hand'" />
@@ -46,6 +51,22 @@
             <Button label="Sheet A4" icon="pi pi-print" text :loading="stkBusy" @click="printStockSheet('a4')" />
             <Button label="Sheet 80mm" icon="pi pi-print" text :loading="stkBusy" @click="printStockSheet('thermal')" />
           </template>
+        </div>
+
+        <!-- Daily sales: per-mirror (per-company) breakdown + total -->
+        <div v-if="tab === 'dailySales' && byCompany.length" class="mirror-card">
+          <div class="chart-title">Sold per mirror{{ selectedShop ? ' — shop ' + selectedShop : ' — all shops' }}</div>
+          <table class="mirror-tbl">
+            <thead><tr><th>Company (mirror)</th><th class="r">Orders</th><th class="r">Amount</th></tr></thead>
+            <tbody>
+              <tr v-for="c in byCompany" :key="c.company">
+                <td>{{ c.company }}</td><td class="r">{{ c.orders }}</td><td class="r">{{ fmt2(c.amount) }}</td>
+              </tr>
+            </tbody>
+            <tfoot v-if="byCompanyTotal"><tr>
+              <td>Total</td><td class="r">{{ byCompanyTotal.orders }}</td><td class="r">{{ fmt2(byCompanyTotal.amount) }}</td>
+            </tr></tfoot>
+          </table>
         </div>
 
         <!-- Bar chart (top-N inline SVG, no extra deps) -->
@@ -91,14 +112,17 @@
 </template>
 
 <script setup>
+import { hasReportRole, POS_REPORT_ALL_SHOPS_ROLES } from "../../../shared/reportAccess.mjs"
+import api from "@/services/api.js"
 import { ref, computed, onMounted, watch } from 'vue'
 import Button       from 'primevue/button'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
 import DatePicker   from 'primevue/datepicker'
 import InputText    from 'primevue/inputtext'
+import Select       from 'primevue/select'
 import Message      from 'primevue/message'
-import { posReportsApi } from '@/services/pos.js'
+import { posReportsApi, posApi } from '@/services/pos.js'
 import { useAuthStore }  from '@/stores/auth.js'
 import { useToast }      from 'primevue/usetoast'
 import { jsPDF }         from 'jspdf'
@@ -110,7 +134,8 @@ const stkFile = ref(null)
 const stkBusy = ref(false)
 
 const auth   = useAuthStore()
-const isMgr  = computed(() => ['admin', 'shop-admin'].includes(auth.user?.role))
+const isMgr = computed(() => hasReportRole(auth.effectiveRole, POS_REPORT_ALL_SHOPS_ROLES))
+const canOperateStock = computed(() => ['admin', 'shop-admin', 'sales-admin', 'shop', 'chef'].includes(auth.effectiveRole))
 
 const today      = new Date()
 const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
@@ -119,6 +144,13 @@ const dateTo     = ref(today)
 const itemNo     = ref('')
 const tab        = ref('stockPosition')
 const rows       = ref([])
+// Manager shop filter (admin/shop-admin); shop users are locked to their shop server-side.
+const shopOptions   = ref([])
+const selectedShop  = ref('')
+// Daily-sales per-mirror (per-company) breakdown.
+const byCompany      = ref([])
+const byCompanyTotal = ref(null)
+const fmt2 = (n) => Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const loading    = ref(false)
 const exporting  = ref(false)
 const error      = ref('')
@@ -152,6 +184,7 @@ const columns = computed(() => {
       return [
         { field: 'itemNo',      header: 'Item No',      style: 'width:120px' },
         { field: 'description', header: 'Description',  style: 'min-width:180px' },
+        { field: 'company',     header: 'Mirror',       style: 'width:70px' },
         { field: 'opening',     header: 'Opening',      style: 'width:100px;text-align:right', format: 'num' },
         { field: 'transferIn',  header: 'Transfer In',  style: 'width:110px;text-align:right', format: 'num' },
         { field: 'positiveAdj', header: '+ Adj',        style: 'width:90px;text-align:right',  format: 'num' },
@@ -168,6 +201,7 @@ const columns = computed(() => {
       return [
         { field: 'itemNo',      header: 'Item No',     style: 'width:120px' },
         { field: 'description', header: 'Description', style: 'min-width:200px' },
+        { field: 'company',     header: 'Mirror',      style: 'width:70px' },
         { field: 'qty',         header: 'Qty',         style: 'width:90px;text-align:right',  format: 'num' },
         { field: 'salesUom',    header: 'UoM',         style: 'width:70px' },
         { field: 'qtyKg',       header: 'Qty (KG)',    style: 'width:100px;text-align:right', format: 'kg' },
@@ -177,6 +211,7 @@ const columns = computed(() => {
       return [
         { field: 'contactNo',   header: 'Contact No',   style: 'width:130px' },
         { field: 'contactName', header: 'Contact Name', style: 'min-width:200px' },
+        { field: 'company',     header: 'Mirror',       style: 'width:70px' },
         { field: 'orders',      header: 'Orders',       style: 'width:100px;text-align:right' },
         { field: 'value',       header: 'Value',        style: 'width:130px;text-align:right', format: 'numStrong' },
       ]
@@ -283,11 +318,13 @@ function isoDate(d) {
 function commonParams() {
   const p = { dateFrom: isoDate(dateFrom.value), dateTo: isoDate(dateTo.value) }
   if (tab.value === 'stockPosition' && itemNo.value.trim()) p.itemNo = itemNo.value.trim().toUpperCase()
+  // Managers can scope by shop (empty = all shops). Shop users are locked server-side.
+  if (isMgr.value && selectedShop.value) p.shopCode = selectedShop.value
   return p
 }
 
 async function run() {
-  loading.value = true; error.value = ''; rows.value = []
+  loading.value = true; error.value = ''; rows.value = []; byCompany.value = []; byCompanyTotal.value = null
   try {
     const fn = {
       dailySales:     posReportsApi.dailySales,
@@ -300,6 +337,9 @@ async function run() {
     const { data } = await fn(commonParams())
     // cashMovement returns { rows, sessions, totals } — others return arrays directly
     rows.value = Array.isArray(data) ? data : (data?.rows || [])
+    // Daily sales also returns a per-mirror (per-company) breakdown + total.
+    byCompany.value      = (!Array.isArray(data) && data?.byCompany) ? data.byCompany : []
+    byCompanyTotal.value = (!Array.isArray(data) && data?.byCompanyTotal) ? data.byCompanyTotal : null
   } catch (e) {
     error.value = e.response?.data?.error ?? e.message
   } finally { loading.value = false }
@@ -314,6 +354,13 @@ async function downloadCsv() {
     aoa.push([]); aoa.push(['', '', '', '', '', '', 'TOTAL', totals.value[0]?.value ?? 0])
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Daily Sales')
+    // Second sheet: per-mirror (per-company) breakdown + total.
+    if (byCompany.value.length) {
+      const maoa = [['Company (mirror)', 'Orders', 'Amount'],
+        ...byCompany.value.map(c => [c.company, c.orders, c.amount])]
+      if (byCompanyTotal.value) maoa.push(['TOTAL', byCompanyTotal.value.orders, byCompanyTotal.value.amount])
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(maoa), 'Sold per mirror')
+    }
     XLSX.writeFile(wb, `daily-sales-${commonParams().dateFrom}_${commonParams().dateTo}.xlsx`)
     return
   }
@@ -465,7 +512,20 @@ async function printStockSheet(format) {
   finally { stkBusy.value = false }
 }
 
-onMounted(run)
+async function loadShops() {
+  if (!isMgr.value) return
+  try {
+    const { data } = await api.get('/pos/reports/shops')
+    const list = Array.isArray(data) ? data : (data?.rows || data?.shops || [])
+    shopOptions.value = list.map((s) => {
+      const code = s.Code || s.code || s.shopCode
+      const name = s.Name || s.name || ''
+      return { code, name, label: name ? `${code} — ${name}` : code }
+    }).filter((s) => s.code)
+  } catch { /* non-fatal — dropdown just stays empty */ }
+}
+
+onMounted(async () => { await loadShops(); await run() })
 </script>
 
 <style scoped>
@@ -498,6 +558,12 @@ onMounted(run)
 
 .chart-card { background:#1f2937; border:1px solid #374151; border-radius:8px; padding:8px 12px; }
 .chart-title { font-weight:600; font-size:13px; margin-bottom:4px; color:#f3f4f6; }
+.mirror-card { background:#1f2937; border:1px solid #374151; border-radius:8px; padding:8px 12px; }
+.mirror-tbl { border-collapse:collapse; font-size:13px; color:#e5e7eb; min-width:320px; }
+.mirror-tbl th, .mirror-tbl td { padding:4px 14px; border-bottom:1px solid #374151; text-align:left; }
+.mirror-tbl th.r, .mirror-tbl td.r { text-align:right; font-variant-numeric:tabular-nums; }
+.mirror-tbl thead th { color:#93a4bf; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.mirror-tbl tfoot td { font-weight:700; border-top:2px solid #4b5563; border-bottom:none; color:#fff; }
 .chart-svg { width:100%; max-height:240px; }
 .chart-svg text { fill:#e5e7eb; }
 

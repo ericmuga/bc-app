@@ -47,6 +47,7 @@
       <span class="bl">View</span>
       <SelectButton v-model="viewType" :options="VIEWS" optionLabel="label" optionValue="key" :allowEmpty="false" />
       <label class="top-chk"><input type="checkbox" v-model="topOnly" /> Top 20</label>
+      <label class="top-chk"><input type="checkbox" v-model="includePendingWms" @change="run" /> Pending WMS</label>
       <span class="asof text-muted text-sm">
         Opening &lt; <b>{{ result.dateFrom }}</b> · movements <b>{{ result.dateFrom }}</b> → <b>{{ result.dateTo }}</b> · {{ result.rowCount }} item(s)
       </span>
@@ -124,6 +125,7 @@ const itemsLoading = ref(false)
 const metric = ref('qty')
 const viewType = ref('table')
 const topOnly = ref(false)
+const includePendingWms = ref(false)
 
 const today = new Date()
 const to = ref(new Date(today))
@@ -196,6 +198,7 @@ async function run() {
     const { data } = await warehouseApi.invStockCard({
       locations: f.locations, dateFrom: ymd(from.value), dateTo: ymd(to.value),
       companies: f.companies, postingGroups: f.postingGroups, items: f.items,
+      includePendingWms: includePendingWms.value,
     })
     result.value = data
     buildFilters()

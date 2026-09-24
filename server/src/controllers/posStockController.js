@@ -1,3 +1,4 @@
+import { reportShopCode } from '../services/reportShopScope.js';
 /**
  * controllers/posStockController.js
  * Stock requests, daily movements report, stock take.
@@ -30,10 +31,12 @@ async function userShopCode(req) {
   return Pos.getUserShopCode(req.user.userId);
 }
 
-/** GET /pos/reports/daily-sales — all paid orders in range, scoped to the user's shop. */
+/** GET /pos/reports/daily-sales — paid orders + per-mirror breakdown.
+ *  Managers (admin/shop-admin) may filter by ?shopCode (omit = all shops);
+ *  a shop user is always locked to their own shop. */
 export async function dailySalesSummary(req, res) {
   try {
-    const shopCode = await userShopCode(req);   // attendant → own shop; admin → selected/all
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
     const { dateFrom, dateTo } = req.query;
     ok(res, await Pos.dailySalesSummary({ shopCode, dateFrom, dateTo }));
   } catch (e) { err(res, e); }
@@ -320,8 +323,7 @@ function csvBlob(headers, rows, esc = (v) => {
 
 export async function reportStockPosition(req, res) {
   try {
-    const isAdmin = ['admin', 'shop-admin'].includes(req.user.role);
-    const shopCode = req.query.shopCode || (isAdmin ? null : await Pos.getUserShopCode(req.user.userId));
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
     const data = await Stock.stockPositionReport({
       shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo,
       itemNo: req.query.itemNo || null,
@@ -341,8 +343,7 @@ export async function reportStockPosition(req, res) {
 
 export async function reportSalesByItem(req, res) {
   try {
-    const isAdmin = ['admin', 'shop-admin'].includes(req.user.role);
-    const shopCode = req.query.shopCode || (isAdmin ? null : await Pos.getUserShopCode(req.user.userId));
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
     const data = await Stock.salesByItemReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
     if (req.query.format === 'csv') {
       const csv = csvBlob(['ItemNo','Description','Qty','Value'],
@@ -357,8 +358,7 @@ export async function reportSalesByItem(req, res) {
 
 export async function reportSalesByContact(req, res) {
   try {
-    const isAdmin = ['admin', 'shop-admin'].includes(req.user.role);
-    const shopCode = req.query.shopCode || (isAdmin ? null : await Pos.getUserShopCode(req.user.userId));
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
     const data = await Stock.salesByContactReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
     if (req.query.format === 'csv') {
       const csv = csvBlob(['ContactNo','ContactName','Orders','Value'],

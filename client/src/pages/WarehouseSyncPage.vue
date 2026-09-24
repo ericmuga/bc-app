@@ -15,6 +15,22 @@
     </div>
 
     <Message v-if="error" severity="error" :closable="true" @close="error=''" class="mb-3">{{ error }}</Message>
+    <section v-if="downloadEtl.installed" class="card">
+      <div class="card-head"><h3>Download refresh · every 2 hours · 5,000 rows per batch</h3></div>
+      <DataTable :value="downloadEtl.companies" size="small">
+        <Column field="Company" header="Company" />
+        <Column header="Downloads"><template #body="{data}">{{ data.ReadyAt ? 'Warehouse ready' : 'Initial load — using ERP' }}</template></Column>
+        <Column header="Last successful refresh"><template #body="{data}">{{ fmtDateTime(data.LastSuccessAt) }}</template></Column>
+        <Column field="LastError" header="Refresh error" />
+      </DataTable>
+      <DataTable :value="downloadEtl.tables" size="small" paginator :rows="10">
+        <Column field="Company" header="Company" /><Column field="TableKey" header="Table" />
+        <Column header="Stored rows"><template #body="{data}">{{ fmtNum(data.StoredRows) }}</template></Column>
+        <Column header="Initial load"><template #body="{data}">{{ data.InitialComplete ? 'Complete' : data.HasCheckpoint ? 'Loading / resumable' : 'Pending' }}</template></Column>
+        <Column header="Last refresh"><template #body="{data}">{{ fmtDateTime(data.LastSuccessAt) }}</template></Column>
+        <Column field="LastError" header="Error" />
+      </DataTable>
+    </section>
 
     <!-- ── Fact freshness ─────────────────────────────────────────────────── -->
     <section class="card">
@@ -134,6 +150,7 @@ const error   = ref('')
 const jobs    = ref([])
 const facts   = ref([])
 const procedures = ref([])
+const downloadEtl = ref({ installed: false, companies: [], tables: [] })
 const failedOnly = ref(false)
 const running = ref('')
 
@@ -164,10 +181,11 @@ const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-KE', { dateStyle: 
 async function loadAll() {
   loading.value = true; error.value = ''
   try {
-    const [j, f, p] = await Promise.all([warehouseApi.jobs(), warehouseApi.facts(), warehouseApi.procedures()])
+    const [j, f, p, d] = await Promise.all([warehouseApi.jobs(), warehouseApi.facts(), warehouseApi.procedures(), warehouseApi.downloadEtl()])
     jobs.value = j.data.jobs || []
     facts.value = f.data.facts || []
     procedures.value = p.data.procedures || []
+    downloadEtl.value = d.data
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { loading.value = false }
 }

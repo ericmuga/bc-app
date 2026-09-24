@@ -1,3 +1,4 @@
+import { reportShopCode, canReadAllShops } from '../services/reportShopScope.js';
 /**
  * controllers/posTillController.js
  * Cash till sessions, transactions, cash report.
@@ -91,9 +92,9 @@ export async function getCashReport(req, res) {
 /** GET /pos/reports/cash-movement?dateFrom=&dateTo=&shopCode=&format=csv */
 export async function reportCashMovement(req, res) {
   try {
-    const isAdmin = ['admin', 'shop-admin'].includes(req.user.role);
+    const isAdmin = canReadAllShops(req.user.role);
     const Pos = await import('../models/PosModel.js');
-    const shopCode = req.query.shopCode || (isAdmin ? null : await Pos.getUserShopCode(req.user.userId));
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
     const cashierUserId = isAdmin ? (req.query.cashierUserId || null) : req.user.userId;
     const data = await Till.cashMovementReport({
       shopCode, cashierUserId,

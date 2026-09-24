@@ -7,6 +7,7 @@ import api from './api.js'
 export const legacyReportsApi = {
   /** Registry catalogue: { sources: [{ key, label, datasets: [{ key, label, hasLines, filters }] }] } */
   sources: () => api.get('/reporting/legacy/sources'),
+  lookup: (source, dataset, filter, search = '') => api.get('/reporting/legacy/lookup', { params: { source, dataset, filter, search } }),
 
   /** Paginated preview. mode: 'detail' | 'summary'. filters: { dateFrom, dateTo, documentNo, vendorNo, customerNo, glAccountNo, sourceCode } */
   run: ({ source, dataset, filters = {}, page = 1, pageSize = 50, mode = 'detail' }) =>

@@ -3,7 +3,7 @@
     <div class="ld-head">
       <div>
         <h2>Legacy Downloads</h2>
-        <p class="sub">Read-only exports from the <strong>legacy Business Central</strong> databases. Pick a source and dataset, filter, preview, then download CSV or Excel.</p>
+        <p class="sub">Current: 6 January 2025 onward, refreshed every 2 hours. Legacy: before 6 January 2025. Pick a company and period, filter, preview, then download CSV or Excel.</p>
       </div>
     </div>
 
@@ -29,7 +29,13 @@
         <MultiSelect v-if="ff.type === 'enum'" v-model="filters[ff.key]" :options="ff.options"
           option-label="label" option-value="value" :placeholder="`Any ${ff.label}`"
           display="chip" :showToggleAll="true" filter class="fi" />
+        <AutoComplete v-else-if="ff.lookup" v-model="filters[ff.key]" :suggestions="lookupResults[ff.key] || []"
+          optionLabel="label" dropdown :forceSelection="false" :minLength="0" :delay="250"
+          :placeholder="`Search or type ${ff.key === 'inventoryPostingGroup' ? 'JF*' : 'a filter'}`" class="fi"
+          @complete="searchLookup(ff.key, $event.query)" />
         <InputText v-else v-model="filters[ff.key]" :placeholder="ff.label" class="fi sm" @keyup.enter="run(1)" />
+        <small v-if="lookupMore[ff.key]">First 100 matches — type to narrow the list.</small>
+        <small v-if="lookupErrors[ff.key]" class="lookup-error">{{ lookupErrors[ff.key] }} You can still type a filter.</small>
       </div>
 
       <!-- Detail / Summary toggle (only for datasets that declare a summary) -->
@@ -47,6 +53,14 @@
       <Button icon="pi pi-file" label="CSV" size="small" severity="secondary" :disabled="!hasRun || downloading" :loading="downloading === 'csv'" @click="download('csv')" />
       <Button icon="pi pi-file-excel" label="Excel" size="small" severity="secondary" :disabled="!hasRun || downloading" :loading="downloading === 'xlsx'" @click="download('xlsx')" />
     </div>
+
+    <p class="filter-help">Text filters: <strong>JF*</strong> starts with JF; <strong>*JF*</strong> contains JF;
+      <strong>?</strong> matches one character; <strong>JF*|JG*</strong> matches either;
+      <strong>JF*&amp;&lt;&gt;JF99</strong> excludes JF99. Ranges such as <strong>JF01..JF99</strong> are inclusive.
+      Search dropdowns by code or name, select a value, or type an expression. Master options are cached for five minutes.</p>
+    <Message v-if="hasRun && refreshError" severity="warn" :closable="false">The latest refresh failed. Results use the last available warehouse data. {{ refreshError }}</Message>
+    <p v-if="hasRun && backend === 'warehouse'" class="filter-help">Last complete refresh: {{ refreshedAt ? new Date(refreshedAt).toLocaleString() : '—' }}.</p>
+    <p v-if="hasRun && backend === 'erp'" class="filter-help">Current data is being read from ERP while the warehouse prepares or is unavailable.</p>
 
     <div v-if="!hasRun" class="run-prompt">
       <i class="pi pi-filter" /> Choose a source and dataset, set your filters, then click <strong>Run</strong>.
@@ -80,8 +94,12 @@ import InputText from 'primevue/inputtext'
 import MultiSelect from 'primevue/multiselect'
 import DatePicker from 'primevue/datepicker'
 import Message from 'primevue/message'
+import AutoComplete from 'primevue/autocomplete'
+import { useAuthStore } from '@/stores/auth.js'
+import { canReadLegacyDataset } from '../../../shared/reportAccess.mjs'
 
 const toast = useToast()
+const auth = useAuthStore()
 
 const catalogue = ref([])         // [{ key, label, datasets: [...] }]
 const source = ref(null)
@@ -89,6 +107,26 @@ const dataset = ref(null)
 // Only the date range is fixed; all dataset-specific filter keys are created
 // dynamically from the registry (initFilters) so new filters need no client edit.
 const filters = reactive({ dateFrom: null, dateTo: null })
+const lookupResults = reactive({})
+const lookupMore = reactive({})
+const lookupErrors = reactive({})
+const lookupRequests = {}
+async function searchLookup(key, query) {
+  const selectedSource = source.value, selectedDataset = dataset.value
+  const request = (lookupRequests[key] || 0) + 1
+  lookupRequests[key] = request
+  lookupErrors[key] = ''
+  try {
+    const { data } = await legacyReportsApi.lookup(selectedSource, selectedDataset, key, query || '')
+    if (source.value !== selectedSource || dataset.value !== selectedDataset || lookupRequests[key] !== request) return
+    lookupResults[key] = data.options || []; lookupMore[key] = !!data.hasMore
+    if (data.partial) lookupErrors[key] = 'Some master sources are unavailable; showing available matches.'
+  } catch (e) {
+    if (source.value !== selectedSource || dataset.value !== selectedDataset || lookupRequests[key] !== request) return
+    lookupResults[key] = []; lookupMore[key] = false
+    lookupErrors[key] = e.response?.data?.error || e.message
+  }
+}
 
 const mode = ref('detail')
 const rows = ref([])
@@ -101,10 +139,12 @@ const downloading = ref(null)
 const hasRun = ref(false)
 const error = ref(null)
 const truncNote = ref(null)
+const backend = ref(null), refreshedAt = ref(null), refreshError = ref(null)
 
 const sourceOptions = computed(() => catalogue.value.map((s) => ({ label: s.label, value: s.key })))
 const selectedSource = computed(() => catalogue.value.find((s) => s.key === source.value) || null)
-const datasetOptions = computed(() => (selectedSource.value?.datasets || []).map((d) => ({ label: d.label, value: d.key })))
+const datasetOptions = computed(() => (selectedSource.value?.datasets || [])
+  .filter(d => canReadLegacyDataset(auth.effectiveRole, d.key)).map((d) => ({ label: d.label, value: d.key })))
 const selectedDataset = computed(() => selectedSource.value?.datasets.find((d) => d.key === dataset.value) || null)
 const datasetFilters = computed(() => selectedDataset.value?.filters || [])
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
@@ -119,6 +159,8 @@ function resetResults() {
 }
 // Create (and default) the reactive filter keys for the selected dataset.
 function initFilters() {
+  for (const state of [lookupResults, lookupMore, lookupErrors]) for (const key of Object.keys(state)) delete state[key]
+  for (const key of Object.keys(lookupRequests)) lookupRequests[key]++
   for (const k of Object.keys(filters)) {
     if (k !== 'dateFrom' && k !== 'dateTo') delete filters[k]
   }
@@ -135,7 +177,7 @@ function initFilters() {
     }
   }
 }
-function onSourceChange() { dataset.value = null; mode.value = 'detail'; resetResults() }
+function onSourceChange() { dataset.value = null; mode.value = 'detail'; initFilters(); resetResults() }
 function onDatasetChange() { mode.value = 'detail'; initFilters(); resetResults() }
 function setMode(m) {
   if (mode.value === m) return
@@ -152,7 +194,10 @@ function ymd(d) {
 function filterPayload() {
   const out = { dateFrom: ymd(filters.dateFrom), dateTo: ymd(filters.dateTo) }
   for (const ff of datasetFilters.value) {
-    const v = filters[ff.key]
+    const selected = filters[ff.key]
+    // A selected code is an exact value, even if the code contains BC operators.
+    const v = selected && typeof selected === 'object' && !Array.isArray(selected)
+      ? "'" + String(selected.value).replaceAll("'", "''") + "'" : selected
     if (Array.isArray(v)) { if (v.length) out[ff.key] = v.join(',') }   // enum → "0,1,4"
     else if (v != null && String(v).trim() !== '') out[ff.key] = String(v).trim()
   }
@@ -170,6 +215,7 @@ async function run(toPage = 1) {
     rows.value = data.rows || []
     columns.value = data.columns || (rows.value[0] ? Object.keys(rows.value[0]) : [])
     total.value = data.total || 0
+    backend.value = data.backend; refreshedAt.value = data.refreshedAt; refreshError.value = data.refreshError
     page.value = data.page || toPage
     pageSize.value = data.pageSize || pageSize.value
     hasRun.value = true
@@ -232,6 +278,8 @@ loadCatalogue()
    exactly like the Sales Reports page — without it the transparent cells sit on the
    white content area while text uses the light --bc-text token, masking the text. */
 .ld-page { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; background: var(--bc-surface); color: var(--bc-text); }
+.filter-help { margin: 0; font-size: 12px; color: var(--bc-text-muted); }
+.lookup-error { color: var(--p-red-500); max-width: 280px; }
 .ld-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .ld-head h2 { margin: 0; font-size: 20px; }
 .ld-head .sub { margin: 2px 0 0; color: #6b7280; font-size: 13px; }
