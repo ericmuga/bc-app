@@ -217,4 +217,7 @@ onMounted(() => { loadCompanies(); load() })
   .detail-lines { border-color: #2c3a4f; }
   .detail-lines th, .detail-lines td { border-bottom-color: #212b3a; }
 }
+
+/* Keep order and part cards readable regardless of the surrounding theme. */
+.part-card,.part-card.done,.part-card.inactive{background:#fff;color:#111;border-color:#94a3b8;opacity:1}.part-card.done{border-color:#15803d}.part-card.inactive{border-style:dashed}.part-letter{color:#111}.part-state .none{color:#374151}
 </style>

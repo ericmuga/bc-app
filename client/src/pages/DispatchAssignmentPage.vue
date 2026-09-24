@@ -137,4 +137,7 @@ load()
   .pl { background: #374151; color: #e5e7eb; }
   .part-row.assigned .pl { background: #16653480; color: #4ade80; }
 }
+
+/* Keep order and part cards readable regardless of the surrounding theme. */
+.ord-card{background:#fff;color:#111;border-color:#94a3b8}.oc-head{background:#fff;border-bottom-color:#cbd5e1}.oc-no,.oc-cust{color:#111}.oc-co,.oc-prog{color:#374151}.bulk{border-bottom-color:#cbd5e1}.part-row{padding:6px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#111}.pl,.part-row.assigned .pl{background:#f1f5f9;color:#111}.assignee{color:#166534}
 </style>
