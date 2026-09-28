@@ -513,16 +513,20 @@ LIVE_DATASETS.push({ ...salesInvoice, key: 'postedSalesCreditMemos', label: 'Pos
 // database: the physical legacy DB. prefix: the NAV company table prefix.
 const LEGACY_SERVER = process.env.LEGACY_DB_HOST || '172.16.10.9';
 
+// RMK stayed in rm-bc through 30 March 2025 (inclusive).
+export const legacyCutoff = company => company === 'RMK' ? '2025-03-31' : DOWNLOAD_CUTOFF;
+const cutoffLabel = company => company === 'RMK' ? '31 Mar 2025' : '6 Jan 2025';
+
 export const SOURCES = [
   ...['CM', 'FCL', 'FLM', 'RMK'].map(company => ({
-    key: `${company}-CUR`, label: `${company} - Current (from 6 Jan 2025)`, pool: 'current', company,
+    key: `${company}-CUR`, label: `${company} - Current (from ${cutoffLabel(company)})`, pool: 'current', company,
     server: process.env.LEGACY_LIVE_DB_HOST || '172.16.10.8', database: process.env.BC_DB_NAME || 'FCL',
-    prefix: company, minDate: DOWNLOAD_CUTOFF, datasets: LIVE_DATASETS,
+    prefix: company, minDate: legacyCutoff(company), datasets: LIVE_DATASETS,
   })),
   ...['CM', 'FCL', 'FLM', 'RMK'].map(company => ({
-    key: company, label: `${company} - Legacy (before 6 Jan 2025)`, server: LEGACY_SERVER,
+    key: company, label: `${company} - Legacy (before ${cutoffLabel(company)})`, server: LEGACY_SERVER,
     database: company === 'RMK' ? 'rm-bc' : 'fcl-bc-main', prefix: company,
-    beforeDate: DOWNLOAD_CUTOFF, datasets: LEGACY_DATASETS,
+    beforeDate: legacyCutoff(company), datasets: LEGACY_DATASETS,
   })),
 ];
 

@@ -1,6 +1,6 @@
 # Legacy and live downloads
 
-The source selector now shows **Current** and **Legacy** for CM, FCL, FLM and RMK. Current includes 2025-01-06 onward; Legacy includes earlier dates. Old `*-LIVE` keys alias `*-CUR`. See [Warehouse download ETL](Warehouse-Download-ETL.md) for the installed two-hour refresh and automatic warehouse cutover.
+The source selector now shows **Current** and **Legacy** for CM, FCL, FLM and RMK. For CM, FCL and FLM, Current includes 2025-01-06 onward; Legacy includes earlier dates. **RMK exception:** Legacy reads `rm-bc` on the legacy server through 2025-03-30 inclusive, including 2025-01-05–2025-03-30. RMK Current starts 2025-03-31. Select RMK Legacy for the exception period; a range crossing 31 March requires separate Legacy and Current downloads. The same boundaries apply to preview, summaries, CSV and Excel, including when Current uses its warehouse mirror. Old `*-LIVE` keys alias `*-CUR`. See [Warehouse download ETL](Warehouse-Download-ETL.md) for the installed two-hour refresh and automatic warehouse cutover.
 
 | Sources | Server | Database / tables |
 | --- | --- | --- |

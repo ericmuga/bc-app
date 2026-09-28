@@ -64,6 +64,23 @@ test('lookup controls are available across applicable datasets', () => {
     }
   }
 });
+
+test('RMK January-to-March exception stays in rm-bc without a current-source overlap',()=>{
+  const legacy=getSource('RMK'),current=getSource('RMK-CUR');
+  assert.equal(legacy.database,'rm-bc');
+  assert.equal(legacy.beforeDate,'2025-03-31');
+  assert.equal(current.minDate,'2025-03-31');
+  for(const day of ['2025-01-05','2025-01-06','2025-03-30']){
+    assert.ok(day<legacy.beforeDate);assert.ok(day<current.minDate);
+  }
+  for(const source of [legacy,current,{...current,pool:'downloadWarehouse'}]){
+    const bound=new Map(),req={input(k,t,v){bound.set(k,v);return this}};
+    const query=buildFromWhere(req,source,getDataset(current,'valueEntries'),{dateFrom:'2025-01-05',dateTo:'2025-03-30'});
+    const parameter=source===legacy?'BeforeDate':'MinDate';
+    assert.equal(bound.get(parameter).toISOString().slice(0,10),'2025-03-31');
+    assert.ok(query.where.includes('@'+parameter));
+  }
+});
 test('preview and export builder binds wildcards, dedupes joins and scopes customers', () => {
   const source = getSource('FCL');
   const dataset = getDataset(source, 'itemLedgerEntries');

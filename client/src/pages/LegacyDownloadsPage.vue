@@ -3,7 +3,7 @@
     <div class="ld-head">
       <div>
         <h2>Legacy Downloads</h2>
-        <p class="sub">Current: 6 January 2025 onward, refreshed every 2 hours. Legacy: before 6 January 2025. Pick a company and period, filter, preview, then download CSV or Excel.</p>
+        <p class="sub">Current: 6 January 2025 onward for CM, FCL and FLM. RMK exception: use Legacy through 30 March 2025 (including 5 January–30 March); Current starts 31 March 2025. Current data refreshes every 2 hours. Pick a company and period, filter, preview, then download CSV or Excel.</p>
       </div>
     </div>
 
