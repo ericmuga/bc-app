@@ -811,6 +811,44 @@ GROUP BY [G_L Account No_]</pre>
                             :loading="savingShopMpesa" @click="saveShopMpesa" />
                   </div>
                 </div>
+
+                <!-- Per-shop branding override (logo/slogan) — overrides the company-wide branding above on that shop's receipts -->
+                <div style="margin-top:14px;border-top:1px solid var(--bc-border,#e2e8f0);padding-top:12px">
+                  <h5 style="margin:0 0 6px">Logo &amp; slogan per shop</h5>
+                  <p class="text-muted text-sm" style="margin:0 0 8px">Optional. A shop can print its own logo/slogan (e.g. CM-B3000). Leave a field blank to use the company-wide branding above.</p>
+                  <div class="cf-field" style="min-width:220px;max-width:320px">
+                    <label>Shop</label>
+                    <Select v-model="brandShop" :options="posShopOptions" option-label="label" option-value="value"
+                            placeholder="Select shop…" show-clear filter @change="loadShopBranding" />
+                  </div>
+                  <div v-if="brandShop" style="margin-top:10px">
+                    <div class="cf-field" style="max-width:520px">
+                      <label>Logo</label>
+                      <div style="display:flex;align-items:center;gap:12px">
+                        <img v-if="shopBranding.logoDataUrl" :src="shopBranding.logoDataUrl" class="item-thumb" alt="shop logo" />
+                        <input ref="shopLogoInput" type="file" accept="image/*" style="display:none" @change="onShopBrandingLogo" />
+                        <Button :label="shopBranding.logoDataUrl ? 'Change logo' : 'Upload logo'" icon="pi pi-camera"
+                                size="small" @click="$refs.shopLogoInput.click()" />
+                        <Button v-if="shopBranding.logoDataUrl" label="Remove" icon="pi pi-times" text severity="danger"
+                                size="small" @click="shopBranding.logoDataUrl=''" />
+                      </div>
+                    </div>
+                    <div class="cf-field" style="max-width:520px;margin-top:8px">
+                      <label>Slogan</label>
+                      <InputText v-model="shopBranding.slogan" fluid placeholder="Leave blank to use company slogan" />
+                    </div>
+                    <div class="cf-field" style="max-width:520px;margin-top:8px">
+                      <label>Company Name (optional override)</label>
+                      <InputText v-model="shopBranding.companyName" fluid placeholder="Leave blank to use company name" />
+                    </div>
+                    <div class="cf-field" style="max-width:520px;margin-top:8px">
+                      <label>Company Email (optional override)</label>
+                      <InputText v-model="shopBranding.companyEmail" fluid placeholder="Leave blank to use company email" />
+                    </div>
+                    <Button label="Save shop branding" icon="pi pi-save" size="small" style="margin-top:10px"
+                            :loading="savingShopBranding" @click="saveShopBranding" />
+                  </div>
+                </div>
               </div>
             </div>
           </details>
@@ -2908,6 +2946,30 @@ async function saveShopMpesa() {
   try { shopMpesaText.value = (await posSetupApi.saveShopMpesa(mpesaShop.value, shopMpesaText.value)).data?.mpesaDetails || '' }
   catch (e) { error.value = e.response?.data?.error || e.message }
   finally   { savingShopMpesa.value = false }
+}
+
+// Per-shop branding override (logo/slogan) — blank fields fall back to company-wide branding.
+const brandShop           = ref('')
+const BLANK_SHOP_BRANDING  = () => ({ companyName:'', companyEmail:'', slogan:'', logoDataUrl:'' })
+const shopBranding        = ref(BLANK_SHOP_BRANDING())
+const savingShopBranding  = ref(false)
+async function loadShopBranding() {
+  if (!brandShop.value) { shopBranding.value = BLANK_SHOP_BRANDING(); return }
+  try { shopBranding.value = { ...BLANK_SHOP_BRANDING(), ...(await posSetupApi.getShopBranding(brandShop.value)).data } }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+}
+function onShopBrandingLogo(ev) {
+  const file = ev.target.files?.[0]; if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => { shopBranding.value.logoDataUrl = String(reader.result || '') }
+  reader.readAsDataURL(file)
+}
+async function saveShopBranding() {
+  if (!brandShop.value) return
+  savingShopBranding.value = true
+  try { shopBranding.value = { ...BLANK_SHOP_BRANDING(), ...(await posSetupApi.saveShopBranding(brandShop.value, shopBranding.value)).data } }
+  catch (e) { error.value = e.response?.data?.error || e.message }
+  finally   { savingShopBranding.value = false }
 }
 
 async function savePrintCfg() {
