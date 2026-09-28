@@ -3,7 +3,7 @@
     <div class="disp-head">
       <div>
         <h2>Dispatch Registry</h2>
-        <p class="sub">Confirm the four parts (A · B · C · D) of each order. Once all are confirmed the order is due for assignment.</p>
+        <p class="sub">Confirm all active parts of each order to make it available for assembly. Assignment is required only when assignment bypass is disabled.</p>
       </div>
       <div class="head-actions">
         <MultiSelect v-if="companyOptions.length > 1" v-model="selectedCompanies" :options="companyOptions"
@@ -16,13 +16,22 @@
 
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
+    <div class="head-actions">
+      <label>Date type<Select v-model="dateField" :options="dateTypes" optionLabel="label" optionValue="value" /></label>
+      <label>From<InputText v-model="dateFrom" type="date" /></label>
+      <label>To<InputText v-model="dateTo" type="date" /></label>
+      <Button label="Apply dates" :loading="loading" @click="load" />
+      <Button label="Clear dates" severity="secondary" @click="clearDates" />
+    </div>
     <DataTable :value="orders" :loading="loading" dataKey="DispatchOrderId" paginator :rows="15"
                responsiveLayout="scroll" class="disp-table" @row-click="openOrder($event.data)">
-      <template #empty><div class="empty">No orders pending confirmation.</div></template>
+      <template #empty><div class="empty">No orders pending confirmation match these filters.</div></template>
       <Column field="Company" header="Co." style="width:70px" />
       <Column field="DispatchNo" header="Dispatch #" style="width:150px" />
       <Column field="OrderNo" header="Order #" style="width:150px" />
       <Column field="CustomerName" header="Customer" />
+      <Column field="ShipmentDate" header="Shipment date" sortable><template #body="{data}">{{ data.ShipmentDate ? String(data.ShipmentDate).slice(0,10) : '—' }}</template></Column>
+      <Column field="CreatedAt" header="Imported / created" sortable><template #body="{data}">{{ new Date(data.CreatedAt).toLocaleString('en-KE',{timeZone:'Africa/Nairobi'}) }}</template></Column>
       <Column field="ShopCode" header="Shop" style="width:90px" />
       <Column header="Parts" style="width:160px">
         <template #body="{ data }">
@@ -87,7 +96,13 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import MultiSelect from 'primevue/multiselect'
+import Select from 'primevue/select'
+import InputText from 'primevue/inputtext'
 
+const dateField=ref('shipment'),dateFrom=ref(''),dateTo=ref('')
+const dateTypes=[{label:'BC shipment date',value:'shipment'},{label:'Imported / created date (Nairobi)',value:'imported'}]
+const dateFilters=()=>({dateField:dateField.value,dateFrom:dateFrom.value||undefined,dateTo:dateTo.value||undefined})
+function clearDates(){dateFrom.value='';dateTo.value='';load()}
 const toast = useToast()
 const orders = ref([])
 const loading = ref(false)
@@ -117,7 +132,7 @@ async function loadCompanies() {
 
 async function load() {
   loading.value = true; error.value = null
-  try { orders.value = (await dispatchApi.confirmation(filterCompanies())).data || [] }
+  try { orders.value = (await dispatchApi.confirmation(filterCompanies(),dateFilters())).data || [] }
   catch (e) { error.value = e.response?.data?.error || e.message }
   finally { loading.value = false }
 }
@@ -125,11 +140,11 @@ async function load() {
 async function downloadReport() {
   downloading.value = true
   try {
-    const rows = (await dispatchApi.confirmationReport(filterCompanies())).data || []
+    const rows = (await dispatchApi.confirmationReport(filterCompanies(),dateFilters())).data || []
     if (!rows.length) { toast.add({ severity: 'info', summary: 'Nothing to export', detail: 'No confirmed parts yet.', life: 3000 }); return }
     const data = rows.map(r => ({
       Company: r.Company, 'Dispatch #': r.DispatchNo, 'Order #': r.OrderNo, Customer: r.CustomerName,
-      Part: r.Part, 'Confirmed By': r.ConfirmedByName || r.ConfirmedByUserId,
+      Part: r.Part, 'Confirmation method': r.ConfirmationBypassed ? 'Setup bypass' : 'Manual', 'Confirmed By': r.ConfirmedByName || r.ConfirmedByUserId,
       'Confirmed At': r.ConfirmedAt ? new Date(r.ConfirmedAt).toISOString().replace('T', ' ').slice(0, 19) : '',
     }))
     const wb = XLSX.utils.book_new()
@@ -163,7 +178,7 @@ async function confirm(part) {
   try {
     await dispatchApi.confirmPart(active.value.DispatchOrderId, part)
     detail.value = (await dispatchApi.getOrder(active.value.DispatchOrderId)).data
-    if (allConfirmed.value) { toast.add({ severity: 'success', summary: 'Order confirmed', detail: 'Due for assignment.', life: 3000 }); dialog.value = false; load() }
+    if (allConfirmed.value) { toast.add({ severity: 'success', summary: 'Order confirmed', detail: 'Ready for assembly when assignment bypass is enabled; otherwise assign the active parts.', life: 3000 }); dialog.value = false; load() }
   } catch (e) { toast.add({ severity: 'error', summary: 'Confirm failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
   finally { busyPart.value = null }
 }
@@ -174,7 +189,7 @@ async function confirmAll() {
     for (const p of detail.value.parts.filter(x => !x.Confirmed && x.Active)) {
       await dispatchApi.confirmPart(active.value.DispatchOrderId, p.Part)
     }
-    toast.add({ severity: 'success', summary: 'Order confirmed', detail: 'Due for assignment.', life: 3000 })
+    toast.add({ severity: 'success', summary: 'Order confirmed', detail: 'Ready for assembly when assignment bypass is enabled; otherwise assign the active parts.', life: 3000 })
     dialog.value = false; load()
   } catch (e) { toast.add({ severity: 'error', summary: 'Confirm failed', detail: e.response?.data?.error || e.message, life: 4000 }) }
   finally { busyAll.value = false }

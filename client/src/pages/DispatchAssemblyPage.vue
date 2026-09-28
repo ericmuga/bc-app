@@ -1,5 +1,6 @@
 <template>
   <div class="assembly-page">
+    <DispatchWorkerAccess stage="assembly" :locked="!!session" />
     <header><div><h2>Assembly</h2><p>Start a session, select a chiller, then assemble an order.</p></div>
       <Button icon="pi pi-refresh" label="Refresh" severity="secondary" :loading="loading" @click="load" /></header>
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
@@ -21,11 +22,14 @@
         <label>Shipment to<InputText v-model="dateTo" type="date" /></label>
         <label>Customer<InputText v-model="customer" placeholder="Name or number" /></label>
         <label>Order<InputText v-model="orderFilter" placeholder="Order or dispatch number" /></label>
+        <Button label="Search" icon="pi pi-search" :loading="loading" :disabled="!chiller || !!(dateFrom && dateTo && dateFrom>dateTo)" @click="searchOrders" />
       </div>
+      <Message v-if="tab==='pending' && !searched" severity="info">Select a chiller, set any date, customer or order filters, then press Search.</Message>
       <Message v-if="dateFrom && dateTo && dateFrom>dateTo" severity="warn">Check the shipment date range.</Message>
       <Message v-if="!chiller" severity="info">Select a chiller to see its orders.</Message>
+      <Message severity="info">Imported BC orders appear here after registry confirmation, or automatically when confirmation bypass is enabled. Select the matching chiller and check the shipment filters.</Message>
       <Message v-if="!bypass" severity="info">Assignment is enabled. Your assigned parts are shown.</Message>
-      <div v-if="!loading && chiller && !orders.length" class="empty">No {{ tab==='pending'?'pending':'assembled' }} orders match these filters.</div>
+      <div v-if="!loading && searched && chiller && !orders.length" class="empty">No {{ tab==='pending'?'pending':'assembled' }} orders match these filters.</div>
       <div class="view-toggle" role="group" aria-label="Order display"><button type="button" :aria-pressed="orderView==='cards'" @click="setOrderView('cards')"><i class="pi pi-th-large" aria-hidden="true" /> Cards</button><button type="button" :aria-pressed="orderView==='list'" @click="setOrderView('list')"><i class="pi pi-list" aria-hidden="true" /> List</button></div>
       <div v-if="orderView==='cards'" class="order-grid">
         <article v-for="row in orders" :key="row.DispatchOrderId" class="order-card">
@@ -79,6 +83,8 @@
   </div>
 </template>
 <script setup>
+import {workerFor} from '@/lib/dispatchWorker.js'
+import DispatchWorkerAccess from '@/components/DispatchWorkerAccess.vue'
 import DispatchUnitTranslation from '@/components/DispatchUnitTranslation.vue'
 import {useDispatchOrderView} from '@/lib/useDispatchOrderView.js'
 const {orderView,setOrderView}=useDispatchOrderView()
@@ -101,6 +107,9 @@ const tabs=[{key:'pending',label:'Pending assembly'},{key:'assembled',label:'Ass
 const tab=ref('pending'),session=ref(null),sessionBusy=ref(false),now=ref(Date.now()),items=ref([]),chillers=ref([]),chiller=ref(null),bypass=ref(false)
 const dateFrom=ref(''),dateTo=ref(''),customer=ref(''),orderFilter=ref(''),loading=ref(false),error=ref('')
 const order=ref(null),orderVisible=ref(false),editing=ref(null),lineVisible=ref(false),lineError=ref(''),saving=ref(false),scan=ref(''),form=ref({})
+const searched=ref(false)
+let searchVersion=0
+watch([chiller,dateFrom,dateTo,customer,orderFilter],()=>{searchVersion++;items.value=[];searched.value=false})
 const reasons=[{label:'Short supply',value:'SHORT_SUPPLY'},{label:'Weight difference',value:'WEIGHT_DIFFERENCE'}]
 const localTime=v=>new Date(v).toLocaleString('en-KE',{timeZone:'Africa/Nairobi'})
 const elapsed=computed(()=>{const s=Math.max(0,Math.floor((now.value-new Date(session.value?.StartedAt||now.value).getTime())/1000));return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map(n=>String(n).padStart(2,'0')).join(':')})
@@ -114,14 +123,21 @@ const orderLines=computed(()=>(order.value?.lines||[]).filter(l=>l.Chiller===chi
 const isDone=l=>!!l.Completed||!!order.value?.parts.find(p=>p.Part===l.Part)?.Assembled
 const pendingLines=computed(()=>orderLines.value.filter(l=>!isDone(l))),completedLines=computed(()=>orderLines.value.filter(isDone))
 const canEditOrder=computed(()=>['confirmed','assigned','assembling','assembled'].includes(order.value?.Status))
-const canCorrect=l=>['admin','dispatch-supervisor'].includes(auth.effectiveRole)||String(l.AssembledByUserId)===String(auth.user?.userId)
+const canCorrect=l=>(!workerFor('assembly',auth.user?.userId)&&['admin','dispatch-supervisor'].includes(auth.effectiveRole))||String(l.AssembledByUserId)===String(workerFor('assembly',auth.user?.userId)?.workerId||auth.user?.userId)
 const correcting=computed(()=>!!editing.value&&isDone(editing.value))
 const weighted=computed(()=>isWeightUnit(editing.value?.Uom)||!!editing.value?.IsWeighted)
 const quantity=computed(()=>Number(weighted.value?form.value.assembledWeight:form.value.pieces))
 const differs=computed(()=>!!editing.value&&Math.abs(quantity.value-Number(editing.value.OrderQty))>0.00005)
 watch([quantity,differs],()=>{form.value.returnReasonCode=differs.value?(quantity.value<Number(editing.value.OrderQty)?'SHORT_SUPPLY':'WEIGHT_DIFFERENCE'):null})
 const message=e=>e.response?.data?.error||e.message
-async function load(){loading.value=true;error.value='';try{const [config,current]=await Promise.all([dispatchApi.chillerConfig(),dispatchApi.currentAssemblySession()]);bypass.value=!!config.data.BypassAssignment;chillers.value=config.data.chillers;session.value=current.data;if(tab.value!=='reports')items.value=(await dispatchApi.chillerWorklist(null,tab.value)).data}catch(e){error.value=message(e)}finally{loading.value=false}}
+async function searchOrders(){
+  if(!chiller.value){error.value='Select a chiller';return}
+  if(dateFrom.value&&dateTo.value&&dateFrom.value>dateTo.value){error.value='Check the shipment date range';return}
+  const version=++searchVersion;loading.value=true;error.value='';items.value=[];searched.value=false
+  try{const result=await dispatchApi.chillerWorklist(null,tab.value,{chiller:chiller.value,dateFrom:dateFrom.value||undefined,dateTo:dateTo.value||undefined,customer:customer.value.trim()||undefined,order:orderFilter.value.trim()||undefined});if(version===searchVersion){items.value=result.data;searched.value=true}}
+  catch(e){if(version===searchVersion)error.value=message(e)}finally{loading.value=false}
+}
+async function load(){searchVersion++;items.value=[];searched.value=false;loading.value=true;error.value='';try{const [config,current]=await Promise.all([dispatchApi.chillerConfig(),dispatchApi.currentAssemblySession()]);bypass.value=!!config.data.BypassAssignment;chillers.value=config.data.chillers;session.value=current.data}catch(e){error.value=message(e)}finally{loading.value=false}}
 function changeTab(value){tab.value=value;load()}
 async function startSession(){sessionBusy.value=true;try{session.value=(await dispatchApi.startAssemblySession()).data;now.value=Date.now()}catch(e){error.value=message(e)}finally{sessionBusy.value=false}}
 async function endSession(){sessionBusy.value=true;try{await dispatchApi.endAssemblySession(session.value.SessionId);session.value=null;lineVisible.value=false;orderVisible.value=false;await load()}catch(e){error.value=message(e)}finally{sessionBusy.value=false}}

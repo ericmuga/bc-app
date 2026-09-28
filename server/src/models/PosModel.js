@@ -1006,12 +1006,65 @@ export async function saveReceiptBranding(body = {}) {
     .input('k', sql.NVarChar(100), BRANDING_KEY)
     .input('v', sql.NVarChar(sql.MAX), JSON.stringify(clean))
     .query(`
-      MERGE [dbo].[AppSettings] AS t
+      MERGE [dbo].[AppSettings] WITH(HOLDLOCK) AS t
       USING (SELECT @k AS K) AS s ON t.[SettingKey] = s.K
       WHEN MATCHED THEN UPDATE SET [SettingValue]=@v,[UpdatedAt]=GETUTCDATE()
       WHEN NOT MATCHED THEN INSERT([SettingKey],[SettingValue]) VALUES(@k,@v);
     `);
   return getReceiptBranding();
+}
+
+// ── Per-shop branding OVERRIDE (e.g. CM shop uses its own logo + slogan) ──────
+// Stored per shop; only the fields actually set here override the company-wide
+// branding. MPESA is handled separately (getShopMpesa). Used to give one shop
+// (e.g. CM-B3000) a different logo/slogan while every other shop keeps the
+// company-wide branding.
+const shopBrandingKey = (shopCode) => `pos.receiptBranding.${String(shopCode || '').toUpperCase()}`;
+// Overridable per shop (mpesaDetails intentionally excluded — see getShopMpesa).
+const SHOP_BRANDING_FIELDS = ['companyName', 'companyAddress', 'companyEmail', 'companyPin', 'slogan', 'logoDataUrl'];
+
+export async function getShopBranding(shopCode) {
+  if (!shopCode) return {};
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('k', sql.NVarChar(100), shopBrandingKey(shopCode))
+    .query(`SELECT [SettingValue] FROM [dbo].[AppSettings] WHERE [SettingKey]=@k`);
+  let stored = {}; try { stored = JSON.parse(r.recordset[0]?.SettingValue || '{}'); } catch { stored = {}; }
+  const out = {};
+  for (const f of SHOP_BRANDING_FIELDS) if (stored[f]) out[f] = String(stored[f]); // only non-empty overrides
+  return out;
+}
+
+export async function saveShopBranding(shopCode, body = {}) {
+  if (!shopCode) throw new Error('shopCode is required');
+  const clean = {};
+  for (const f of SHOP_BRANDING_FIELDS) if (body[f] != null && String(body[f]) !== '') clean[f] = String(body[f]);
+  const pool = await appPool();
+  await pool.request()
+    .input('k', sql.NVarChar(100), shopBrandingKey(shopCode))
+    .input('v', sql.NVarChar(sql.MAX), JSON.stringify(clean))
+    .query(`
+      MERGE [dbo].[AppSettings] WITH(HOLDLOCK) AS t
+      USING (SELECT @k AS K) AS s ON t.[SettingKey] = s.K
+      WHEN MATCHED THEN UPDATE SET [SettingValue]=@v,[UpdatedAt]=GETUTCDATE()
+      WHEN NOT MATCHED THEN INSERT([SettingKey],[SettingValue]) VALUES(@k,@v);
+    `);
+  return getShopBranding(shopCode);
+}
+
+/**
+ * Effective branding for a shop's receipts: company-wide branding, with any
+ * per-shop overrides applied on top (logo/slogan/header), and the shop's own
+ * MPESA details (falling back to the company-wide value). Non-overridden fields
+ * fall through to the company default, so only CM-B3000 (etc.) differs.
+ */
+export async function getEffectiveBranding(shopCode) {
+  const base = await getReceiptBranding();
+  const [shopOv, shopMpesa] = await Promise.all([
+    getShopBranding(shopCode),
+    shopCode ? getShopMpesa(shopCode) : Promise.resolve({ mpesaDetails: '' }),
+  ]);
+  return { ...base, ...shopOv, mpesaDetails: shopMpesa.mpesaDetails || base.mpesaDetails || '' };
 }
 
 // ── Per-shop MPESA details (shown on that shop's receipts) ───────────────────
@@ -2411,7 +2464,7 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
   }
 
   const r = await req.query(`
-    SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[TotalAmount],
+    SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[ContactName],o.[Status],o.[Label],o.[TotalAmount],
            o.[EtimsInvoiceNo],o.[SignedAt],
            o.[CreatedAt],o.[UpdatedAt],
            COUNT(l.[LineId]) AS LineCount,
@@ -2421,7 +2474,7 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
     FROM [dbo].[PosOrder] o
     LEFT JOIN [dbo].[PosOrderLine] l ON l.[OrderId]=o.[OrderId]
     ${where}
-    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[Status],o.[Label],o.[EtimsInvoiceNo],o.[SignedAt],
+    GROUP BY o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[ContactName],o.[Status],o.[Label],o.[EtimsInvoiceNo],o.[SignedAt],
              o.[TotalAmount],o.[CreatedAt],o.[UpdatedAt]
     ORDER BY o.[CreatedAt] DESC
   `);

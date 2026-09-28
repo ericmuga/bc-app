@@ -1,3 +1,4 @@
+import {workerFor,currentWorkerStage} from '@/lib/dispatchWorker.js'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth.js'
 import { useCompanyStore } from '@/stores/company.js'
@@ -8,6 +9,8 @@ api.interceptors.request.use((config) => {
   const auth    = useAuthStore()
   const company = useCompanyStore()
 
+  const stage=currentWorkerStage(),worker=workerFor(stage,auth.user?.userId)
+  if(worker && config.url?.startsWith('/dispatch/') && !config.url.startsWith('/dispatch/delegation'))config.headers['X-Dispatch-Delegation']=worker.token
   if (auth.token) config.headers.Authorization = `Bearer ${auth.token}`
   if (company.currentCompanyId) config.headers['X-Company-ID'] = company.currentCompanyId
 

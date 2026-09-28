@@ -333,11 +333,14 @@ export const posSetupApi = {
   syncBcBomsAll:      (company='FCL')  => api.post('/pos/bc-boms/sync-all', { company }),
 
   // Receipt branding (logo, slogan, MPESA details, company header)
-  getBranding:  ()      => api.get('/pos/setup/branding'),
-  saveBranding: (body)  => api.put('/pos/setup/branding', body),
+  getBranding:  () => api.get('/pos/setup/branding'),
+  saveBranding: (body) => api.put('/pos/setup/branding', body),
   // Per-shop MPESA details on the receipt
   getShopMpesa:  (shopCode) => api.get('/pos/setup/branding/mpesa', { params: { shopCode } }),
   saveShopMpesa: (shopCode, mpesaDetails) => api.put('/pos/setup/branding/mpesa', { shopCode, mpesaDetails }),
+  // Per-shop branding override (logo/slogan/header) — empty fields fall back to company-wide branding
+  getShopBranding:  (shopCode) => api.get('/pos/setup/branding/shop', { params: { shopCode } }),
+  saveShopBranding: (shopCode, body) => api.put('/pos/setup/branding/shop', { shopCode, ...body }),
 }
 
 // ── Production orders (build finished items from BOMs) ─────────────────────────

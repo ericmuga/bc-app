@@ -1,0 +1,34 @@
+/* Dialogs teleport outside the page; use a dedicated class to keep contrast local. */
+.dispatch-session-detail.p-dialog,
+.dispatch-session-detail .p-dialog-header,
+.dispatch-session-detail .p-dialog-content,
+.dispatch-session-detail .p-dialog-footer {
+  background: #f1f5f9;
+  color: #111827;
+  --bc-text: #111827;
+  --bc-text-muted: #475569;
+  --bc-surface-card: #f8fafc;
+  --bc-border: #cbd5e1;
+  --p-text-color: #111827;
+  --p-content-color: #111827;
+}
+.dispatch-session-detail .p-datatable-thead > tr > th {
+  background: #dbe4ef;
+  color: #111827;
+  border-color: #b8c5d6;
+}
+.dispatch-session-detail .p-datatable-tbody > tr > td {
+  background: #f8fafc;
+  color: #111827;
+  border-color: #cbd5e1;
+}
+.dispatch-session-detail .p-datatable-tbody > tr:nth-child(even) > td {
+  background: #e8eef5;
+}
+.dispatch-session-detail .p-paginator,
+.dispatch-session-detail .p-inputtext,
+.dispatch-session-detail .p-select {
+  background: #f8fafc;
+  color: #111827;
+  border-color: #94a3b8;
+}

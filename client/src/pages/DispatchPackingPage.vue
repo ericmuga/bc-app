@@ -1,5 +1,6 @@
 <template>
   <div class="packing-page">
+    <DispatchWorkerAccess stage="packing" :locked="!!run" />
     <header><div><h2>Packing</h2><p>Pack assembled orders into vessels, confirm boxes and print labels.</p></div><Button label="Refresh" icon="pi pi-refresh" :loading="loading" @click="load" /></header>
     <Message v-if="error" severity="error">{{ error }}</Message>
     <div class="session">
@@ -12,7 +13,7 @@
     <div class="view-toggle" role="group" aria-label="Order display"><button type="button" :aria-pressed="orderView==='cards'" @click="setOrderView('cards')"><i class="pi pi-th-large" aria-hidden="true" /> Cards</button><button type="button" :aria-pressed="orderView==='list'" @click="setOrderView('list')"><i class="pi pi-list" aria-hidden="true" /> List</button></div>
       <div v-if="orderView==='cards'" class="order-grid"><article v-for="o in visibleOrders" :key="o.DispatchOrderId" class="card"><strong>{{ o.OrderNo }}</strong><span>{{ o.CustomerName }}</span><small>{{ o.Company }} · {{ o.Status }} · {{ o.BoxCount }} boxes</small><Button :label="tab==='packed'?'View packed order':'Pick order'" :disabled="tab!=='packed'&&!run" @click="openOrder(o)" /></article></div>
     <div v-else class="order-list" tabindex="0" role="region" aria-label="Orders list"><table><thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Company</th><th scope="col">Shipment</th><th scope="col">Status</th><th scope="col">Boxes</th><th scope="col">Action</th></tr></thead><tbody><tr v-for="o in visibleOrders" :key="o.DispatchOrderId"><td>{{ o.OrderNo }}</td><td>{{ o.CustomerNo }} - {{ o.CustomerName }}</td><td>{{ o.Company }}</td><td>{{ String(o.ShipmentDate||'').slice(0,10) }}</td><td>{{ o.Status }}</td><td>{{ o.BoxCount }}</td><td><Button :label="tab==='packed'?'View packed order':'Pick order'" :disabled="tab!=='packed'&&!run" @click="openOrder(o)" /></td></tr></tbody></table></div>
-    <Dialog v-model:visible="orderVisible" modal :header="order ? `${order.OrderNo} · ${order.CustomerName}`:'Order'" :style="{width:'68rem'}" :breakpoints="{'800px':'98vw'}" :closable="!busy">
+    <Dialog class="dispatch-session-detail" v-model:visible="orderVisible" modal :header="order ? `${order.OrderNo} · ${order.CustomerName}`:'Order'" :style="{width:'68rem'}" :breakpoints="{'800px':'98vw'}" :closable="!busy">
       <template v-if="order">
         <div class="toolbar"><span>{{ order.Company }} · {{ order.Status }} · {{ elapsed }}</span><Button v-if="editable" label="Release order" severity="secondary" @click="release" /><Button v-if="editable" label="Complete packing" :disabled="!allPacked||!!currentBox" @click="complete" /></div>
         <Message v-if="orderError" severity="error">{{ orderError }}</Message>
@@ -53,6 +54,8 @@
   </div>
 </template>
 <script setup>
+import DispatchWorkerAccess from '@/components/DispatchWorkerAccess.vue'
+import '@/styles/dispatchSessionDetails.css'
 import DispatchUnitTranslation from '@/components/DispatchUnitTranslation.vue'
 import {useDispatchOrderView} from '@/lib/useDispatchOrderView.js'
 const {orderView,setOrderView}=useDispatchOrderView()

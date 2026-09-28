@@ -1,0 +1,55 @@
+import 'dotenv/config';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {db,sql} from './pool.js';
+import {migrateDispatchWorkers} from './dispatchWorkers.js';
+import {saveWorker,delegate,resolveDelegation,endDelegation} from '../models/DispatchWorkerModel.js';
+import * as Assembly from '../models/DispatchSessionModel.js';
+import * as Packing from '../models/DispatchPackingModel.js';
+import * as Dispatch from '../models/DispatchModel.js';
+import {dispatchDelegation} from '../middleware/dispatchDelegation.js';
+const main={userId:randomUUID(),userName:'Delegation test main',role:'admin'};
+const input={code:'TEST-'+randomUUID().slice(0,12),name:'Delegation test worker',passcode:'987654',assembly:true,packing:true,loading:true,active:true};
+let pool,workerId;
+try{
+ pool=await db.getPool();await migrateDispatchWorkers(pool);await migrateDispatchWorkers(pool);
+ workerId=(await saveWorker(input,main)).WorkerId;
+ const secret=(await pool.request().input('id',sql.UniqueIdentifier,workerId).query('SELECT PasscodeHash FROM dbo.DispatchWorker WHERE WorkerId=@id')).recordset[0].PasscodeHash;
+ assert.notEqual(secret,input.passcode);assert.ok(secret.startsWith('$2'));
+ const grant=await delegate({...input,stage:'assembly'},main);
+ const actor=await resolveDelegation(grant.token,main);
+ assert.equal(actor.userId,workerId);assert.equal(actor.role,'assembler');assert.equal(actor.userName,input.name);assert.equal(actor.parentUserId,main.userId);
+ await assert.rejects(()=>resolveDelegation(grant.token,{...main,userId:randomUUID()}),/expired|revoked/);
+ await assert.rejects(()=>delegate({...input,stage:'loading'},{...main,role:'assembler'}),/cannot delegate/);
+ const session=await Assembly.start(actor);assert.equal(session.ParentUserId,main.userId);assert.equal(session.DelegationId,grant.DelegationId);
+ await Assembly.end(actor,session.SessionId);
+ let rejected;
+ await dispatchDelegation({headers:{'x-dispatch-delegation':grant.token},path:'/dispatch/setup/workers',user:main,method:'GET',params:{},body:{}},{status(n){rejected=n;return this},json(){}},()=>{throw new Error('Supervisor access must be rejected')});
+ assert.equal(rejected,403);
+ const checker=(await pool.request().query("SELECT TOP(1) UserId FROM dbo.Users WHERE IsActive=1 AND Role IN ('checker','dispatch-supervisor','admin')")).recordset[0];
+ assert.ok(checker,'An active confirmer is required for the integration test');
+ const packingGrant=await delegate({...input,stage:'packing'},main),packer=await resolveDelegation(packingGrant.token,main);
+ const run=await Packing.startRun(packer,checker.UserId);assert.equal(run.UserId,workerId);assert.equal(run.ParentUserId,main.userId);
+ await Packing.endRun(packer,run.RunId);
+ const loadingGrant=await delegate({...input,stage:'loading'},main),loader=await resolveDelegation(loadingGrant.token,main);
+ const load=await Dispatch.createLoadingSession({routeCode:'TEST'},loader);
+ const detail=await Dispatch.getLoadingSession(load.loadingSessionId);assert.equal(detail.CreatedByUserId,workerId);assert.equal(detail.ParentUserId,main.userId);
+ assert.ok((await Dispatch.listLoadingSessions(loader)).every(s=>s.CreatedByUserId===workerId));
+ await endDelegation(grant.token,main);await assert.rejects(()=>resolveDelegation(grant.token,main),/expired|revoked/);
+ await saveWorker({...input,workerId,passcode:'876543'},main);
+ await assert.rejects(()=>resolveDelegation(packingGrant.token,main),/expired|revoked/);
+ for(let n=0;n<5;n++)await assert.rejects(()=>delegate({...input,stage:'assembly'},main),/Invalid/);
+ await assert.rejects(()=>delegate({...input,passcode:'876543',stage:'assembly'},main),/locked/);
+ await saveWorker({...input,workerId,active:false},main);
+ await assert.rejects(()=>delegate({...input,stage:'assembly'},main),/unavailable/);
+ console.log('PASS: hashed passcodes, stage restrictions, parent binding, session attribution for assembly/packing/loading, supervisor denial, token revocation and lockout');
+}finally{
+ if(pool&&workerId)await pool.request().input('id',sql.NVarChar(100),String(workerId)).input('parent',sql.NVarChar(100),main.userId).query(`
+ DELETE dbo.DispatchAssemblySession WHERE UserId=@id;
+ DELETE dbo.DispatchPackingRun WHERE UserId=@id;
+ DELETE dbo.DispatchLoadingSession WHERE CreatedByUserId=@id;
+ DELETE dbo.DispatchDelegation WHERE WorkerId=TRY_CONVERT(uniqueidentifier,@id);
+ DELETE dbo.DispatchActionAudit WHERE UserId=@parent OR UserId=@id;
+ DELETE dbo.DispatchWorker WHERE WorkerId=TRY_CONVERT(uniqueidentifier,@id);`);
+ await db.close();
+}

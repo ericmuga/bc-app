@@ -215,12 +215,12 @@ export async function listMakeable(_req, res) {
 }
 
 /** GET /pos/setup/branding — receipt branding (logo, slogan, MPESA, company header). */
-export async function getBranding(_req, res) {
+export async function getBranding(req, res) {
   try { ok(res, await Pos.getReceiptBranding()); } catch (e) { err(res, e); }
 }
 /** PUT /pos/setup/branding */
 export async function saveBranding(req, res) {
-  try { invalidatePrintCache(); ok(res, await Pos.saveReceiptBranding(req.body)); } catch (e) { err(res, e, 400); }
+  try { const saved=await Pos.saveReceiptBranding(req.body); invalidatePrintCache(); ok(res,saved); } catch (e) { err(res, e, 400); }
 }
 
 // Per-shop MPESA details (printed on that shop's receipts).
@@ -229,6 +229,14 @@ export async function getShopMpesa(req, res) {
 }
 export async function saveShopMpesa(req, res) {
   try { ok(res, await Pos.saveShopMpesa(req.body?.shopCode, req.body?.mpesaDetails)); } catch (e) { err(res, e, 400); }
+}
+
+// Per-shop branding override (logo/slogan/etc.) — falls back to company-wide branding for empty fields.
+export async function getShopBranding(req, res) {
+  try { ok(res, await Pos.getShopBranding(req.query.shopCode)); } catch (e) { err(res, e); }
+}
+export async function saveShopBranding(req, res) {
+  try { invalidatePrintCache(); ok(res, await Pos.saveShopBranding(req.body?.shopCode, req.body)); } catch (e) { err(res, e, 400); }
 }
 
 /** GET /pos/bc-sync/imported-sales — POS invoice lines mapped to BC's Imported SalesAL schema. */

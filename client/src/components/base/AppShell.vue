@@ -103,6 +103,9 @@
           <RouterLink v-if="['admin', 'dispatch-supervisor', 'chiller-attendant'].includes(auth.effectiveRole)" to="/dispatch/chillers" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-th-large" /><span>Chiller attendant</span>
           </RouterLink>
+          <RouterLink v-if="['admin', 'dispatch-supervisor', 'chiller-attendant', 'assembler'].includes(auth.effectiveRole)" to="/dispatch/stocktakes" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-clipboard" /><span>Chiller stock take</span>
+          </RouterLink>
           <RouterLink v-if="['admin', 'dispatch-supervisor', 'chiller-attendant'].includes(auth.effectiveRole)" to="/dispatch/chiller-movements" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-arrows-h" /><span>Chiller movements</span>
           </RouterLink>

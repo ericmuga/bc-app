@@ -1,3 +1,4 @@
+import {sessionMetrics} from '../../../shared/dispatchSessionMetrics.mjs';
 import {compileBcTextFilter} from '../services/bcTextFilter.js';
 import {db,sql} from '../db/pool.js';
 export async function report(filters={}){
@@ -12,7 +13,7 @@ export async function report(filters={}){
     FROM dbo.DispatchAssemblyEvent e JOIN dbo.DispatchAssemblySession s ON s.SessionId=e.SessionId
       JOIN dbo.DispatchOrder o ON o.DispatchOrderId=e.DispatchOrderId JOIN dbo.DispatchOrderLine l ON l.LineId=e.LineId
     WHERE e.Revision=(SELECT MAX(x.Revision) FROM dbo.DispatchAssemblyEvent x WHERE x.LineId=e.LineId)
-      AND (@from IS NULL OR DATEADD(HOUR,3,e.CreatedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,e.CreatedAt)<DATEADD(DAY,1,@to))
+      AND (((@from IS NULL OR DATEADD(HOUR,3,e.CreatedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,e.CreatedAt)<DATEADD(DAY,1,@to))) OR ((@from IS NULL OR DATEADD(HOUR,3,s.StartedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,s.StartedAt)<DATEADD(DAY,1,@to))))
       AND ${match(['e.ItemNo','l.Description'],filters.item)} AND ${common()} AND ${match(["s.UserName"],filters.operator)}
     UNION ALL
     SELECT 'packing',bl.BoxLineId,bl.CreatedAt,o.Company,o.OrderNo,o.CustomerNo,o.CustomerName,o.RouteCode,o.SalespersonCode,o.SalespersonName,
@@ -21,7 +22,7 @@ export async function report(filters={}){
     FROM dbo.DispatchBoxLine bl JOIN dbo.DispatchBox b ON b.BoxId=bl.BoxId JOIN dbo.DispatchOrder o ON o.DispatchOrderId=b.DispatchOrderId
       LEFT JOIN dbo.DispatchOrderLine l ON l.LineId=bl.LineId LEFT JOIN dbo.DispatchPackingSession ps ON ps.SessionId=b.SessionId
       LEFT JOIN dbo.DispatchPackingRun run ON run.RunId=ps.RunId
-    WHERE bl.VoidedAt IS NULL AND (@from IS NULL OR DATEADD(HOUR,3,bl.CreatedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,bl.CreatedAt)<DATEADD(DAY,1,@to))
+    WHERE bl.VoidedAt IS NULL AND (((@from IS NULL OR DATEADD(HOUR,3,bl.CreatedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,bl.CreatedAt)<DATEADD(DAY,1,@to))) OR ((@from IS NULL OR DATEADD(HOUR,3,COALESCE(run.StartedAt,ps.CreatedAt))>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,COALESCE(run.StartedAt,ps.CreatedAt))<DATEADD(DAY,1,@to))))
       AND ${match(['bl.ItemNo','bl.Description'],filters.item)} AND ${common()} AND ${match(["COALESCE(bl.PackedByName,ps.PackerName,'')"],filters.operator)} ORDER BY ActivityAt DESC;
     SELECT o.DispatchOrderId,o.OrderNo,o.Company,o.CustomerNo,o.CustomerName,o.Status,o.ShipmentDate,o.RouteCode,o.SalespersonName,l.ItemNo,l.Description,l.OrderQty,l.Uom,
       a.AssembledQty,a.Pieces AssembledPieces,COALESCE(p.PackedQty,0) PackedQty,c.UserName ClaimedBy
@@ -33,15 +34,22 @@ export async function report(filters={}){
       AND (${match(['c.UserName','a.AssembledByName'],filters.operator)}
         OR EXISTS(SELECT 1 FROM dbo.DispatchBoxLine bl WHERE bl.LineId=l.LineId AND bl.VoidedAt IS NULL AND ${match(['bl.PackedByName'],filters.operator)}))
     ORDER BY o.ShipmentDate DESC,o.OrderNo;
-    SELECT 'packing' Stage,RunId SessionId,UserName,CheckerName,StartedAt,EndedAt,DATEDIFF(SECOND,StartedAt,COALESCE(EndedAt,GETUTCDATE())) DurationSeconds
+    SELECT 'packing' Stage,RunId SessionId,UserName,CheckerName,StartedAt,EndedAt,DATEDIFF(SECOND,StartedAt,COALESCE(EndedAt,GETUTCDATE())) DurationSeconds,UserId,ParentUserId,ParentName,DelegationId,(SELECT WorkerCode FROM dbo.DispatchDelegation d WHERE d.DelegationId=s.DelegationId) WorkerCode
       FROM dbo.DispatchPackingRun s WHERE (@from IS NULL OR DATEADD(HOUR,3,StartedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,StartedAt)<DATEADD(DAY,1,@to))
         AND ${match(['UserName'],filters.operator)}
-    UNION ALL SELECT 'assembly',SessionId,UserName,NULL,StartedAt,EndedAt,DATEDIFF(SECOND,StartedAt,COALESCE(EndedAt,GETUTCDATE()))
-      FROM dbo.DispatchAssemblySession WHERE (@from IS NULL OR DATEADD(HOUR,3,StartedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,StartedAt)<DATEADD(DAY,1,@to))
+    UNION ALL SELECT 'assembly',SessionId,UserName,NULL,StartedAt,EndedAt,DATEDIFF(SECOND,StartedAt,COALESCE(EndedAt,GETUTCDATE())),UserId,ParentUserId,ParentName,DelegationId,(SELECT WorkerCode FROM dbo.DispatchDelegation d WHERE d.DelegationId=s.DelegationId)
+      FROM dbo.DispatchAssemblySession s WHERE (@from IS NULL OR DATEADD(HOUR,3,StartedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,StartedAt)<DATEADD(DAY,1,@to))
         AND ${match(['UserName'],filters.operator)} ORDER BY StartedAt DESC;
     SELECT c.*,o.OrderNo,o.CustomerNo,o.CustomerName FROM dbo.DispatchOrderClaim c JOIN dbo.DispatchOrder o ON o.DispatchOrderId=c.DispatchOrderId WHERE ${common()} AND ${match(['c.UserName'],filters.operator)} AND (@from IS NULL OR DATEADD(HOUR,3,c.ClaimedAt)>=@from) AND (@to IS NULL OR DATEADD(HOUR,3,c.ClaimedAt)<DATEADD(DAY,1,@to)) AND EXISTS(SELECT 1 FROM dbo.DispatchOrderLine l WHERE l.DispatchOrderId=o.DispatchOrderId AND ${match(['l.ItemNo','l.Description'],filters.item)});
   `)).recordsets;
-  return {activity:sets[0],orders:sets[1],sessions:sets[2],claims:sets[3]};
+  const key=row=>`${row.Stage}:${row.SessionId}`;
+  const groups=new Map();
+  for(const row of sets[0]){const k=key(row);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(row);}
+  const restricted=['item','customer','order','route','salesperson'].some(k=>String(filters[k]||'').trim());
+  const sessions=sets[2].filter(s=>!restricted||groups.has(key(s))).map(s=>sessionMetrics(s,groups.get(key(s))||[]));
+  const included=new Set(sessions.map(key));
+  const activity=sets[0].filter(row=>{const day=new Date(new Date(row.ActivityAt).getTime()+3*3600000).toISOString().slice(0,10);return (!filters.dateFrom||day>=filters.dateFrom)&&(!filters.dateTo||day<=filters.dateTo)});
+  return {activity,orders:sets[1],sessions,sessionEntries:sets[0].filter(row=>included.has(key(row))),claims:sets[3]};
 }
 
 let lookupCache;

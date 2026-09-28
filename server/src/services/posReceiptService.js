@@ -385,11 +385,12 @@ export async function buildPrintPayload(order, etimsResult) {
   let branding = {}, shopName = order?.shopCode || '', shopMpesa = '';
   try {
     const PM = await import('../models/PosModel.js');
-    branding = await PM.getReceiptBranding();
+    // Effective branding = company-wide + per-shop overrides (logo/slogan) + the
+    // shop's MPESA details. So e.g. CM-B3000 prints its own logo/slogan.
+    branding = await PM.getEffectiveBranding(order?.shopCode);
     const shops = await PM.listShops();
     shopName = shops.find(s => s.Code === order?.shopCode)?.Name || shopName;
-    // MPESA till is per-shop; fall back to the global branding value.
-    shopMpesa = (await PM.getShopMpesa(order?.shopCode))?.mpesaDetails || '';
+    shopMpesa = branding.mpesaDetails || '';
   } catch { /* branding optional */ }
   // Compute VAT split per line. POS prices are stored VAT-inclusive (PriceIncludesVat=1).
   //   inclusive: vat = amount - amount/(1+rate/100)

@@ -1,3 +1,4 @@
+import {migrateDispatchWorkers} from './dispatchWorkers.js';
 import { migrateDispatchPackingV2 } from './dispatchPackingV2.js';
 import { migrateDispatchChillers } from './dispatchChillers.js';
 import { migrateContactRoute } from './contactRoute.js';
@@ -1876,6 +1877,7 @@ async function down(companyId) {
       console.log('\nAll schemas dropped.');
     } else {
       for (const c of companies) await migrate(c);
+      await migrateDispatchWorkers(await db.getPool());
       console.log('\nAll migrations complete.');
     }
   } catch (err) {

@@ -8,8 +8,8 @@ import { etlInstallation, etlJobSql, downloadColumns } from '../server/src/servi
 test('current and LIVE aliases identify the same current source with no duplicate selector', () => {
   for (const company of ['CM','FCL','FLM','RMK']) {
     assert.equal(getSource(company+'-CUR'), getSource(company+'-LIVE'));
-    assert.equal(getSource(company+'-CUR').minDate, '2025-01-06');
-    assert.equal(getSource(company).beforeDate, DOWNLOAD_CUTOFF);
+    assert.equal(getSource(company+'-CUR').minDate, company==='RMK'?'2025-03-31':'2025-01-06');
+    assert.equal(getSource(company).beforeDate, company==='RMK'?'2025-03-31':DOWNLOAD_CUTOFF);
   }
   assert.equal(catalogue().length, 8);
   assert.ok(catalogue().every(s => !s.key.endsWith('-LIVE')));
@@ -20,7 +20,7 @@ test('the period boundary cannot be widened by a requested date range', () => {
     const req = { input(k,t,v) { bindings.set(k,v); return this; } };
     const source = getSource(key), dataset = getDataset(source, 'valueEntries');
     const query = buildFromWhere(req,source,dataset,{dateFrom:'2020-01-01',dateTo:'2030-01-01'});
-    assert.equal(bindings.get(param).toISOString().slice(0,10),DOWNLOAD_CUTOFF);
+    assert.equal(bindings.get(param).toISOString().slice(0,10),key.startsWith('RMK')?'2025-03-31':DOWNLOAD_CUTOFF);
     assert.ok(query.where.includes(`h.[Posting Date] ${operator} @${param}`));
   }
 });

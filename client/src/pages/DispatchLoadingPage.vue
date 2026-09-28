@@ -1,5 +1,6 @@
 <template>
   <div class="ld-page">
+    <DispatchWorkerAccess stage="loading" :locked="!!session && session.Status==='open'" />
     <div class="ld-head">
       <div>
         <h2>Loading</h2>
@@ -30,6 +31,7 @@
       <DataTable :value="sessions" :loading="loading" paginator :rows="15" size="small" responsiveLayout="scroll"
                  dataKey="LoadingSessionId" @row-click="openSession($event.data)">
         <template #empty><div class="empty">No loading sessions yet.</div></template>
+        <Column field="CreatedByName" header="Loader" /><Column field="CreatedByUserId" header="Worker / user ID" /><Column field="ParentName" header="Main account" />
         <Column field="SessionNo" header="Load #" style="width:150px" />
         <Column field="RouteCode" header="Route" />
         <Column field="VehiclePlate" header="Vehicle" />
@@ -83,6 +85,7 @@
 </template>
 
 <script setup>
+import DispatchWorkerAccess from '@/components/DispatchWorkerAccess.vue'
 import { ref, reactive, nextTick } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { dispatchApi } from '@/services/dispatch.js'

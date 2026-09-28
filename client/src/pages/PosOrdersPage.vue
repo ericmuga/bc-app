@@ -30,12 +30,18 @@
       selection-mode="single"
       paginator :rows="25"
       v-model:filters="orderFilters" filterDisplay="row" removableSort
-      :globalFilterFields="['OrderNo','ShopCode','CashierName','Status','Label','LineCount','TotalAmount','CreatedDate']"
+      :globalFilterFields="['OrderNo','ContactName','ShopCode','CashierName','Status','Label','LineCount','TotalAmount','CreatedDate']"
     >
       <template #empty>No orders match the selected filters.</template>
       <Column field="OrderNo"     header="Order No"  sortable style="width:150px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
           <Select v-model="filterModel.value" :options="columnOptions.OrderNo" filter show-clear editable :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search no" aria-label="Filter No" style="width:100%;min-width:150px" />
+        </template>
+      </Column>
+      <Column field="ContactName" header="Contact Name" sortable style="min-width:200px" :showFilterMenu="false">
+        <template #body="{ data }">{{ data.ContactName || '—' }}</template>
+        <template #filter="{ filterModel, filterCallback }">
+          <Select v-model="filterModel.value" :options="columnOptions.ContactName" filter show-clear editable :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search contact" aria-label="Filter contact name" style="width:100%;min-width:180px" />
         </template>
       </Column>
       <Column field="ShopCode"    header="Shop"      sortable style="width:90px" :showFilterMenu="false">
@@ -349,13 +355,14 @@ const isManager = computed(() => ['admin', 'shop-admin', 'sales-admin'].includes
 const orders        = ref([])
 const makeOrderFilters=()=>({
   global:{value:null,matchMode:'contains'},OrderNo:{value:null,matchMode:'contains'},
+  ContactName:{value:null,matchMode:'contains'},
   ShopCode:{value:null,matchMode:'equals'},CashierName:{value:null,matchMode:'equals'},
   Status:{value:null,matchMode:'equals'},Label:{value:null,matchMode:'contains'},
   LineCount:{value:null,matchMode:'equals'},TotalAmount:{value:null,matchMode:'equals'},
   CreatedDate:{value:null,matchMode:'equals'},
 })
 const orderFilters=ref(makeOrderFilters())
-const columnOptions=computed(()=>Object.fromEntries(['OrderNo','ShopCode','CashierName','Status','Label'].map(field=>[field,[...new Set(orders.value.map(o=>o[field]).filter(v=>v!=null&&v!==''))].sort((a,b)=>String(a).localeCompare(String(b)))])))
+const columnOptions=computed(()=>Object.fromEntries(['OrderNo','ContactName','ShopCode','CashierName','Status','Label'].map(field=>[field,[...new Set(orders.value.map(o=>o[field]).filter(v=>v!=null&&v!==''))].sort((a,b)=>String(a).localeCompare(String(b)))])))
 const createdDate=value=>value?new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Nairobi',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):''
 
 const loading       = ref(false)
