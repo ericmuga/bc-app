@@ -1,3 +1,6 @@
+import {applyConfirmationBypass} from './DispatchConfirmationBypass.js';
+import {nextDispatchNumber} from '../services/dispatchNumber.js';
+import {bcOrderIdentity} from '../services/dispatchBcIdentity.js';
 import {withUnitConversions} from './DispatchUomModel.js';
 import {trackSync} from './DispatchSyncModel.js';
 import { completeLine } from './DispatchSessionWriter.js';
@@ -34,7 +37,7 @@ async function nextNo(pool, prefix, table, column) {
   const like = `${prefix}-${ymd}-%`;
   const r = await pool.request()
     .input('like', sql.NVarChar(40), like)
-    .query(`SELECT MAX([${column}]) AS mx FROM [dbo].[${table}] WHERE [${column}] LIKE @like`);
+    .query(`SELECT MAX(TRY_CONVERT(bigint,SUBSTRING([${column}],${prefix.length + 11},30))) AS mx FROM [dbo].[${table}] WHERE [${column}] LIKE @like`);
   let seq = 1;
   const mx = r.recordset[0]?.mx;
   if (mx) { const n = parseInt(String(mx).split('-').pop(), 10); if (!isNaN(n)) seq = n + 1; }
@@ -77,10 +80,10 @@ export async function createForOrder(order) {
     `);
   const lines = linesRes.recordset;
 
-  const dispatchNo = await nextNo(pool, 'DSP', 'DispatchOrder', 'DispatchNo');
   const tx = new sql.Transaction(pool);
   await tx.begin();
   try {
+    const dispatchNo = await nextDispatchNumber(tx);
     const hdr = await new sql.Request(tx)
       .input('no',       sql.NVarChar(30),  dispatchNo)
       .input('sid',      sql.UniqueIdentifier, order.orderId)
@@ -123,6 +126,7 @@ export async function createForOrder(order) {
         .input('active', sql.Bit, lines.some(l => l.Part === part))
         .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part],[Active]) VALUES (@doid,@part,@active)`);
     }
+    await applyConfirmationBypass(tx,dispatchOrderId);
     await tx.commit();
     return dispatchOrderId;
   } catch (e) {
@@ -182,34 +186,43 @@ function companyFilter(request, companies) {
   return `AND o.[Company] IN (${companies.map((_, i) => `@c${i}`).join(', ')})`;
 }
 
+function registryDateFilter(request, {dateFrom,dateTo,dateField}) {
+  const valid = value => !value || (/^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10)===value);
+  if (!valid(dateFrom) || !valid(dateTo) || (dateFrom && dateTo && dateFrom>dateTo)) throw new Error('Enter a valid date range');
+  if (dateField && !['shipment','imported'].includes(dateField)) throw new Error('Select shipment or imported date');
+  request.input('dateFrom',sql.Date,dateFrom || null).input('dateTo',sql.Date,dateTo || null);
+  const column = dateField==='imported' ? 'DATEADD(HOUR,3,o.CreatedAt)' : 'o.ShipmentDate';
+  return ` AND (@dateFrom IS NULL OR ${column}>=@dateFrom) AND (@dateTo IS NULL OR CAST(${column} AS date)<=@dateTo)`;
+}
+
 /** Registry worklist: orders not yet fully confirmed, optionally scoped to companies. */
-export async function listForConfirmation({ companies } = {}) {
+export async function listForConfirmation({ companies, dateFrom, dateTo, dateField } = {}) {
   const pool = await appPool();
   const r = pool.request();
-  const filter = companyFilter(r, companies);
+  const filter = companyFilter(r, companies) + registryDateFilter(r, {dateFrom,dateTo,dateField});
   const res = await r.query(`
     SELECT o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
-           o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt],
+           o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt],o.[ShipmentDate],
            SUM(CASE WHEN p.[Confirmed]=1 AND p.[Active]=1 THEN 1 ELSE 0 END) AS ConfirmedParts,
            SUM(CASE WHEN p.[Active]=1 THEN 1 ELSE 0 END) AS TotalParts
     FROM [dbo].[DispatchOrder] o
     LEFT JOIN [dbo].[DispatchOrderPart] p ON p.[DispatchOrderId]=o.[DispatchOrderId]
     WHERE o.[Confirmed]=0 AND o.[Status]='pending' ${filter}
     GROUP BY o.[DispatchOrderId],o.[DispatchNo],o.[Company],o.[OrderNo],o.[CustomerName],o.[CustomerNo],
-             o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt]
+             o.[ShopCode],o.[Status],o.[TotalAmount],o.[CreatedAt],o.[ShipmentDate]
     ORDER BY o.[CreatedAt] DESC
   `);
   return res.recordset;
 }
 
 /** Downloadable report: who confirmed each part, optionally scoped to companies. */
-export async function listConfirmationReport({ companies } = {}) {
+export async function listConfirmationReport({ companies, dateFrom, dateTo, dateField } = {}) {
   const pool = await appPool();
   const r = pool.request();
-  const filter = companyFilter(r, companies);
+  const filter = companyFilter(r, companies) + registryDateFilter(r, {dateFrom,dateTo,dateField});
   const res = await r.query(`
     SELECT o.[Company], o.[DispatchNo], o.[OrderNo], o.[CustomerName],
-           p.[Part], p.[ConfirmedByUserId], p.[ConfirmedByName], p.[ConfirmedAt]
+           p.[Part], p.[ConfirmedByUserId], p.[ConfirmedByName], p.[ConfirmedAt],p.[ConfirmationBypassed]
     FROM [dbo].[DispatchOrderPart] p
     JOIN [dbo].[DispatchOrder] o ON o.[DispatchOrderId]=p.[DispatchOrderId]
     WHERE p.[Confirmed]=1 ${filter}
@@ -295,7 +308,12 @@ export async function listUsersByRole(role) {
   const r = await pool.request()
     .input('roles', sql.NVarChar(sql.MAX), JSON.stringify(Array.isArray(role) ? role : [String(role || '')]))
     .query(`SELECT [UserId],[Username],[DisplayName] FROM [dbo].[Users]
-            WHERE [Role] IN (SELECT [value] FROM OPENJSON(@roles)) AND [IsActive]=1 ORDER BY [DisplayName],[Username]`);
+            WHERE [Role] IN (SELECT [value] FROM OPENJSON(@roles)) AND [IsActive]=1
+            UNION ALL SELECT WorkerId,Code,Name FROM dbo.DispatchWorker WHERE Active=1 AND (
+              (Assembly=1 AND EXISTS(SELECT 1 FROM OPENJSON(@roles) WHERE value='assembler')) OR
+              (Packing=1 AND EXISTS(SELECT 1 FROM OPENJSON(@roles) WHERE value='packer')) OR
+              (Loading=1 AND EXISTS(SELECT 1 FROM OPENJSON(@roles) WHERE value='loader')))
+            ORDER BY [DisplayName],[Username]`);
   return r.recordset.map((u) => ({ userId: String(u.UserId), name: u.DisplayName || u.Username }));
 }
 
@@ -374,14 +392,15 @@ async function fetchBcOrderLines(bcPool, slTable, slExtTable, orderNo, company) 
 const partOf = (v) => { const s = String(v || '').trim().toUpperCase(); return PARTS.includes(s) ? s : null; };
 
 async function insertBcDispatchOrder(appP, company, h, lines) {
-  const dispatchNo = await nextNo(appP, 'DSP', 'DispatchOrder', 'DispatchNo');
+  const source = bcOrderIdentity(h.OrderNo, lines);
   const tx = new sql.Transaction(appP);
   await tx.begin();
   try {
+    const dispatchNo = await nextDispatchNumber(tx);
     const hdr = await new sql.Request(tx)
       .input('no',       sql.NVarChar(30),  dispatchNo)
       .input('company',  sql.NVarChar(10),  company)
-      .input('orderNo',  sql.NVarChar(40),  str(h.OrderNo, 40))
+      .input('orderNo',  sql.NVarChar(40),  source.documentNo)
       .input('custNo',   sql.NVarChar(30),  str(h.CustomerNo, 30))
       .input('custName', sql.NVarChar(200), str(h.CustomerName, 200))
       .input('sp',       sql.NVarChar(20),  str(h.SalespersonCode, 20))
@@ -412,7 +431,8 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         .input('uom',      sql.NVarChar(20),  uom)
         .input('weighted', sql.Bit, isWeightUom(uom) ? 1 : 0)
         .input('part',     sql.Char(1), part)
-        .input('sort',     sql.Int, Number(ln.LineNo) || i)
+        // SortOrder preserves the original BC Line No_; never replace it with an array index.
+        .input('sort',     sql.Int, source.lineNumbers[i])
         .input('barcode',sql.NVarChar(50),ln.Barcode || null)
         .input('baseUom',sql.NVarChar(20),ln.BaseUom || null)
         .input('factor',sql.Decimal(18,6),ln.QtyPerUom || null)
@@ -429,6 +449,7 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         .input('active', sql.Bit, present.has(part) ? 1 : 0)
         .query(`INSERT INTO [dbo].[DispatchOrderPart] ([DispatchOrderId],[Part],[Active]) VALUES (@doid,@part,@active)`);
     }
+    await applyConfirmationBypass(tx,id);
     await tx.commit();
   } catch (e) {
     try { await tx.rollback(); } catch { /* already rolled back */ }
@@ -848,11 +869,11 @@ export async function deleteVehicle(id) {
   return { deleted: r.rowsAffected[0] || 0 };
 }
 
-export async function listLoadingSessions() {
+export async function listLoadingSessions(user={}) {
   const pool = await appPool();
-  return (await pool.request().query(`
+  return (await pool.request().input('worker',sql.NVarChar(100),user.delegationId?String(user.userId):null).query(`
     SELECT s.*, (SELECT COUNT(*) FROM [dbo].[DispatchLoadingLine] l WHERE l.[LoadingSessionId]=s.[LoadingSessionId]) AS BoxCount
-    FROM [dbo].[DispatchLoadingSession] s ORDER BY s.[CreatedAt] DESC
+    FROM [dbo].[DispatchLoadingSession] s WHERE (@worker IS NULL OR s.CreatedByUserId=@worker) ORDER BY s.[CreatedAt] DESC
   `)).recordset;
 }
 
@@ -864,9 +885,10 @@ export async function createLoadingSession({ routeCode, vehicleId, vehiclePlate,
     .input('vid', sql.UniqueIdentifier, vehicleId || null).input('plate', sql.NVarChar(30), str(vehiclePlate, 30))
     .input('driver', sql.NVarChar(200), str(driverName, 200)).input('sd', sql.Date, shipmentDate ? new Date(shipmentDate) : null)
     .input('uid', sql.NVarChar(100), str(user.userId, 100)).input('un', sql.NVarChar(200), str(user.userName, 200))
+.input('delegation',sql.UniqueIdentifier,user.delegationId||null).input('parent',sql.NVarChar(100),String(user.parentUserId||user.userId)).input('parentName',sql.NVarChar(200),user.parentName||user.userName||'')
     .query(`INSERT INTO [dbo].[DispatchLoadingSession]
-              ([SessionNo],[RouteCode],[VehicleId],[VehiclePlate],[DriverName],[ShipmentDate],[CreatedByUserId],[CreatedByName])
-            OUTPUT INSERTED.[LoadingSessionId] VALUES (@no,@route,@vid,@plate,@driver,@sd,@uid,@un)`);
+              ([SessionNo],[RouteCode],[VehicleId],[VehiclePlate],[DriverName],[ShipmentDate],[CreatedByUserId],[CreatedByName],[DelegationId],[ParentUserId],[ParentName])
+            OUTPUT INSERTED.[LoadingSessionId] VALUES (@no,@route,@vid,@plate,@driver,@sd,@uid,@un,@delegation,@parent,@parentName)`);
   return { loadingSessionId: res.recordset[0].LoadingSessionId, sessionNo: no };
 }
 

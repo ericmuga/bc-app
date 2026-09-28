@@ -84,6 +84,7 @@ const routes = [
       { path: 'dispatch/assembly',   name: 'DispatchAssembly',   component: () => import('@/pages/DispatchAssemblyPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'assembler', 'packer'] } },
       { path: 'dispatch/packing',    name: 'DispatchPacking',    component: () => import('@/pages/DispatchPackingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'packer', 'checker'] } },
       { path: 'dispatch/loading',    name: 'DispatchLoading',    component: () => import('@/pages/DispatchLoadingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'loader'] } },
+      { path: 'dispatch/stocktakes', name: 'DispatchStocktakes', component: () => import('@/pages/DispatchStocktakesPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant', 'assembler'] } },
       { path: 'dispatch/chiller-movements', name: 'DispatchChillerMovements', component: () => import('@/pages/DispatchChillerMovementsPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant'] } },
       { path: 'dispatch/chillers', name: 'DispatchChillers', component: () => import('@/pages/DispatchChillersPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant'] } },
       { path: 'dispatch/reports', name: 'DispatchReports', component: () => import('@/pages/DispatchReportsPage.vue'), meta: { roles: ['admin','dispatch-supervisor','assembler','packer','checker','loader','dispatch-registry','chiller-attendant'] } },

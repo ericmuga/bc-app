@@ -1,9 +1,12 @@
+import {migrateDispatchWorkers} from './dispatchWorkers.js';
 import { readFileSync } from 'node:fs';
+import { migrateDispatchStocktake } from './dispatchStocktake.js';
 import { migrateDispatchSessions } from './dispatchSessions.js';
 import { migrateDispatchPackingV2 } from './dispatchPackingV2.js';
 
 // Idempotent upgrade; seed only once so deleted or edited mappings stay edited.
 export async function migrateDispatchChillers(pool) {
+  await migrateDispatchStocktake(pool);
   await migrateDispatchSessions(pool);
   if ((await pool.request().query("SELECT OBJECT_ID('dbo.DispatchBoxLine') Id")).recordset[0].Id) await migrateDispatchPackingV2(pool);
   await pool.request().query(`
@@ -13,6 +16,12 @@ export async function migrateDispatchChillers(pool) {
         StockLocation nvarchar(20) NOT NULL DEFAULT '3535', Seeded bit NOT NULL DEFAULT 0);
     IF NOT EXISTS (SELECT 1 FROM dbo.DispatchChillerConfig WHERE Id=1)
       INSERT dbo.DispatchChillerConfig (Id) VALUES (1);
+    IF COL_LENGTH('dbo.DispatchChillerConfig','BypassConfirmation') IS NULL
+      ALTER TABLE dbo.DispatchChillerConfig ADD BypassConfirmation bit NOT NULL DEFAULT 0;
+    IF COL_LENGTH('dbo.DispatchOrder','ConfirmationBypassed') IS NULL
+      ALTER TABLE dbo.DispatchOrder ADD ConfirmationBypassed bit NOT NULL DEFAULT 0;
+    IF COL_LENGTH('dbo.DispatchOrderPart','ConfirmationBypassed') IS NULL
+      ALTER TABLE dbo.DispatchOrderPart ADD ConfirmationBypassed bit NOT NULL DEFAULT 0;
     IF OBJECT_ID('dbo.DispatchItemChiller') IS NULL
       CREATE TABLE dbo.DispatchItemChiller (ItemNo nvarchar(30) NOT NULL PRIMARY KEY,
         Description nvarchar(250) NOT NULL, Chiller nvarchar(50) NOT NULL);
@@ -21,6 +30,7 @@ export async function migrateDispatchChillers(pool) {
     IF COL_LENGTH('dbo.DispatchAssemblyLine','Chiller') IS NULL
       ALTER TABLE dbo.DispatchAssemblyLine ADD Chiller nvarchar(50) NULL;
   `);
+  await migrateDispatchWorkers(pool);
   const seed = JSON.parse(readFileSync(new URL('../data/dispatch-chillers.json', import.meta.url), 'utf8'));
   // Static, repository-owned seed values only; escape literals for the migration.
   const literal = v => "N'" + v.replaceAll("'", "''") + "'";

@@ -1,6 +1,7 @@
 <template>
   <div class="ds-page">
     <h2>Dispatch Admin setup</h2>
+    <DispatchWorkerSetup />
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
     <details class="card" open>
       <summary class="card-head"><span>BC dispatch sync</span></summary>
@@ -39,6 +40,8 @@
     <details class="card" open>
       <summary class="card-head"><span>Assembly and chiller mapping</span></summary>
       <div class="section-body">
+      <label><input type="checkbox" v-model="chillerConfig.BypassConfirmation" /> Bypass registry confirmation</label>
+      <small>Saving with confirmation bypass enabled releases existing pending orders with valid active parts and automatically releases new imports. Released orders remain released if you disable this later. Assignment bypass is separate.</small>
       <label><input type="checkbox" v-model="chillerConfig.BypassAssignment" /> Bypass assignment: assemblers select a chiller and complete its order items</label>
       <div class="config-row">
         <label>Stock company <Select v-model="chillerConfig.StockCompany" :options="['FCL','CM','FLM','RMK']" /></label>
@@ -135,6 +138,7 @@
 </template>
 
 <script setup>
+import DispatchWorkerSetup from '@/components/DispatchWorkerSetup.vue'
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { dispatchApi } from '@/services/dispatch.js'
@@ -165,15 +169,15 @@ onUnmounted(()=>clearInterval(pullHistoryTimer))
 const toast = useToast()
 const vessels = ref([]); const vehicles = ref([]); const routes = ref([]); const salespersons = ref([])
 const error = ref(null)
-const chillerConfig = ref({ BypassAssignment: false, StockCompany: 'FCL', StockLocation: '3535' })
+const chillerConfig = ref({ BypassConfirmation: false, BypassAssignment: false, StockCompany: 'FCL', StockLocation: '3535' })
 const mappings = ref([])
 async function loadChillers() {
   const { data } = await dispatchApi.chillerConfig()
-  chillerConfig.value = { ...data, BypassAssignment: !!data.BypassAssignment }
+  chillerConfig.value = { ...data, BypassConfirmation: !!data.BypassConfirmation, BypassAssignment: !!data.BypassAssignment }
   mappings.value = withBarcodeSearch(data.mappings)
 }
 async function saveChillerSettings() {
-  try { await dispatchApi.saveChillerConfig(chillerConfig.value); done('Assembly settings saved') } catch (e) { fail(e) }
+  try { const {data}=await dispatchApi.saveChillerConfig(chillerConfig.value); done(`Settings saved. ${data.released || 0} pending orders released.`) } catch (e) { fail(e) }
 }
 async function saveMapping(row) {
   try { await dispatchApi.saveChillerMapping(row); await loadChillers(); done('Mapping saved') } catch (e) { fail(e) }

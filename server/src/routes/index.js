@@ -1,4 +1,7 @@
+import * as dispatchWorkers from '../controllers/dispatchWorkerController.js';
+import rateLimit from 'express-rate-limit';
 import * as dispatchFlow from '../controllers/dispatchWorkflowController.js';
+import * as dispatchStocktake from '../controllers/dispatchStocktakeController.js';
 import { INVENTORY_REPORT_ROLES, POS_REPORT_ROLES, POS_REPORT_ALL_SHOPS_ROLES, canReadLegacyDataset } from '../../../shared/reportAccess.mjs';
 /**
  * routes/index.js
@@ -293,6 +296,8 @@ router.get(  '/pos/setup/branding',                            ...canManage, pos
 router.put(  '/pos/setup/branding',                            ...canManage, posCtrl.saveBranding);
 router.get(  '/pos/setup/branding/mpesa',                      ...canManage, posCtrl.getShopMpesa);
 router.put(  '/pos/setup/branding/mpesa',                      ...canManage, posCtrl.saveShopMpesa);
+router.get(  '/pos/setup/branding/shop',                       ...canManage, posCtrl.getShopBranding);
+router.put(  '/pos/setup/branding/shop',                       ...canManage, posCtrl.saveShopBranding);
 router.get(  '/pos/bc-sync/imported-sales',                    ...canManage, posCtrl.exportImportedSales);
 router.post( '/pos/bc-sync/imported-sales/push',               ...canManage, posCtrl.pushImportedSales);
 router.post( '/pos/production-plan',                           ...canPos, posCtrl.productionPlan);
@@ -515,9 +520,23 @@ router.put(  '/dispatch/users/:userId/companies', ...canDispSuper, dispatchCtrl.
 router.get(  '/dispatch/unassigned',          ...canDispSuper,    dispatchCtrl.listUnassigned);
 router.get(  '/dispatch/packers',             ...canDispSuper,    dispatchCtrl.listPackers);
 router.post( '/dispatch/orders/:id/assign',   ...canDispSuper,    dispatchCtrl.assign);
+router.get('/dispatch/setup/workers', ...canDispSuper, dispatchWorkers.list);
+router.post('/dispatch/setup/workers', ...canDispSuper, dispatchWorkers.save);
+router.get('/dispatch/setup/delegations', ...canDispSuper, dispatchWorkers.history);
+const delegationAttempts=rateLimit({windowMs:15*60*1000,limit:30,keyGenerator:r=>String(r.user.userId),message:{error:'Too many worker sign-in attempts. Try again in 15 minutes'}});
+router.post('/dispatch/delegation', ...canDispatch, delegationAttempts, dispatchWorkers.start);
+router.post('/dispatch/delegation/end', ...canDispatch, dispatchWorkers.end);
 // Assembly (packer; admin/supervisor can view any assembler via ?userId=)
 const canDispAssemble = [authMiddleware, requireRole(...DISPATCH_ASSEMBLE_ROLES)];
 const canDispChiller = [authMiddleware, requireRole('admin', 'dispatch-supervisor', 'chiller-attendant')];
+const canDispStocktake = [authMiddleware, requireRole('admin', 'dispatch-supervisor', 'chiller-attendant', 'assembler')];
+router.get('/dispatch/stocktakes/catalog', ...canDispStocktake, dispatchStocktake.catalog);
+router.get('/dispatch/stocktakes', ...canDispStocktake, dispatchStocktake.list);
+router.post('/dispatch/stocktakes', ...canDispStocktake, dispatchStocktake.start);
+router.get('/dispatch/stocktakes/:id/export', ...canDispStocktake, dispatchStocktake.exportExcel);
+router.get('/dispatch/stocktakes/:id', ...canDispStocktake, dispatchStocktake.detail);
+router.put('/dispatch/stocktakes/:id/count', ...canDispStocktake, dispatchStocktake.save);
+router.post('/dispatch/stocktakes/:id/complete', ...canDispStocktake, dispatchStocktake.complete);
 router.get('/dispatch/chillers/config', ...canDispatch, dispatchCtrl.chillerConfig);
 router.put('/dispatch/chillers/config', ...canDispSuper, dispatchCtrl.saveChillerConfig);
 router.post('/dispatch/chillers/mappings', ...canDispSuper, dispatchCtrl.saveChillerMapping);

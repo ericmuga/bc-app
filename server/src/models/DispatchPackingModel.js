@@ -11,12 +11,13 @@ export async function currentRun(user){return (await (await db.getPool()).reques
 export async function startRun(user,checkerId){
   const tx=new sql.Transaction(await db.getPool());await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
   try{const req=new sql.Request(tx).input('uid',sql.NVarChar(100),uid(user)).input('name',sql.NVarChar(200),user.userName||'')
-    .input('checker',sql.UniqueIdentifier,checkerId);
+    .input('checker',sql.UniqueIdentifier,checkerId).input('delegation',sql.UniqueIdentifier,user.delegationId||null)
+    .input('parent',sql.NVarChar(100),String(user.parentUserId||user.userId)).input('parentName',sql.NVarChar(200),user.parentName||user.userName||'');
     const r=await req.query(`DECLARE @cn nvarchar(200); SELECT @cn=DisplayName FROM dbo.Users WHERE UserId=@checker AND IsActive=1 AND Role IN ('checker','dispatch-supervisor','admin');
       IF @cn IS NULL THROW 51000,'Select an active confirmer',1;
       IF CONVERT(nvarchar(100),@checker)=@uid THROW 51000,'Select a different person as confirmer',1;
       IF NOT EXISTS(SELECT 1 FROM dbo.DispatchPackingRun WITH(UPDLOCK,HOLDLOCK) WHERE UserId=@uid AND EndedAt IS NULL)
-        INSERT dbo.DispatchPackingRun(UserId,UserName,CheckerUserId,CheckerName) VALUES(@uid,@name,CONVERT(nvarchar(100),@checker),@cn);
+        INSERT dbo.DispatchPackingRun(UserId,UserName,CheckerUserId,CheckerName,DelegationId,ParentUserId,ParentName) VALUES(@uid,@name,CONVERT(nvarchar(100),@checker),@cn,@delegation,@parent,@parentName);
       SELECT * FROM dbo.DispatchPackingRun WHERE UserId=@uid AND EndedAt IS NULL;`);
     await tx.commit();return r.recordset[0];
   }catch(e){await tx.rollback();throw e;}

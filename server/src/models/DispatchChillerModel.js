@@ -1,9 +1,10 @@
+import {applyConfirmationBypass} from './DispatchConfirmationBypass.js';
 import { db, sql } from '../db/pool.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 
 export async function configuration() {
   const p = await db.getPool();
-  const config = (await p.request().query('SELECT BypassAssignment,StockCompany,StockLocation FROM dbo.DispatchChillerConfig WHERE Id=1')).recordset[0];
+  const config = (await p.request().query('SELECT BypassAssignment,BypassConfirmation,StockCompany,StockLocation FROM dbo.DispatchChillerConfig WHERE Id=1')).recordset[0];
   const mappings = (await p.request().query(`SELECT m.*,
     (SELECT r.Company,r.Barcode FROM dbo.DispatchItemRule r
       WHERE r.ItemNo=m.ItemNo AND NULLIF(LTRIM(RTRIM(r.Barcode)),'') IS NOT NULL
@@ -16,13 +17,17 @@ export async function configuration() {
 }
 
 export async function saveConfiguration(body) {
-  if (typeof body.BypassAssignment !== 'boolean' || !ALL_COMPANIES.includes(body.StockCompany) ||
+  if (typeof body.BypassAssignment !== 'boolean' || typeof body.BypassConfirmation !== 'boolean' || !ALL_COMPANIES.includes(body.StockCompany) ||
       !String(body.StockLocation || '').trim() || String(body.StockLocation).length > 20) throw new Error('Valid bypass setting, stock company and location are required');
   const p = await db.getPool();
-  await p.request().input('b', sql.Bit, body.BypassAssignment).input('c', sql.NVarChar(10), body.StockCompany)
-    .input('l', sql.NVarChar(20), body.StockLocation.trim())
-    .query('UPDATE dbo.DispatchChillerConfig SET BypassAssignment=@b,StockCompany=@c,StockLocation=@l WHERE Id=1');
-  return { ok: true };
+  const tx=new sql.Transaction(p);await tx.begin();
+  try {
+    await new sql.Request(tx).input('b',sql.Bit,body.BypassAssignment).input('confirm',sql.Bit,body.BypassConfirmation)
+      .input('c',sql.NVarChar(10),body.StockCompany).input('l',sql.NVarChar(20),body.StockLocation.trim())
+      .query('UPDATE dbo.DispatchChillerConfig SET BypassAssignment=@b,BypassConfirmation=@confirm,StockCompany=@c,StockLocation=@l WHERE Id=1');
+    const released=await applyConfirmationBypass(tx);
+    await tx.commit();return {ok:true,released};
+  }catch(e){await tx.rollback();throw e;}
 }
 
 export async function saveMapping(body) {
@@ -50,11 +55,14 @@ export async function deleteMapping(item) {
 }
 
 // One row per order line; unmapped lines remain visible instead of silently disappearing.
-export async function worklist(user, { monitor = false, userId, status = 'pending' } = {}) {
+export async function worklist(user, { monitor = false, userId, status = 'pending', chiller, dateFrom, dateTo, customer, order } = {}) {
   const p = await db.getPool();
-  const config = await configuration();
+  if(dateFrom && dateTo && dateFrom>dateTo)throw new Error('Check the shipment date range');
+  const config = (await p.request().query('SELECT BypassAssignment FROM dbo.DispatchChillerConfig WHERE Id=1')).recordset[0];
   const elevated = ['admin', 'dispatch-supervisor'].includes(user.role);
   const r = p.request().input('uid', sql.NVarChar(100), String(elevated && userId ? userId : user.userId));
+  r.input('chiller',sql.NVarChar(50),chiller||null).input('dateFrom',sql.Date,dateFrom||null).input('dateTo',sql.Date,dateTo||null)
+    .input('customer',sql.NVarChar(250),customer||null).input('order',sql.NVarChar(100),order||null);
   const scope = status !== 'assembled' && !monitor && !config.BypassAssignment && (!elevated || userId) ? 'AND p.AssignedToUserId=@uid' : '';
   return (await r.query(`SELECT o.DispatchOrderId,o.DispatchNo,o.OrderNo,o.Company,o.CustomerNo,o.CustomerName,o.Status,
       CONVERT(char(10),o.ShipmentDate,23) ShipmentDate,
@@ -66,7 +74,11 @@ export async function worklist(user, { monitor = false, userId, status = 'pendin
     LEFT JOIN dbo.DispatchAssemblyLine a ON a.LineId=l.LineId
     LEFT JOIN dbo.DispatchItemRule r ON r.ItemNo=l.ItemNo AND r.Company=COALESCE(NULLIF(o.Company,''),'FCL')
     LEFT JOIN dbo.DispatchItemChiller m ON m.ItemNo=l.ItemNo
-    WHERE o.Confirmed=1 AND o.Status IN ('confirmed','assigned','assembling','assembled','packing','packed','loaded') ${scope}
+    WHERE (@chiller IS NULL OR COALESCE(a.Chiller,r.Chiller,m.Chiller,'UNMAPPED')=@chiller)
+      AND (@dateFrom IS NULL OR o.ShipmentDate>=@dateFrom) AND (@dateTo IS NULL OR CAST(o.ShipmentDate AS date)<=@dateTo)
+      AND (@customer IS NULL OR CHARINDEX(LOWER(@customer),LOWER(CONCAT(o.CustomerName,' ',o.CustomerNo)))>0)
+      AND (@order IS NULL OR CHARINDEX(LOWER(@order),LOWER(CONCAT(o.OrderNo,' ',o.DispatchNo)))>0)
+      AND o.Confirmed=1 AND o.Status IN ('confirmed','assigned','assembling','assembled','packing','packed','loaded') ${scope}
     ${monitor ? '' : status === 'assembled' ? `AND (p.Assembled=1 OR a.Completed=1) ${elevated && !userId ? '' : 'AND a.AssembledByUserId=@uid'}` : "AND o.Status IN ('confirmed','assigned','assembling') AND p.Assembled=0 AND ISNULL(a.Completed,0)=0"}
     ${monitor ? '' : "AND NOT EXISTS(SELECT 1 FROM dbo.DispatchOrderClaim claim WHERE claim.DispatchOrderId=o.DispatchOrderId AND (claim.UserId<>@uid OR claim.Stage<>'assembly'))"}
     ORDER BY Chiller,o.CreatedAt,o.DispatchNo,l.SortOrder`)).recordset;

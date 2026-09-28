@@ -23,8 +23,10 @@
     <DataTable v-if="tab==='Activity'" :value="data.activity" paginator :rows="25" scrollable size="small">
       <Column field="Stage" header="Stage" /><Column field="Status" header="Status" /><Column field="OrderNo" header="Order" /><Column header="Item"><template #body="{data:r}">{{ r.ItemNo }} - {{ r.Description }}</template></Column><Column field="Quantity" header="Quantity" /><Column field="Uom" header="UOM" /><Column field="Pieces" header="Pieces" /><Column field="WeightKg" header="KG" /><Column field="BatchNo" header="Batch" /><Column field="Operator" header="Operator" /><Column header="Time"><template #body="{data:r}">{{ time(r.ActivityAt) }}</template></Column>
     </DataTable>
+    <div v-if="tab==='Sessions'" class="totals"><article v-for="summary in sessionRates" :key="summary.stage"><strong>{{ summary.stage }}: {{ rate(summary.weighted) }} kg/min</strong><span>Overall rate = summed KG / summed session minutes</span><span>Average session rate: {{ rate(summary.mean) }} kg/min</span></article></div>
+    <p v-if="tab==='Sessions'">Dates select session start dates (Nairobi). Totals sum the KG of matching session entries, including open boxes, across the whole session. Missing KG is excluded; ongoing-session rates use elapsed time at refresh.</p>
     <DataTable v-if="tab==='Sessions'" :value="sessions" paginator :rows="25" scrollable size="small">
-      <Column field="Stage" header="Stage" /><Column field="UserName" header="Operator" /><Column field="CheckerName" header="Confirmer" /><Column header="Started"><template #body="{data:r}">{{ time(r.StartedAt) }}</template></Column><Column header="Ended"><template #body="{data:r}">{{ r.EndedAt?time(r.EndedAt):'In progress' }}</template></Column><Column header="Minutes"><template #body="{data:r}">{{ (r.DurationSeconds/60).toFixed(1) }}</template></Column><Column header="Details"><template #body="{data:r}"><Button label="Activity" text @click="filters.operator=r.UserName;tab='Activity';load()" /></template></Column>
+      <Column field="Stage" header="Stage" /><Column field="UserName" header="Operator" /><Column field="WorkerCode" header="Worker code" /><Column field="UserId" header="Worker / user ID" /><Column field="ParentName" header="Main account" /><Column field="CheckerName" header="Confirmer" /><Column header="Started"><template #body="{data:r}">{{ time(r.StartedAt) }}</template></Column><Column header="Ended"><template #body="{data:r}">{{ r.EndedAt?time(r.EndedAt):'In progress' }}</template></Column><Column header="Minutes"><template #body="{data:r}">{{ (r.DurationSeconds/60).toFixed(1) }}</template></Column><Column field="WeightKg" header="KG" sortable><template #body="{data:r}">{{ rate(r.WeightKg) }}<small v-if="r.MissingKg"> ({{ r.MissingKg }} missing)</small></template></Column><Column field="Tonnes" header="Tonnes" sortable><template #body="{data:r}">{{ tonnes(r.WeightKg) }}</template></Column><Column field="KgPerMinute" header="KG/min" sortable><template #body="{data:r}">{{ rate(r.KgPerMinute) }}</template></Column><Column header="Details"><template #body="{data:r}"><Button label="View entries" text @click="openSession(r)" /></template></Column>
     </DataTable>
     <DataTable v-if="tab==='Claims'" :value="data.claims" paginator :rows="25" size="small">
       <Column field="OrderNo" header="Order" /><Column field="Stage" header="Stage" /><Column field="UserName" header="Operator" /><Column header="Picked at"><template #body="{data:r}">{{ time(r.ClaimedAt) }}</template></Column><Column v-if="supervisor"><template #body="{data:r}"><Button label="Release claim" severity="warn" @click="release(r)" /></template></Column>
@@ -42,9 +44,14 @@
         <Column header="Result"><template #body="{data:r}">{{ syncSummary(r) }}</template></Column>
       </DataTable>
     </section>
+    <Dialog v-model:visible="sessionVisible" modal class="dispatch-session-detail" header="Session entries" :style="{width:'74rem',maxWidth:'96vw'}">
+      <p v-if="selectedSession">{{ selectedSession.Stage }} · {{ selectedSession.UserName }} · {{ time(selectedSession.StartedAt) }} · {{ rate(selectedSession.WeightKg) }} KG · {{ tonnes(selectedSession.WeightKg) }} t · {{ rate(selectedSession.KgPerMinute) }} kg/min</p>
+      <DataTable :value="sessionEntries" paginator :rows="15" scrollable size="small"><Column field="OrderNo" header="Order" /><Column field="ItemNo" header="Item" /><Column field="Description" header="Description" /><Column field="Quantity" header="Quantity" /><Column field="Uom" header="UOM" /><Column field="Pieces" header="Pieces" /><Column field="WeightKg" header="KG" /><Column field="BatchNo" header="Batch" /><Column field="Status" header="Status" /></DataTable>
+    </Dialog>
   </section>
 </template>
 <script setup>
+import '@/styles/dispatchSessionDetails.css'
 import {ref,computed,onMounted,onUnmounted,watch} from 'vue'
 import {dispatchApi} from '@/services/dispatch.js'
 import {useAuthStore} from '@/stores/auth.js'
@@ -54,6 +61,8 @@ import Select from 'primevue/select'
 import Message from 'primevue/message'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
+import Dialog from 'primevue/dialog'
+import {sessionAverage} from '../../../shared/dispatchSessionMetrics.mjs'
 const auth=useAuthStore(),supervisor=computed(()=>['admin','dispatch-supervisor'].includes(auth.effectiveRole))
 const filters=ref({dateFrom:'',dateTo:'',item:'',customer:'',order:'',route:'',salesperson:'',operator:''}),data=ref({activity:[],orders:[],sessions:[],claims:[]}),loading=ref(false),error=ref(''),tab=ref('Orders'),metric=ref('packing'),groupBy=ref('Operator')
 const filterFields=[{key:'item',label:'Item code / name'},{key:'customer',label:'Customer number / name'},{key:'order',label:'Order number'},{key:'salesperson',label:'Salesperson'},{key:'route',label:'Route'},{key:'operator',label:'Packer / assembler'}]
@@ -71,7 +80,12 @@ const packedKg=computed(()=>data.value.activity.filter(r=>r.Stage==='packing'&&r
 const assembledKg=computed(()=>data.value.activity.filter(r=>r.Stage==='assembly').reduce((n,r)=>n+Number(r.WeightKg||0),0))
 const missingKg=computed(()=>data.value.activity.filter(r=>r.Stage==='assembly'&&r.WeightKg==null).length)
 const pendingOrders=computed(()=>new Set(data.value.orders.filter(r=>!['packed','loaded'].includes(r.Status)).map(r=>r.DispatchOrderId)).size)
-const sessions=computed(()=>{const restricted=applied.value.item||applied.value.customer||applied.value.order||applied.value.route||applied.value.salesperson;const ids=new Set(data.value.activity.map(r=>r.SessionId));return restricted?data.value.sessions.filter(s=>ids.has(s.SessionId)):data.value.sessions})
+const sessions=computed(()=>data.value.sessions)
+const sessionVisible=ref(false),selectedSession=ref(null)
+const sessionEntries=computed(()=>(data.value.sessionEntries||[]).filter(e=>e.SessionId===selectedSession.value?.SessionId&&e.Stage===selectedSession.value?.Stage))
+const sessionRates=computed(()=>['packing','assembly'].map(stage=>({stage,...sessionAverage(sessions.value.filter(s=>s.Stage===stage))})))
+const rate=value=>value==null?'—':Number(value).toFixed(2)
+function openSession(row){selectedSession.value=row;sessionVisible.value=true}
 const bars=computed(()=>{const map=new Map();for(const r of data.value.activity){if(r.Stage!==metric.value||(r.Stage==='packing'&&r.Status!=='packed')||r.WeightKg==null)continue;const key=groupBy.value==='Operator'?r.Operator:groupBy.value==='Item'?r.ItemNo:new Date(r.ActivityAt).toLocaleDateString('en-CA',{timeZone:'Africa/Nairobi'});map.set(key,(map.get(key)||0)+Number(r.WeightKg))}const rows=[...map].map(([label,kg])=>({label,kg})).sort((a,b)=>b.kg-a.kg).slice(0,20),max=Math.max(...rows.map(r=>r.kg),1);return rows.map(r=>({...r,percent:r.kg/max*100}))})
 async function load(){loading.value=true;error.value='';try{if(filters.value.dateFrom&&filters.value.dateTo&&filters.value.dateFrom>filters.value.dateTo)throw new Error('Check the date range');const query={...filters.value};data.value=(await dispatchApi.reports(query)).data;applied.value=query}catch(e){error.value=e.response?.data?.error||e.message}finally{loading.value=false}}
 async function release(row){try{await dispatchApi.releaseOrder(row.DispatchOrderId);await load()}catch(e){error.value=e.response?.data?.error||e.message}}

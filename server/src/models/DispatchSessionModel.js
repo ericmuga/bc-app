@@ -9,9 +9,10 @@ export async function start(user) {
   const tx = new sql.Transaction(p); await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
   try {
     const r = await new sql.Request(tx).input('uid',sql.NVarChar(100),String(user.userId))
-      .input('name',sql.NVarChar(200),user.userName || '').query(`
+      .input('name',sql.NVarChar(200),user.userName || '').input('delegation',sql.UniqueIdentifier,user.delegationId||null)
+      .input('parent',sql.NVarChar(100),String(user.parentUserId||user.userId)).input('parentName',sql.NVarChar(200),user.parentName||user.userName||'').query(`
         IF NOT EXISTS(SELECT 1 FROM dbo.DispatchAssemblySession WITH(UPDLOCK,HOLDLOCK) WHERE UserId=@uid AND EndedAt IS NULL)
-          INSERT dbo.DispatchAssemblySession(UserId,UserName) VALUES(@uid,@name);
+          INSERT dbo.DispatchAssemblySession(UserId,UserName,DelegationId,ParentUserId,ParentName) VALUES(@uid,@name,@delegation,@parent,@parentName);
         SELECT * FROM dbo.DispatchAssemblySession WHERE UserId=@uid AND EndedAt IS NULL;`);
     await tx.commit(); return r.recordset[0];
   } catch(e) { await tx.rollback(); throw e; }
@@ -32,13 +33,14 @@ export async function report(user, filters = {}) {
   const req = p.request().input('uid',sql.NVarChar(100),String(user.userId))
     .input('from',sql.Date,filters.dateFrom || null).input('to',sql.Date,filters.dateTo || null);
   return (await req.query(`SELECT s.*,DATEDIFF(SECOND,s.StartedAt,COALESCE(s.EndedAt,GETUTCDATE())) DurationSeconds,
+      MAX(d.WorkerCode) WorkerCode,SUM(e.WeightKg) WeightKg,SUM(CASE WHEN e.EventId IS NOT NULL AND e.WeightKg IS NULL THEN 1 ELSE 0 END) MissingKg,
       COUNT(e.EventId) Entries,COUNT(DISTINCT e.LineId) Lines,COUNT(DISTINCT e.DispatchOrderId) Orders,
       SUM(CASE WHEN e.CorrectionReason IS NOT NULL THEN 1 ELSE 0 END) Corrections
-    FROM dbo.DispatchAssemblySession s LEFT JOIN dbo.DispatchAssemblyEvent e ON e.SessionId=s.SessionId
+    FROM dbo.DispatchAssemblySession s LEFT JOIN dbo.DispatchDelegation d ON d.DelegationId=s.DelegationId LEFT JOIN dbo.DispatchAssemblyEvent e ON e.SessionId=s.SessionId
     WHERE ${all ? '1=1' : 's.UserId=@uid'}
       AND (@from IS NULL OR DATEADD(HOUR,3,s.StartedAt)>=@from)
       AND (@to IS NULL OR DATEADD(HOUR,3,s.StartedAt)<DATEADD(DAY,1,@to))
-    GROUP BY s.SessionId,s.UserId,s.UserName,s.StartedAt,s.EndedAt ORDER BY s.StartedAt DESC`)).recordset;
+    GROUP BY s.SessionId,s.UserId,s.UserName,s.StartedAt,s.EndedAt,s.DelegationId,s.ParentUserId,s.ParentName ORDER BY s.StartedAt DESC`)).recordset;
 }
 export async function events(user, sessionId) {
   const all = ['admin','dispatch-supervisor','chiller-attendant'].includes(user.role);

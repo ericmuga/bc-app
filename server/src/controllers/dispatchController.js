@@ -31,7 +31,7 @@ export async function deleteChillerMapping(req, res) {
   try { ok(res, await Chillers.deleteMapping(req.params.itemNo)); } catch (e) { err(res, e, 400); }
 }
 export async function chillerWorklist(req, res) {
-  try { ok(res, await Chillers.worklist(req.user, { userId: req.query.userId, status: req.query.status })); } catch (e) { err(res, e); }
+  try { ok(res, await Chillers.worklist(req.user, { userId: req.query.userId, status: req.query.status, chiller:req.query.chiller, dateFrom:req.query.dateFrom, dateTo:req.query.dateTo, customer:req.query.customer, order:req.query.order })); } catch (e) { err(res, e); }
 }
 export async function chillerMonitor(req, res) {
   try { ok(res, await Chillers.worklist(req.user, { monitor: true })); } catch (e) { err(res, e); }
@@ -44,7 +44,7 @@ export async function chillerStock(req, res) {
 export async function listConfirmation(req, res) {
   try {
     const companies = await Dispatch.resolveRegistryCompanies(req.user.userId, splitCSV(req.query.companies));
-    ok(res, await Dispatch.listForConfirmation({ companies }));
+    ok(res, await Dispatch.listForConfirmation({ companies, dateFrom:req.query.dateFrom, dateTo:req.query.dateTo, dateField:req.query.dateField }));
   } catch (e) { err(res, e); }
 }
 
@@ -60,7 +60,7 @@ export async function registryCompanies(req, res) {
 export async function confirmationReport(req, res) {
   try {
     const companies = await Dispatch.resolveRegistryCompanies(req.user.userId, splitCSV(req.query.companies));
-    ok(res, await Dispatch.listConfirmationReport({ companies }));
+    ok(res, await Dispatch.listConfirmationReport({ companies, dateFrom:req.query.dateFrom, dateTo:req.query.dateTo, dateField:req.query.dateField }));
   } catch (e) { err(res, e); }
 }
 
@@ -246,8 +246,8 @@ export async function listVehicles(_req, res) {
   try { ok(res, await Dispatch.listVehicles()); }
   catch (e) { err(res, e); }
 }
-export async function listLoadingSessions(_req, res) {
-  try { ok(res, await Dispatch.listLoadingSessions()); }
+export async function listLoadingSessions(req, res) {
+  try { ok(res, await Dispatch.listLoadingSessions(req.user)); }
   catch (e) { err(res, e); }
 }
 export async function createLoadingSession(req, res) {

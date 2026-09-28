@@ -3,6 +3,7 @@
  * JWT authentication. BC webhook routes use a shared secret instead.
  */
 import jwt from 'jsonwebtoken';
+import {dispatchDelegation} from './dispatchDelegation.js';
 
 export function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
@@ -13,7 +14,7 @@ export function authMiddleware(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.user = payload; // { userId, userName, role }
-    next();
+    return dispatchDelegation(req,res,next);
   } catch (err) {
     return res.status(401).json({ error: 'Token invalid or expired' });
   }

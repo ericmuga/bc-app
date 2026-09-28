@@ -10,7 +10,7 @@ export async function packedExportPreview(company,transaction=null,orderId=null)
  const rows=(await request.input('company',sql.NVarChar(10),company).input('orderId',sql.UniqueIdentifier,orderId).query(`
  SELECT o.DispatchOrderId,o.Company,o.OrderNo,o.CustomerNo,o.CustomerName,l.LineId,l.SortOrder BcLineNo,l.ItemNo,l.Description,l.Uom,l.OrderQty,
    COALESCE(p.PackedQty,0) PackedQty,COALESCE(p.Pieces,0) Pieces,COALESCE(p.WeightKg,0) WeightKg,p.LastPackedAt,a.ReturnReasonCode,
-   COALESCE(NULLIF(pu.Username,''),NULLIF(last.PackedByName,''),NULLIF(au.Username,''),a.AssembledByName) PackedUser,
+   COALESCE(NULLIF(worker.Code,''),NULLIF(pu.Username,''),NULLIF(last.PackedByName,''),NULLIF(au.Username,''),a.AssembledByName) PackedUser,
    exported.PayloadHash,exported.SyncedAt,
    CASE WHEN l.SortOrder IS NULL OR l.SortOrder<=0 THEN 'Missing BC line number' ELSE 'Packed - ready for BC comparison' END Readiness
  FROM dbo.DispatchOrder o JOIN dbo.DispatchOrderLine l ON l.DispatchOrderId=o.DispatchOrderId
@@ -19,6 +19,7 @@ export async function packedExportPreview(company,transaction=null,orderId=null)
  LEFT JOIN dbo.DispatchPackedExport exported ON exported.LineId=l.LineId
  OUTER APPLY(SELECT TOP(1) bl.PackedByUserId,bl.PackedByName FROM dbo.DispatchBoxLine bl JOIN dbo.DispatchBox b ON b.BoxId=bl.BoxId
    WHERE bl.LineId=l.LineId AND bl.VoidedAt IS NULL AND b.Status IN ('closed','loaded') ORDER BY bl.CreatedAt DESC,bl.BoxLineId) last
+ LEFT JOIN dbo.DispatchWorker worker ON CONVERT(nvarchar(100),worker.WorkerId)=last.PackedByUserId
  LEFT JOIN dbo.Users pu ON CONVERT(nvarchar(100),pu.UserId)=last.PackedByUserId
  OUTER APPLY(SELECT SUM(bl.Qty) PackedQty,SUM(bl.Pieces) Pieces,SUM(bl.Weight) WeightKg,MAX(b.ClosedAt) LastPackedAt
    FROM dbo.DispatchBoxLine bl JOIN dbo.DispatchBox b ON b.BoxId=bl.BoxId
@@ -34,9 +35,9 @@ export async function inspectImportedAssemblies(pool,company){
  const cols=(await pool.request().input('table',sql.NVarChar(300),table).query(`SELECT c.name Name,t.name Type,c.max_length MaxLength,c.precision Precision,c.scale Scale,c.is_nullable Nullable,c.is_identity IsIdentity,c.is_computed IsComputed,c.default_object_id DefaultId
  FROM sys.columns c JOIN sys.types t ON t.user_type_id=c.user_type_id WHERE c.object_id=OBJECT_ID(@table)`)).recordset;
  if(!cols.length)throw new Error(`Imported Assemblies is not published or accessible for ${company} on ${dispatchBcTarget().server}/${dispatchBcTarget().database}`);
- const mapped=['Document No_','Line No_','Item No_','Quantity','User ID','Return Reason Code','Executed','Error Message'];
+ const mapped=['Document No_','Line No_','Item No_','Quantity','User ID','Return Reason Code','Executed','Error Message','Status','Executed At'];
  for(const name of [...mapped,'Status','Executed At'])if(!cols.some(c=>c.Name===name))throw new Error(`Imported Assemblies is missing column ${name}`);
- // Status and Executed At must use BC's own defaults; never guess its enum value.
+ // AL table 50401 defines Pending=0 and an initially undefined DateTime (0DT).
  const supplied=new Set([...mapped,'$systemId','$systemCreatedAt','$systemModifiedAt']);
  const missing=cols.filter(c=>!supplied.has(c.Name)&&!c.Nullable&&!c.DefaultId&&!c.IsIdentity&&!c.IsComputed&&!['timestamp','rowversion'].includes(c.Type));
  if(missing.length)throw new Error(`BC table requires defaults for: ${missing.map(c=>c.Name).join(', ')}. Publish the BC defaults before syncing`);
@@ -55,10 +56,15 @@ export function bindImportedPayload(request,payload,cols){
   else if(col.Type==='int')type=sql.Int;
   else if(col.Type==='bigint')type=sql.BigInt;
   else if(col.Type==='bit')type=sql.Bit;
+  else if(col.Type==='datetime')type=sql.DateTime;
+  else if(col.Type==='datetime2')type=sql.DateTime2(col.Scale);
   else throw new Error(`Unsupported BC type for ${name}: ${col.Type}`);
   const param='v'+params.length;request.input(param,type,value);params.push({name,param:'@'+param});
  }
  return params;
+}
+export function newImportedAssembly(payload){
+ return {...payload,Status:0,Executed:false,'Error Message':'','Executed At':new Date('1753-01-01T00:00:00.000Z')};
 }
 async function exportOrder(company,orderId,user,bc,schema){
  const appTx=new sql.Transaction(await db.getPool());await appTx.begin();let bcTx,bcCommitted=false,newIntent=false;
@@ -81,7 +87,7 @@ async function exportOrder(company,orderId,user,bc,schema){
    const operation=compareStaging(existing[0],row.Payload,!!row.PayloadHash);
    if(operation!=='unchanged'){
     if(Number(source.Shipped)!==0)throw new Error('BC line already has shipped quantity; review in BC before exporting');
-    const request=new sql.Request(bcTx),payload=operation==='insert'?{...row.Payload,Executed:false,'Error Message':''}:row.Payload;
+    const request=new sql.Request(bcTx),payload=operation==='insert'?newImportedAssembly(row.Payload):row.Payload;
     const params=bindImportedPayload(request,payload,schema.cols);
     if(operation==='insert'){
      const extras=schema.cols.filter(c=>['$systemId','$systemCreatedAt','$systemModifiedAt'].includes(c.Name));
