@@ -204,6 +204,8 @@ async function ensurePosItemColumns() {
       ['PosShop', 'RmkCustomerNo',      'NVARCHAR(20)  NULL'],
       ['PosShop', 'FlmCustomerNo',      'NVARCHAR(20)  NULL'],
       ['PosShop', 'TillNo',             'NVARCHAR(30)  NULL'],
+      // M-PESA till/paybill used to scope the checkout M-PESA lookup to this shop
+      ['PosShop', 'BusinessShortCode',  'NVARCHAR(20)  NULL'],
       // PosItem — track the BC company an item was synced from
       ['PosItem', 'SourceCompany',      'NVARCHAR(20)  NULL'],
       // PosStockMovement — tag each movement with the BC company it belongs to,

@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Declare that the app themes itself, so Chrome's "Auto Dark Mode for Web
+         Contents" does not post-invert our explicit colors (which was repainting
+         the navy M-Pesa table and the rest of the UI in Chrome dark mode). -->
+    <meta name="color-scheme" content="light dark" />
     <title>BC Console</title>
     <link rel="icon" type="image/png" href="/branding/bc-console.png" />
     <link rel="apple-touch-icon" href="/branding/bc-console.png" />

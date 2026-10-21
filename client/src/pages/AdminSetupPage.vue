@@ -991,7 +991,7 @@ GROUP BY [G_L Account No_]</pre>
             </div>
             <p class="text-muted text-sm">Each shop is a distinct terminal. Assign a Shop Code to users to restrict their POS access to that shop only.</p>
             <div v-if="editingPosShop" class="builder-form" style="max-width:700px">
-              <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 80px 80px;gap:8px;align-items:center">
+              <div class="payment-editor-fields">
                 <InputText v-model="posShopForm.code"            placeholder="Code (e.g. SHOP1)" />
                 <InputText v-model="posShopForm.name"            placeholder="Display name" />
                 <InputText v-model="posShopForm.locationCode"    placeholder="BC Location" />
@@ -1012,6 +1012,14 @@ GROUP BY [G_L Account No_]</pre>
                   <InputText v-model="posShopForm.rmkCustomerNo"    placeholder="RMK customer" />
                   <InputText v-model="posShopForm.flmCustomerNo"    placeholder="FLM customer" />
                   <InputText v-model="posShopForm.walkInCustomerNo" placeholder="Walk-in customer" />
+                </div>
+              </div>
+              <!-- M-PESA till/paybill. When set, the checkout M-PESA lookup filters
+                   transactions to this BusinessShortCode (blank = search all tills). -->
+              <div style="margin-top:8px">
+                <label class="ig-label">M-PESA Till / Paybill (BusinessShortCode)</label>
+                <div style="margin-top:4px;max-width:240px">
+                  <InputText v-model="posShopForm.businessShortCode" placeholder="e.g. 998877" fluid />
                 </div>
               </div>
               <div class="schedule-actions" style="margin-top:6px">
@@ -1306,7 +1314,7 @@ GROUP BY [G_L Account No_]</pre>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 80px;gap:8px;align-items:center">
                 <InputText v-model="specialForm.itemNo" placeholder="Item No" />
                 <Select v-model="specialForm.shopCode" :options="posShops" option-label="Name" option-value="Code"
-                  placeholder="Shop (blank = all)" show-clear />
+                  placeholder="Shared defaults (all shops)" disabled />
                 <InputNumber v-model="specialForm.unitPrice" :minFractionDigits="2" mode="decimal" placeholder="Price" />
                 <DatePicker v-model="specialForm.startingDate" date-format="yy-mm-dd" placeholder="Starts" />
                 <DatePicker v-model="specialForm.endingDate"   date-format="yy-mm-dd" placeholder="Ends (optional)" show-clear />
@@ -1364,12 +1372,11 @@ GROUP BY [G_L Account No_]</pre>
             <summary><i class="pi pi-credit-card" /> Payment Methods <span class="acc-count-sm">{{ posPaymentTypes.length }}</span></summary>
           <div class="pos-setup-section">
             <div class="builder-panel-head">
-              <h4>Payment Methods</h4>
-              <Button icon="pi pi-plus" text size="small" v-tooltip="'New payment method'" @click="newPosPayType" />
+              <h4>Payment Methods by Shop</h4>
             </div>
             <Dialog v-model:visible="editingPosPayType" modal
               :header="posPayTypeForm.typeId ? `Edit payment method — ${posPayTypeForm.name || posPayTypeForm.code}` : 'New payment method'"
-              :style="{ width: '760px' }" class="paytype-dialog">
+              :style="{ width: '760px' }" :breakpoints="{'800px':'96vw'}" class="paytype-dialog">
               <div class="builder-form">
               <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr 80px 80px;gap:8px;align-items:center">
                 <InputText v-model="posPayTypeForm.code" placeholder="Code (e.g. MPESA)" />
@@ -1460,29 +1467,22 @@ GROUP BY [G_L Account No_]</pre>
                 <Button label="Save" icon="pi pi-save" size="small" @click="savePosPayType" :loading="savingPosPayType" />
               </template>
             </Dialog>
-            <DataTable :value="posPaymentTypes" dataKey="TypeId" size="small" removableSort>
-              <Column field="Code"         header="Code"  sortable style="width:100px" />
-              <Column field="Name"         header="Name"  sortable style="min-width:160px" />
-              <Column field="ShopCode"     header="Shop"  sortable style="width:90px" />
-              <Column field="PaymentClass" header="Class" sortable style="width:110px" />
-              <Column field="SortOrder"    header="Sort"  sortable style="width:55px" />
-              <Column field="IsActive" header="Active" sortable style="width:90px">
-                <template #body="{ data }">
-                  <Button :icon="data.IsActive ? 'pi pi-check' : 'pi pi-times'" text size="small"
-                    :severity="data.IsActive ? 'success' : 'secondary'" :loading="togglingPayType === data.TypeId"
-                    v-tooltip="data.IsActive ? 'Shown at POS — click to hide' : 'Hidden from POS — click to show'"
-                    @click="togglePayTypeActive(data)" />
-                </template>
-              </Column>
-              <Column header="" style="width:80px">
-                <template #body="{ data }">
-                  <div class="row-actions">
-                    <Button icon="pi pi-pencil" text size="small" @click="editPosPayType(data)" />
-                    <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deletePosPayType(data)" />
-                  </div>
-                </template>
-              </Column>
+            <InputText v-model="paymentShopSearch" placeholder="Search shop code or name" aria-label="Search payment shops" style="margin-bottom:12px;max-width:100%" />
+            <DataTable :value="paymentShopRows" dataKey="Code" size="small" paginator :rows="10" selectionMode="single" @row-click="openPaymentShop($event.data)">
+              <Column field="Code" header="Shop code" sortable /><Column field="Name" header="Shop name" sortable /><Column field="methodCount" header="Methods" sortable />
+              <Column header=""><template #body="{data}"><Button label="Configure" text @click.stop="openPaymentShop(data)" /></template></Column>
             </DataTable>
+            <Dialog v-model:visible="paymentShopVisible" class="payment-shop-dialog" modal :header="`Payment methods — ${paymentShop?.Name || ''}`" :style="{width:'850px'}" :breakpoints="{'900px':'96vw'}">
+              <div class="builder-panel-head"><InputText v-model="paymentMethodSearch" placeholder="Search method code, name or class" /><Button label="New payment method" icon="pi pi-plus" @click="newPosPayType" /></div>
+              <Message v-if="paymentShop?.Code" severity="info" :closable="false">Shared methods apply unless overridden. Editing a shared method here creates a configuration for this shop only.</Message>
+              <Message v-if="paymentMethodError" severity="error">{{ paymentMethodError }}</Message>
+              <DataTable :value="shopPaymentMethods" dataKey="TypeId" size="small" selectionMode="single" @row-click="editPosPayType($event.data)" scrollable>
+                <Column field="Code" header="Code" sortable /><Column field="Name" header="Name" sortable /><Column field="PaymentClass" header="Class" sortable />
+                <Column header="Scope"><template #body="{data}">{{ data.ShopCode ? 'This shop' : 'Shared default' }}</template></Column>
+                <Column header="Active"><template #body="{data}">{{ data.IsActive ? 'Yes' : 'No' }}</template></Column>
+                <Column header=""><template #body="{data}"><Button icon="pi pi-pencil" text aria-label="Edit payment method" @click.stop="editPosPayType(data)" /><Button v-if="!paymentShop?.Code || data.ShopCode" icon="pi pi-trash" text severity="danger" aria-label="Delete payment method" @click.stop="deletePosPayType(data)" /></template></Column>
+              </DataTable>
+            </Dialog>
           </div>
           </details>
 
@@ -2335,7 +2335,7 @@ const posShopOptions     = computed(() => [
 // shops
 const editingPosShop = ref(false)
 const savingPosShop  = ref(false)
-const emptyShopForm = () => ({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', fclCustomerNo: '', cmCustomerNo: '', rmkCustomerNo: '', flmCustomerNo: '', walkInCustomerNo: '', isActive: true, sortOrder: 0 })
+const emptyShopForm = () => ({ shopId: null, code: '', name: '', locationCode: '', salespersonCode: '', currentRoute: '', tptLocationCode: '', businessShortCode: '', fclCustomerNo: '', cmCustomerNo: '', rmkCustomerNo: '', flmCustomerNo: '', walkInCustomerNo: '', isActive: true, sortOrder: 0 })
 const posShopForm    = ref(emptyShopForm())
 
 // BC Salespersons — read-only reference table for the terminals section
@@ -2378,7 +2378,7 @@ async function saveMirrors() {
 }
 
 function newPosShop()  { posShopForm.value = emptyShopForm(); shopCompanies.value = []; editingPosShop.value = true }
-function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', fclCustomerNo: d.FclCustomerNo||'', cmCustomerNo: d.CmCustomerNo||'', rmkCustomerNo: d.RmkCustomerNo||'', flmCustomerNo: d.FlmCustomerNo||'', walkInCustomerNo: d.WalkInCustomerNo||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; loadMirrors(d.Code); editingPosShop.value = true }
+function editPosShop(d){ posShopForm.value = { shopId: d.ShopId, code: d.Code, name: d.Name, locationCode: d.LocationCode||'', salespersonCode: d.SalespersonCode||'', currentRoute: d.CurrentRoute||'', tptLocationCode: d.TptLocationCode||'', businessShortCode: d.BusinessShortCode||'', fclCustomerNo: d.FclCustomerNo||'', cmCustomerNo: d.CmCustomerNo||'', rmkCustomerNo: d.RmkCustomerNo||'', flmCustomerNo: d.FlmCustomerNo||'', walkInCustomerNo: d.WalkInCustomerNo||'', isActive: Boolean(d.IsActive), sortOrder: d.SortOrder }; loadMirrors(d.Code); editingPosShop.value = true }
 
 async function savePosShop() {
   savingPosShop.value = true
@@ -2506,6 +2506,21 @@ async function importBcItems() {
 }
 
 // payment types
+const paymentShop=ref(null),paymentShopVisible=ref(false),paymentShopSearch=ref(''),paymentMethodSearch=ref(''),paymentMethodError=ref('')
+const payScope=v=>String(v||'').trim().toUpperCase()
+function methodsForShop(code){
+ const scoped=posPaymentTypes.value.filter(p=>payScope(p.ShopCode)===payScope(code));
+ if(!code)return scoped;
+ const own=new Set(scoped.map(p=>payScope(p.Code)));
+ return [...scoped,...posPaymentTypes.value.filter(p=>!payScope(p.ShopCode)&&!own.has(payScope(p.Code)))];
+}
+const paymentShopRows=computed(()=>{
+ const shops=[{Code:'',Name:'Shared defaults (all shops)'},...posShops.value];
+ for(const method of posPaymentTypes.value)if(method.ShopCode&&!shops.some(s=>payScope(s.Code)===payScope(method.ShopCode)))shops.push({Code:method.ShopCode,Name:method.ShopCode});
+ return shops.map(s=>({...s,methodCount:methodsForShop(s.Code).length})).filter(s=>`${s.Code} ${s.Name}`.toLowerCase().includes(paymentShopSearch.value.toLowerCase()));
+})
+const shopPaymentMethods=computed(()=>methodsForShop(paymentShop.value?.Code).filter(p=>`${p.Code} ${p.Name} ${p.PaymentClass}`.toLowerCase().includes(paymentMethodSearch.value.toLowerCase())))
+function openPaymentShop(shop){paymentShop.value=shop;paymentMethodSearch.value='';paymentMethodError.value='';paymentShopVisible.value=true}
 const editingPosPayType  = ref(false)
 const savingPosPayType   = ref(false)
 const togglingPayType    = ref(null)
@@ -2530,10 +2545,12 @@ function emptyPayTypeForm() {
 }
 const paymentClasses     = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer', 'BankDeposit']
 
-function newPosPayType()  { posPayTypeForm.value = emptyPayTypeForm(); editingPosPayType.value = true }
+function newPosPayType()  { paymentMethodError.value='';posPayTypeForm.value = {...emptyPayTypeForm(),shopCode:paymentShop.value?.Code||null}; editingPosPayType.value = true }
 function editPosPayType(d){
+  paymentMethodError.value='';
   posPayTypeForm.value = {
-    typeId: d.TypeId, code: d.Code, shopCode: d.ShopCode||null, name: d.Name,
+    typeId: paymentShop.value?.Code&&!d.ShopCode?null:d.TypeId, code: d.Code, shopCode: paymentShop.value?.Code||null, name: d.Name,
+    balanceAcctType:d.BalanceAcctType,balanceAcctNo:d.BalanceAcctNo,bcSourceNo:d.BcSourceNo,
     paymentClass: d.PaymentClass, isActive: Boolean(d.IsActive),
     sortOrder: d.SortOrder, description: d.Description||'',
     useApiEndpoint: Boolean(d.UseApiEndpoint), apiEndpoint: d.ApiEndpoint||'', apiKey: d.ApiKey||'',
@@ -2713,14 +2730,19 @@ async function postSpImport() {
 }
 
 async function savePosPayType() {
+  paymentMethodError.value='';
+  const form=posPayTypeForm.value;
+  if(!form.code?.trim()||!form.name?.trim()){paymentMethodError.value='Enter a code and display name';return}
+  if(posPaymentTypes.value.some(p=>p.TypeId!==form.typeId&&payScope(p.Code)===payScope(form.code)&&payScope(p.ShopCode)===payScope(form.shopCode))){paymentMethodError.value='This code already exists for this shop. Edit the existing method.';return}
   savingPosPayType.value = true
   try { await posSetupApi.savePaymentType(posPayTypeForm.value); editingPosPayType.value = false; await loadPosSetup() }
-  catch (e) { error.value = e.response?.data?.error || e.message }
+  catch (e) { paymentMethodError.value = e.response?.data?.error || e.message }
   finally { savingPosPayType.value = false }
 }
 async function deletePosPayType(d) {
+  if(!window.confirm(`Delete ${d.Code} from ${paymentShop.value?.Name}? A shared default, if present, will apply again.`))return;
   try { await posSetupApi.deletePaymentType(d.TypeId); await loadPosSetup() }
-  catch (e) { error.value = e.response?.data?.error || e.message }
+  catch (e) { paymentMethodError.value = e.response?.data?.error || e.message }
 }
 
 // contacts
@@ -3110,6 +3132,8 @@ onMounted(() => { loadPosShopsOnly() })
 </script>
 
 <style scoped>
+.payment-editor-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:center}@media(max-width:600px){.payment-editor-fields{grid-template-columns:1fr}}
+
 .mirror-panel { margin-top:12px; border:1px solid var(--bc-border, #e2e8f0); border-radius:8px; padding:10px 12px; background:var(--bc-surface, #f8fafc); }
 .mirror-head { display:flex; justify-content:space-between; align-items:center; }
 .mirror-table { border-collapse:collapse; font-size:12px; }
@@ -3335,4 +3359,52 @@ onMounted(() => { loadPosShopsOnly() })
 @media (max-width: 600px) {
   .schedule-form, .filter-grid { grid-template-columns:1fr; }
 }
+</style>
+
+<style>
+/* Dialog is teleported to body, so these rules target its own class. */
+.payment-shop-dialog.p-dialog{background:#0f172a;color:#e2e8f0;border:1px solid #475569;color-scheme:dark;--p-dialog-background:#0f172a;--p-dialog-color:#e2e8f0;--p-inputtext-background:#1e293b;--p-inputtext-color:#f1f5f9;--p-inputtext-border-color:#475569}
+.payment-shop-dialog .p-dialog-header,.payment-shop-dialog .p-dialog-content,.payment-shop-dialog .p-dialog-footer{background:#0f172a;color:#e2e8f0}
+.payment-shop-dialog .p-dialog-title{color:#f8fafc}
+.payment-shop-dialog .p-dialog-close-button{color:#cbd5e1}
+.payment-shop-dialog .p-dialog-close-button:hover{background:#334155}
+.payment-shop-dialog .p-inputtext{background:#1e293b;color:#f1f5f9;border-color:#475569}
+.payment-shop-dialog .p-inputtext::placeholder{color:#94a3b8}
+.payment-shop-dialog .p-datatable-thead>tr>th{background:#111827;color:#f8fafc;border-color:#475569}
+.payment-shop-dialog .p-datatable-tbody>tr,.payment-shop-dialog .p-datatable-tbody>tr>td{background:#1e293b;color:#e2e8f0;border-color:#334155}
+.payment-shop-dialog .p-datatable-tbody>tr:hover>td{background:#334155}
+.payment-shop-dialog .p-datatable-sort-icon{color:#cbd5e1}
+.payment-shop-dialog .p-button-text{color:#7dd3fc}
+.payment-shop-dialog .p-button-text.p-button-danger{color:#fda4af}
+.payment-shop-dialog .p-button-text:hover{background:#334155}
+.payment-shop-dialog .p-message-info{background:#153044;color:#bae6fd;border-color:#28516b}
+.payment-shop-dialog .p-message-error{background:#451a27;color:#fecdd3;border-color:#7f1d1d}
+.payment-shop-dialog .builder-panel-head{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.payment-shop-dialog .builder-panel-head .p-inputtext{flex:1;min-width:0}
+
+/* Override application-wide table/selection rules, including striped rows. */
+.payment-shop-dialog.p-dialog .p-datatable,
+.payment-shop-dialog.p-dialog .p-datatable-table-container,
+.payment-shop-dialog.p-dialog .p-datatable-table,
+.payment-shop-dialog.p-dialog .p-datatable-tbody,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr > td{
+ background:#111827 !important;color:#f8fafc !important;border-color:#475569 !important;
+}
+.payment-shop-dialog.p-dialog .p-datatable-thead > tr > th{
+ background:#020617 !important;color:#fff !important;border-color:#475569 !important;
+}
+.payment-shop-dialog.p-dialog .p-datatable-column-title,
+.payment-shop-dialog.p-dialog .p-datatable-sort-icon{color:#fff !important}
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr > td .p-button{color:#7dd3fc !important}
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr > td .p-button-danger{color:#fda4af !important}
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:hover,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:hover > td,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:focus-within > td{
+ background:#cbd5e1 !important;color:#0f172a !important;
+}
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:hover > td .p-button,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:focus-within > td .p-button{color:#075985 !important}
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:hover > td .p-button-danger,
+.payment-shop-dialog.p-dialog .p-datatable-tbody > tr:focus-within > td .p-button-danger{color:#9f1239 !important}
 </style>

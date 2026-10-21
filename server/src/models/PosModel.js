@@ -1,3 +1,5 @@
+import {roundShillings} from '../../../shared/posCurrency.mjs';
+import {blockedPaymentMethod,requirePaymentMethod,paymentClassForCode,defaultPaymentCodes} from '../../../shared/posPaymentPolicy.mjs';
 import { priceWindowSql, pricePrioritySql } from '../services/posPricePolicy.js';
 import { syncShopPricesFromBc } from './PosShopPriceModel.js';
 import { paymentReference } from '../../../shared/paymentReference.mjs';
@@ -809,11 +811,11 @@ export async function listPaymentTypes({ activeOnly = false, shopCode = null } =
   const pool = await appPool();
   const req = pool.request();
   const conditions = [];
-  if (activeOnly) conditions.push('[IsActive]=1');
+  if (activeOnly && !shopCode) conditions.push("[IsActive]=1 AND NULLIF(LTRIM(RTRIM([ShopCode])),'') IS NULL");
   if (shopCode) {
     // return types for this shop OR types with no shop assigned (global)
     req.input('shopCode', sql.NVarChar(50), shopCode);
-    conditions.push('([ShopCode]=@shopCode OR [ShopCode] IS NULL)');
+    conditions.push("(UPPER(LTRIM(RTRIM([ShopCode])))=UPPER(@shopCode) OR NULLIF(LTRIM(RTRIM([ShopCode])),'') IS NULL)");
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const cols = `[TypeId],[Code],[ShopCode],[Name],[PaymentClass],[IsActive],[SortOrder],
@@ -831,16 +833,16 @@ export async function listPaymentTypes({ activeOnly = false, shopCode = null } =
       WITH Ranked AS (
         SELECT ${cols},
                ROW_NUMBER() OVER (
-                 PARTITION BY [Code]
-                 ORDER BY CASE WHEN [ShopCode]=@shopCode THEN 0 ELSE 1 END, [SortOrder], [Name]
+                 PARTITION BY UPPER(LTRIM(RTRIM([Code])))
+                 ORDER BY CASE WHEN UPPER(LTRIM(RTRIM([ShopCode])))=UPPER(@shopCode) THEN 0 ELSE 1 END, [IsActive] DESC, [SortOrder], [Name], [TypeId]
                ) AS rn
         FROM [dbo].[PosPaymentType]
         ${where}
       )
-      SELECT ${cols} FROM Ranked WHERE rn=1
+      SELECT ${cols} FROM Ranked WHERE rn=1 ${activeOnly ? 'AND IsActive=1' : ''}
       ORDER BY [SortOrder],[Name]
     `);
-    return r.recordset;
+    return activeOnly?r.recordset.filter(row=>!blockedPaymentMethod(row)):r.recordset;
   }
 
   const r = await req.query(`
@@ -849,7 +851,7 @@ export async function listPaymentTypes({ activeOnly = false, shopCode = null } =
     ${where}
     ORDER BY [SortOrder],[Name]
   `);
-  return r.recordset;
+  return activeOnly?r.recordset.filter(row=>!blockedPaymentMethod(row)):r.recordset;
 }
 
 export async function savePaymentType({ typeId, code, shopCode = null, name, paymentClass = 'Cash', isActive = true, sortOrder = 0,
@@ -859,7 +861,9 @@ export async function savePaymentType({ typeId, code, shopCode = null, name, pay
                                         consumerKey = null, consumerSecret = null, shortCode = null, passkey = null,
                                         transactionType = null, callbackUrl = null, accountReference = null,
                                         paymentFetchUrl = null, apiKey = null }) {
-  const VALID_CLASSES = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer'];
+  paymentClass=paymentClassForCode(code,paymentClass);
+  const VALID_CLASSES = ['Cash', 'Card', 'Mobile', 'Credit', 'BankTransfer', 'BankDeposit'];
+  if(!String(code||'').trim())throw new Error('Payment method code is required');
   const cls = VALID_CLASSES.includes(paymentClass) ? paymentClass : 'Cash';
   const pool = await appPool();
   const req = pool.request()
@@ -1853,13 +1857,14 @@ export async function syncPaymentTypesFromBc(companyId = 'FCL') {
         .input('code',           sql.NVarChar(50),  bt.code.toUpperCase())
         .input('shopCode',       sql.NVarChar(50),  shopCode)
         .input('name',           sql.NVarChar(200), bt.paymentMethodCode || bt.code)
-        .input('paymentClass',   sql.NVarChar(20),  bt.paymentClass)
+        .input('paymentClass',   sql.NVarChar(20),  paymentClassForCode(bt.code,bt.paymentClass))
         .input('apiEndpoint',    sql.NVarChar(250), bt.apiEndpoint || null)
         .input('useApiEndpoint', sql.Bit,           bt.useApiEndpoint ? 1 : 0)
         .input('balanceAcctType',sql.NVarChar(20),  bt.balanceAcctType || null)
         .input('balanceAcctNo',  sql.NVarChar(20),  bt.balanceAcctNo || null)
         .input('bcSourceNo',     sql.NVarChar(20),  bt.code)
         .input('sortOrder',      sql.Int,           sortOrder)
+        .input('active',sql.Bit,defaultPaymentCodes.includes(String(bt.code).trim().toUpperCase())?1:0)
         .query(`
           MERGE [dbo].[PosPaymentType] AS t
           USING (SELECT @code AS Code, @shopCode AS ShopCode) AS s
@@ -1868,12 +1873,12 @@ export async function syncPaymentTypesFromBc(companyId = 'FCL') {
             [Name]=@name,[PaymentClass]=@paymentClass,[ApiEndpoint]=@apiEndpoint,
             [UseApiEndpoint]=@useApiEndpoint,[BalanceAcctType]=@balanceAcctType,
             [BalanceAcctNo]=@balanceAcctNo,[BcSourceNo]=@bcSourceNo,
-            [IsActive]=1,[UpdatedAt]=GETUTCDATE()
+            [IsActive]=t.[IsActive],[UpdatedAt]=GETUTCDATE()
           WHEN NOT MATCHED THEN INSERT
             ([Code],[ShopCode],[Name],[PaymentClass],[ApiEndpoint],[UseApiEndpoint],
              [BalanceAcctType],[BalanceAcctNo],[BcSourceNo],[SortOrder],[IsActive])
             VALUES (@code,@shopCode,@name,@paymentClass,@apiEndpoint,@useApiEndpoint,
-                    @balanceAcctType,@balanceAcctNo,@bcSourceNo,@sortOrder,1);
+                    @balanceAcctType,@balanceAcctNo,@bcSourceNo,@sortOrder,@active);
         `);
       out.count++;
     }
@@ -1916,7 +1921,7 @@ export async function listShops({ activeOnly = false } = {}) {
   const r = await pool.request().query(`
     SELECT [ShopId],[Code],[Name],[LocationCode],[SalespersonCode],[WalkInCustomerNo],
            [FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],
-           [CurrentRoute],[TptLocationCode],
+           [CurrentRoute],[TptLocationCode],[BusinessShortCode],
            [IsActive],[SortOrder],[CreatedAt],[UpdatedAt]
     FROM [dbo].[PosShop]
     ${where}
@@ -1925,8 +1930,18 @@ export async function listShops({ activeOnly = false } = {}) {
   return r.recordset;
 }
 
+/** The shop's M-PESA till/paybill (BusinessShortCode), or '' when not set. */
+export async function getShopBusinessShortCode(shopCode) {
+  if (!shopCode) return '';
+  const pool = await appPool();
+  const r = await pool.request()
+    .input('code', sql.NVarChar(50), String(shopCode).toUpperCase())
+    .query(`SELECT [BusinessShortCode] FROM [dbo].[PosShop] WHERE UPPER([Code])=@code`);
+  return String(r.recordset[0]?.BusinessShortCode || '').trim();
+}
+
 export async function saveShop({ shopId, code, name, locationCode = null, salespersonCode = null,
-                                 currentRoute = null, tptLocationCode = null,
+                                 currentRoute = null, tptLocationCode = null, businessShortCode = null,
                                  fclCustomerNo = null, cmCustomerNo = null, rmkCustomerNo = null,
                                  flmCustomerNo = null, walkInCustomerNo = null,
                                  isActive = true, sortOrder = 0 }) {
@@ -1939,6 +1954,7 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
     .input('salespersonCode', sql.NVarChar(20),  str(salespersonCode, 20).toUpperCase() || null)
     .input('currentRoute',    sql.NVarChar(200), str(currentRoute, 200) || null)
     .input('tptLocationCode', sql.NVarChar(200), str(tptLocationCode, 200) || null)
+    .input('businessShortCode', sql.NVarChar(20), str(businessShortCode, 20) || null)
     .input('fclCustomerNo',   sql.NVarChar(20),  cust(fclCustomerNo))
     .input('cmCustomerNo',    sql.NVarChar(20),  cust(cmCustomerNo))
     .input('rmkCustomerNo',   sql.NVarChar(20),  cust(rmkCustomerNo))
@@ -1953,6 +1969,7 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
       SET [Code]=@code,[Name]=@name,[LocationCode]=@locationCode,
           [SalespersonCode]=@salespersonCode,
           [CurrentRoute]=@currentRoute,[TptLocationCode]=@tptLocationCode,
+          [BusinessShortCode]=@businessShortCode,
           [FclCustomerNo]=@fclCustomerNo,[CmCustomerNo]=@cmCustomerNo,
           [RmkCustomerNo]=@rmkCustomerNo,[FlmCustomerNo]=@flmCustomerNo,
           [WalkInCustomerNo]=@walkInCustomerNo,
@@ -1962,10 +1979,10 @@ export async function saveShop({ shopId, code, name, locationCode = null, salesp
     return shopId;
   }
   const result = await req.query(`
-    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[CurrentRoute],[TptLocationCode],
+    INSERT INTO [dbo].[PosShop]([Code],[Name],[LocationCode],[SalespersonCode],[CurrentRoute],[TptLocationCode],[BusinessShortCode],
       [FclCustomerNo],[CmCustomerNo],[RmkCustomerNo],[FlmCustomerNo],[WalkInCustomerNo],[IsActive],[SortOrder])
     OUTPUT INSERTED.[ShopId]
-    VALUES(@code,@name,@locationCode,@salespersonCode,@currentRoute,@tptLocationCode,
+    VALUES(@code,@name,@locationCode,@salespersonCode,@currentRoute,@tptLocationCode,@businessShortCode,
       @fclCustomerNo,@cmCustomerNo,@rmkCustomerNo,@flmCustomerNo,@walkInCustomerNo,@isActive,@sortOrder)
   `);
   return result.recordset[0].ShopId;
@@ -2072,7 +2089,10 @@ export async function listMyShops(userId, role) {
   const codes = new Set(await listUserShopCodes(userId));
   const profile = await getUserShopCode(userId);
   if (profile) codes.add(String(profile).toUpperCase());
-  return all.filter((s) => codes.has(String(s.Code).toUpperCase()));
+  // Assignment order puts the primary shop first; profile-only fallback follows.
+  const rank = new Map([...codes].map((code,index)=>[code,index]));
+  return all.filter((s) => codes.has(String(s.Code).toUpperCase()))
+    .sort((a,b)=>rank.get(String(a.Code).toUpperCase())-rank.get(String(b.Code).toUpperCase()));
 }
 
 /**
@@ -2446,7 +2466,7 @@ export async function getOrder(orderId) {
   return order;
 }
 
-export async function listOrders(cashierUserId, role, shopCode = null) {
+export async function listOrders(cashierUserId, role, shopCode = null, filters = {}) {
   const pool = await appPool();
   const req  = pool.request();
   const isAdmin = role === 'admin';
@@ -2463,10 +2483,25 @@ export async function listOrders(cashierUserId, role, shopCode = null) {
     where = 'WHERE o.[CashierUserId]=@cashierUserId';
   }
 
+  if(filters.dateFrom&&filters.dateTo&&filters.dateFrom>filters.dateTo)throw new Error('Check the date range');
+  for(const key of ['dateFrom','dateTo'])if(filters[key]){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(filters[key])||!Number.isFinite(Date.parse(filters[key])))throw new Error('Invalid date');
+    req.input(key,sql.Date,filters[key]);
+    where+=(where?' AND ':'WHERE ')+(key==='dateFrom'?'o.CreatedAt>=DATEADD(HOUR,-3,CAST(@dateFrom AS datetime2))':'o.CreatedAt<DATEADD(HOUR,21,CAST(@dateTo AS datetime2))');
+  }
   const r = await req.query(`
     SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierName],o.[ContactName],o.[Status],o.[Label],o.[TotalAmount],
            o.[EtimsInvoiceNo],o.[SignedAt],
            o.[CreatedAt],o.[UpdatedAt],
+           STUFF((SELECT DISTINCT ', ' + LTRIM(RTRIM(pp.[PaymentTypeCode]))
+                  FROM [dbo].[PosPayment] pp
+                  WHERE pp.[OrderId]=o.[OrderId] AND pp.[Status]='confirmed'
+                  FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'),1,2,'') AS PaymentMethods,
+           (SELECT COALESCE(NULLIF(cl.Company,''),sh.Company,'FCL') AS company,SUM(cl.LineAmount) AS amount
+            FROM dbo.PosOrderLine cl LEFT JOIN dbo.PosShop sh ON sh.Code=o.ShopCode
+            WHERE cl.OrderId=o.OrderId GROUP BY COALESCE(NULLIF(cl.Company,''),sh.Company,'FCL') FOR JSON PATH) AS CompanyAmounts,
+           (SELECT pp.PaymentTypeCode AS code,SUM(pp.Amount) AS amount FROM dbo.PosPayment pp
+            WHERE pp.OrderId=o.OrderId AND pp.Status='confirmed' GROUP BY pp.PaymentTypeCode FOR JSON PATH) AS PaymentAmounts,
            COUNT(l.[LineId]) AS LineCount,
            CAST(CASE WHEN EXISTS (SELECT 1 FROM [dbo].[PosStockMovement] m
                                   WHERE m.[ReferenceType]='order' AND m.[ReferenceId]=o.[OrderId])
@@ -2599,9 +2634,16 @@ export async function setOrderLines(orderId, lines) {
     `);
   }
   await pool.request()
-    .input('total',   sql.Decimal(18, 4), Math.round(total * 10000) / 10000)
+    .input('total',   sql.Decimal(18, 4), roundShillings(total))
     .input('orderId', sql.UniqueIdentifier, orderId)
     .query(`UPDATE [dbo].[PosOrder] SET [TotalAmount]=@total,[UpdatedAt]=GETUTCDATE() WHERE [OrderId]=@orderId`);
+}
+
+export async function validateCheckoutMethod(orderId,code){
+ const order=await getOrder(orderId);
+ if(!order)throw new Error('Order not found');
+ if(!order.shopCode)throw new Error('Order needs an assigned shop before checkout');
+ return requirePaymentMethod(await listPaymentTypes({shopCode:order.shopCode}),code);
 }
 
 export async function checkoutOrder(orderId, { paymentTypeCode, paymentTypeName, amount, mobileNo, reference }) {
@@ -2609,6 +2651,11 @@ export async function checkoutOrder(orderId, { paymentTypeCode, paymentTypeName,
   const order = await getOrder(orderId);
   if (!order) throw new Error('Order not found');
   if (order.status !== 'open') throw new Error(`Order is already ${order.status}`);
+  const roundedTotal=roundShillings(order.totalAmount);
+  await pool.request().input('oid',sql.UniqueIdentifier,orderId).input('total',sql.Decimal(18,4),roundedTotal)
+    .query("UPDATE dbo.PosOrder SET TotalAmount=@total WHERE OrderId=@oid AND Status='open'");
+  const selectedMethod=await validateCheckoutMethod(orderId,paymentTypeCode);
+  paymentTypeCode=selectedMethod.Code;paymentTypeName=selectedMethod.Name;
   // Refuse to start checkout if any line would push stock below zero.
   const { assertOrderHasStock } = await import('./PosStockModel.js');
   await assertOrderHasStock({ shopCode: order.shopCode, lines: order.lines });
@@ -2638,10 +2685,11 @@ export async function confirmPayment(paymentId, reference = null) {
   const pool = await appPool();
   const r = await pool.request()
     .input('paymentId', sql.UniqueIdentifier, paymentId)
-    .query(`SELECT [OrderId],[Status] FROM [dbo].[PosPayment] WHERE [PaymentId]=@paymentId`);
+    .query(`SELECT [OrderId],[Status],[PaymentTypeCode] FROM [dbo].[PosPayment] WHERE [PaymentId]=@paymentId`);
   if (!r.recordset.length) throw new Error('Payment not found');
   const { OrderId, Status } = r.recordset[0];
   if (Status === 'confirmed') throw new Error('Already confirmed');
+  await validateCheckoutMethod(OrderId,r.recordset[0].PaymentTypeCode);
 
   // Stock guard: don't flip the order to 'paid' if any line is short — payment has been
   // received but stock isn't there. The cashier needs to either swap items or refund.
@@ -2980,21 +3028,5 @@ export async function reopenPaidOrder(orderId, { userId = null, userName = null 
 }
 
 export async function completeOrder(orderId) {
-  const pool = await appPool();
-  const r = await pool.request()
-    .input('orderId', sql.UniqueIdentifier, orderId)
-    .query(`SELECT [Status] FROM [dbo].[PosOrder] WHERE [OrderId]=@orderId`);
-  if (!r.recordset.length) throw new Error('Order not found');
-  const { Status } = r.recordset[0];
-  if (Status === 'paid') throw new Error('Order already paid');
-  if (Status === 'cancelled') throw new Error('Cannot complete a cancelled order');
-
-  // Stock guard: refuse to mark paid if any line is short.
-  const order = await getOrder(orderId);
-  const { assertOrderHasStock } = await import('./PosStockModel.js');
-  await assertOrderHasStock({ shopCode: order.shopCode, lines: order.lines });
-
-  await pool.request()
-    .input('orderId', sql.UniqueIdentifier, orderId)
-    .query(`UPDATE [dbo].[PosOrder] SET [Status]='paid',[UpdatedAt]=GETUTCDATE() WHERE [OrderId]=@orderId`);
+  throw new Error('Select a payment method and use checkout to complete this order');
 }

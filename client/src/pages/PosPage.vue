@@ -604,6 +604,7 @@
 </template>
 
 <script setup>
+import {roundShillings} from '../../../shared/posCurrency.mjs'
 import { combinePaymentReferences } from "../../../shared/paymentReference.mjs"
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -761,7 +762,7 @@ const openingCheckout = ref(false) // true only while opening the payment dialog
 const linesEl  = ref(null)
 
 const total = computed(() =>
-  lines.value.reduce((s, l) => s + l.lineAmount, 0)
+  roundShillings(lines.value.reduce((s, l) => s + l.lineAmount, 0))
 )
 
 // ── Save cart (abandoned-cart parking) ────────────────────────────
@@ -888,7 +889,7 @@ async function searchMpesaByCode() {
 }
 
 // Currency rounding: POS charges to the nearest whole KES at checkout/confirmation.
-const roundKes = (v) => Math.round(Number(v) || 0)
+const roundKes = (v) => roundShillings(Number(v)||0)
 const payable = computed(() => roundKes(total.value))
 
 const change = computed(() => {
@@ -1464,7 +1465,7 @@ async function openCheckout() {
   mpesaSelected.value = []
   mpesaAmount.value = roundKes(total.value)
   mpesaSearch.value = { loading: false, error: '', results: [] }
-  selectedPayType.value = paymentTypes.value[0] ?? null
+  selectedPayType.value = null
   tendered.value = total.value
   mobileNo.value = contactDraft.value.phone || selectedContact.value?.MobileNo || ''
   splitTenders.value = []
@@ -1869,32 +1870,9 @@ function remainingClass(qty) {
 .mpesa-lookup > label { font-size: 12px; font-weight: 600; color: #475467; }
 .mpesa-hint { font-size: 11px; color: #98a2b3; }
 .mpesa-msg { font-size: 12px; color: #b45309; }
-.mpesa-table { margin: 4px 0; font-size: 12px; border: 1px solid #374151; border-radius: 8px; overflow: hidden; }
-/* Dark, solid, readable header */
-.mpesa-table :deep(.p-datatable-thead > tr > th) {
-  background: #111827;
-  color: #f3f4f6;
-  font-weight: 700;
-  border-bottom: 1px solid #374151;
-  padding: 6px 8px;
-}
-/* Dark body rows — legible at rest, not only on hover */
-.mpesa-table :deep(.p-datatable-tbody > tr) {
-  background: #1f2937;
-  color: #e5e7eb;
-}
-.mpesa-table :deep(.p-datatable-tbody > tr > td) {
-  padding: 5px 8px;
-  color: #e5e7eb;
-  border-bottom: 1px solid #374151;
-}
-.mpesa-table :deep(.p-datatable-tbody > tr:nth-child(even)) { background: #232f3e; }
-.mpesa-table :deep(.p-datatable-tbody > tr:hover) { background: #374151; }
-.mpesa-table :deep(.p-datatable-tbody > tr.p-datatable-row-selected),
-.mpesa-table :deep(.p-datatable-tbody > tr[data-p-selected="true"]) {
-  background: #0f7173;
-  color: #fff;
-}
+/* .mpesa-table lives inside the checkout <Dialog>, which PrimeVue teleports to
+   <body> — scoped :deep() rules can't reach it. Its styling is in the UNSCOPED
+   <style> block at the bottom of this file. */
 .mpesa-matched { margin: 6px 0; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px; }
 .mpesa-matched .mm-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
 .mpesa-matched .mm-total { display: flex; justify-content: space-between; border-top: 1px dashed #e4e7ec;
@@ -2422,7 +2400,33 @@ body.order-resizing { cursor: ew-resize; user-select: none; }
 body > .p-dialog-mask:has(.pos-soft-dialog) {
   background: rgba(15, 23, 42, 0.55);
 }
-/* M-Pesa lookup table styling lives in the scoped .mpesa-table rules (dark). */
+/* ── M-Pesa lookup table — navy theme. Lives here (unscoped) because the table
+   is inside the checkout Dialog, which teleports to <body>. Default: navy bg +
+   white text; hover inverts to white bg + navy text to keep contrast. ───────── */
+.mpesa-table.p-datatable { font-size: 12px; border: 1px solid #0f2744; border-radius: 8px; overflow: hidden; }
+.mpesa-table .p-datatable-thead > tr > th {
+  background: #15294a !important; color: #ffffff !important; font-weight: 700;
+  border-bottom: 1px solid #0f2744; padding: 6px 8px;
+}
+/* Default state: navy background, white text (force both tr and td — PrimeVue v4
+   paints the cell background). */
+.mpesa-table .p-datatable-tbody > tr,
+.mpesa-table .p-datatable-tbody > tr > td {
+  background: #1e3a5f !important; color: #ffffff !important;
+}
+.mpesa-table .p-datatable-tbody > tr > td { padding: 5px 8px; border-bottom: 1px solid #0f2744; }
+/* Ticked rows stay distinct (lighter navy) so the picked transactions are clear. */
+.mpesa-table .p-datatable-tbody > tr.p-datatable-row-selected,
+.mpesa-table .p-datatable-tbody > tr[data-p-selected="true"],
+.mpesa-table .p-datatable-tbody > tr.p-datatable-row-selected > td,
+.mpesa-table .p-datatable-tbody > tr[data-p-selected="true"] > td {
+  background: #2d5488 !important; color: #ffffff !important;
+}
+/* Hover: invert to white bg + navy text (declared last so it wins on any row). */
+.mpesa-table .p-datatable-tbody > tr:hover,
+.mpesa-table .p-datatable-tbody > tr:hover > td {
+  background: #ffffff !important; color: #15294a !important;
+}
 
 /* ── Price List modal — clean LIGHT theme with BLACK text. The dialog teleports
    to <body> (unscoped rules), and forcing it dark left uncovered white areas with

@@ -117,4 +117,16 @@ Pick any existing method to put component stock on-hand at the shop's location:
   - `GET/POST/DELETE /api/pos/boms[/:itemNo]` — recipe CRUD (manager).
   - `POST /api/pos/production-plan` `{ orderId }` — what must be made + availability.
   - `POST /api/pos/produce` `{ orderId, items:[{ itemNo, qty }] }` — make it.
- 
+
+## Shop reporting
+
+POS Reports is available in the POS menu and Analytics / Sales. The Stock and cash reconciliation report requires one shop, lists non-zero closing stock using the existing stock-position location/mirror rules, and follows it with till totals grouped by shop and payment method. Cash includes till sessions opened in the selected period; a method with undeclared sessions has blank declared/variance totals. Excel contains both sections and PDF follows stock with reconciliation pages.
+
+Sales orders in POS Reports is a read-only listing for analytics users. Both it and the operational POS Orders page accept an independent reporting shop and a from/to range. Order date boundaries use Nairobi time and include the whole To date. Excel/PDF exports are available in both places. Managers/reporting roles can choose authorized all-shop reporting; cashiers can select only profile/assigned shops. The reporting selection does not change the terminal shop.
+
+
+### Sales orders and analysis in POS Reports
+
+POS Reports is available under both Point of Sale and Analytics for report-authorized roles; report-only users do not gain terminal actions. Sales orders and analysis is the first report. It supports date/shop selection, name/number search, searchable column dropdowns, column visibility (remembered per user/browser), sorting, pagination, and filtered Excel/PDF exports. Paid/unpaid summaries appear at the top in compact cards.
+
+Toggle Payment method, Company, Date, and Cashier to group individually or together. Dates use Nairobi time and payment methods use confirmed payment codes. Company attribution uses order-line company with shop-company fallback. Group amounts allocate the order total in proportion to positive company line values and confirmed tender amounts; combined payment/company amounts are proportional allocations, not a recorded payment-to-company link. Orders with no weights use an Unspecified bucket. Split orders can count in multiple groups, but sales values are not duplicated. Cancelled orders remain available in the detail list and are excluded from grouped analysis and paid/unpaid totals. Reports remain read-only.

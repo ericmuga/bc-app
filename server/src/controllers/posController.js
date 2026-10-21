@@ -1,3 +1,5 @@
+import {roundShillings} from '../../../shared/posCurrency.mjs';
+import {canReadAllShops} from '../services/reportShopScope.js';
 import { paymentReference, combinePaymentReferences } from '../../../shared/paymentReference.mjs';
 /**
  * controllers/posController.js
@@ -16,8 +18,65 @@ import { signPosOrder, signOrderNow, signOrderBg, signPosCreditMemo, printPosOrd
          buildEtimsPayload, validateEtimsReadiness, invalidateEtimsCache, invalidatePrintCache,
          fetchPaymentsFromService, buildPrintPayload, generateByConfig, getPrintFormat } from '../services/posReceiptService.js';
 import { ordersDb, sql as ordersSql } from '../db/ordersPool.js';
+import { db as appDb } from '../db/pool.js';
 import { pdfPathFor, generateInvoicePdf, generatePriceListPdf } from '../services/posPdfService.js';
 import logger from '../services/logger.js';
+
+// ── M-PESA transactions source ────────────────────────────────────────────────
+// The paid-till callbacks live in [orders].[dbo].[mpesa_transactions] on the
+// FC-AZ-SALES01 SQL box. We reach them over a linked server defined on the app's
+// own DB server (configured with the same SQL credentials the app uses), so the
+// query runs on the app pool as a four-part name. Set MPESA_LINKED_SERVER='' to
+// instead use a direct connection (the ORDERS_DB_* pool) to that table.
+const MPESA_LINKED_SERVER = (process.env.MPESA_LINKED_SERVER ?? 'FC-AZ-SALES01').trim();
+const MPESA_DB_NAME       = (process.env.MPESA_DB_NAME ?? 'orders').trim();
+const MPESA_TABLE = MPESA_LINKED_SERVER
+  ? `[${MPESA_LINKED_SERVER}].[${MPESA_DB_NAME}].[dbo].[mpesa_transactions]`
+  : `[dbo].[mpesa_transactions]`;
+async function mpesaPool() {
+  return MPESA_LINKED_SERVER ? appDb.getPool() : ordersDb.getPool();
+}
+
+/**
+ * Read recent M-PESA till transactions directly from the SQL source (optimized:
+ * only the columns the checkout matcher needs, newest first). Filters by exact
+ * amount and/or confirmation code (TransID), and by the shop's BusinessShortCode
+ * (till/paybill) when one is given. Per the matching rule: if a shortCode filter
+ * returns nothing, we retry across ALL tills so a mis-tagged till never hides a
+ * genuine payment. Returns rows already shaped for the matcher.
+ */
+async function queryMpesaTransactions({ amount = null, code = '', shortCode = '', limit = 50, hours = 48 }) {
+  const run = async (useShortCode) => {
+    const rq = (await mpesaPool()).request().input('hours', ordersSql.Int, hours);
+    const conds = ['[created_at] >= DATEADD(HOUR, -@hours, GETDATE())'];
+    if (amount != null && !isNaN(amount)) { rq.input('amount', ordersSql.Decimal(18, 2), amount); conds.push('[TransAmount] = @amount'); }
+    if (code)                            { rq.input('code', ordersSql.NVarChar(50), code);        conds.push('[TransID] LIKE @code + \'%\''); }
+    if (useShortCode && shortCode)       { rq.input('till', ordersSql.NVarChar(20), shortCode);   conds.push('[BusinessShortCode] = @till'); }
+    const r = await rq.query(`
+      SELECT TOP ${Math.max(1, Math.min(1000, limit))}
+             [FirstName],[MiddleName],[LastName],[MSISDN],[TransID],[TransTime],
+             [BusinessShortCode],[BillRefNumber],[InvoiceNumber],[TransAmount],[is_claimed],[created_at],[updated_at]
+      FROM   ${MPESA_TABLE}
+      WHERE  ${conds.join(' AND ')}
+      ORDER BY [created_at] DESC
+    `);
+    return r.recordset;
+  };
+  let rows = await run(true);
+  // Rule: no hit under this shop's till → drop the till filter and search all tills/paybills.
+  if (!rows.length && shortCode) rows = await run(false);
+  const norm = (p) => '254' + String(p || '').replace(/\D/g, '').replace(/^254/, '').replace(/^0/, '');
+  return rows.map(p => ({
+    reference:  p.TransID,
+    name:       [p.FirstName, p.MiddleName, p.LastName].filter(Boolean).join(' ').trim(),
+    phone:      p.MSISDN ? norm(p.MSISDN) : '',
+    amount:     Number(p.TransAmount || 0),
+    accountRef: p.BillRefNumber || p.InvoiceNumber || '',
+    till:       p.BusinessShortCode || '',
+    isClaimed:  p.is_claimed,
+    timestamp:  p.TransTime || p.created_at || null,
+  }));
+}
 
 function ok(res, data)  { return res.json(data); }
 function err(res, e, code = 500) {
@@ -101,8 +160,10 @@ export async function createOrder(req, res) {
 
 export async function listOrders(req, res) {
   try {
-    const shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
-    ok(res, await Pos.listOrders(req.user.userId, req.user.role, shopCode));
+    let shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
+    const selected=req.query.shopCode;
+    if(selected){const code=String(selected).trim().toUpperCase();const allowed=await Pos.listUserShopCodes(req.user.userId);if(!canReadAllShops(req.user.role)&&code!==String(await Pos.getUserShopCode(req.user.userId)||'').toUpperCase()&&!allowed.includes(code))return res.status(403).json({error:'Shop not assigned to your account'});shopCode=code;}
+    ok(res, await Pos.listOrders(req.user.userId, req.user.role, shopCode,req.query));
   } catch (e) { err(res, e); }
 }
 
@@ -129,6 +190,9 @@ export async function checkout(req, res) {
     if (!paymentTypeCode) return res.status(400).json({ error: 'paymentTypeCode required' });
     if (!amount || isNaN(Number(amount))) return res.status(400).json({ error: 'amount required' });
 
+    await Pos.validateCheckoutMethod(req.params.orderId,paymentTypeCode);
+    const sale=await Pos.getOrder(req.params.orderId);
+    if(roundShillings(amount)!==roundShillings(sale.totalAmount))throw new Error('Payment must equal the sale total rounded to the nearest shilling');
     // Coupon tender — debit the coupon ledger atomically before recording the payment row.
     let actualReference = paymentReference(reference);
     if (String(paymentTypeCode).toUpperCase() === 'COUPON' || couponCode) {
@@ -420,17 +484,16 @@ export async function checkoutMulti(req, res) {
     if (!order)                       return res.status(404).json({ error: 'Order not found' });
     if (order.status !== 'open')      return res.status(409).json({ error: `Order is already ${order.status}` });
 
+    for(const t of tenders){
+      await Pos.validateCheckoutMethod(req.params.orderId,t.paymentTypeCode);
+      if(!Number.isFinite(Number(t.amount))||Number(t.amount)<=0)throw new Error('Each tender must have a positive amount');
+    }
     // Sum check (small tolerance for cent rounding)
-    const sum = tenders.reduce((s, t) => s + Number(t.amount || 0), 0);
-    const total = Number(order.totalAmount || 0);
-    if (Math.round((sum - total) * 100) / 100 < -0.01) {
-      return res.status(400).json({ error: `Tenders total ${sum.toFixed(2)} is less than order total ${total.toFixed(2)}` });
-    }
-    if (Math.round((sum - total) * 100) / 100 > 0.05) {
-      // Allow overpay only for cash/coupon? For simplicity, accept and treat the surplus as change/discount —
-      // the cashier sees the actual line totals. Reject very large overpays as a typo.
-      if (sum > total * 1.5) return res.status(400).json({ error: `Tenders ${sum.toFixed(2)} far exceed order total ${total.toFixed(2)} — please re-check.` });
-    }
+    for(const tender of tenders)tender.amount=roundShillings(tender.amount);
+    if(tenders.some(t=>t.amount<=0))throw new Error('Each rounded tender must be at least one shilling');
+    const sum = tenders.reduce((s, t) => s + t.amount, 0);
+    const total = roundShillings(order.totalAmount || 0);
+    if(sum!==total)throw new Error(`Rounded payments must total ${total} shillings (received ${sum})`);
 
     // Pre-flight: stock + coupon validation in one pass (so a failure short-circuits before any payment row exists)
     const Stock = await import('../models/PosStockModel.js');
@@ -537,21 +600,40 @@ export async function fetchPayments(req, res) {
     const types = await Pos.listPaymentTypes({ activeOnly: true, shopCode });
     const pt = types.find(t => t.Code === code);
     if (!pt) return res.status(404).json({ error: `Unknown payment type ${code}` });
-    if (!pt.PaymentFetchUrl) return res.status(400).json({ error: 'PaymentFetchUrl is not configured for this method' });
 
     const amount = req.query.amount != null && req.query.amount !== '' ? parseFloat(req.query.amount) : null;
     const searchCode = String(req.query.code || '').trim();   // confirmation-code fallback search
-    const r = await fetchPaymentsFromService({
-      paymentType: pt,
-      params: {
-        since:     req.query.since || undefined,
-        limit:     req.query.limit || undefined,
-        amount:    (!searchCode && amount != null && !isNaN(amount)) ? amount : undefined,
-        code:      searchCode || undefined,
-        reference: searchCode || undefined,
-        shop:      shopCode || undefined,
-      },
-    });
+    const limit = req.query.limit ? Math.max(1, Math.min(1000, parseInt(req.query.limit))) : 50;
+
+    // M-PESA (Mobile) reads the till callbacks directly from SQL (linked server),
+    // scoped to the shop's own BusinessShortCode when set. Other methods still use
+    // their configured HTTP fetch URL.
+    const isMobile = String(pt.PaymentClass || '').toLowerCase() === 'mobile';
+    let r;
+    if (isMobile) {
+      const shortCode = (await Pos.getShopBusinessShortCode(shopCode)) || pt.ShortCode || '';
+      const payments = await queryMpesaTransactions({
+        amount: (!searchCode && amount != null && !isNaN(amount)) ? amount : null,
+        code:   searchCode || '',
+        shortCode,
+        limit,
+        hours:  Math.max(1, Math.min(24 * 30, parseInt(req.query.hours || '48'))),
+      });
+      r = { ok: true, count: payments.length, payments };
+    } else {
+      if (!pt.PaymentFetchUrl) return res.status(400).json({ error: 'PaymentFetchUrl is not configured for this method' });
+      r = await fetchPaymentsFromService({
+        paymentType: pt,
+        params: {
+          since:     req.query.since || undefined,
+          limit:     req.query.limit || undefined,
+          amount:    (!searchCode && amount != null && !isNaN(amount)) ? amount : undefined,
+          code:      searchCode || undefined,
+          reference: searchCode || undefined,
+          shop:      shopCode || undefined,
+        },
+      });
+    }
     if (!r.ok) return res.status(502).json({ error: r.message, count: 0, payments: [] });
 
     // Defensive filter even if the upstream service ignores our params.
@@ -635,39 +717,24 @@ export async function mpesaPaymentReport(req, res) {
 }
 
 /**
- * Local mpesa fetch — mirrors order-invoice-service's /api/fetch-payments,
- * but adds a ?till=BusinessShortCode filter so each shop only sees its own till.
- *   GET /api/pos/payments/fetch-mpesa?till=12345&amount=350&limit=100&hours=24
+ * Direct M-PESA fetch from the SQL source (linked server on FC-AZ-SALES01),
+ * newest first. A ?till=BusinessShortCode scopes to one till; when it is omitted
+ * we fall back to the current shop's BusinessShortCode, and if that still finds
+ * nothing the helper searches across all tills/paybills.
+ *   GET /api/pos/payments/fetch-mpesa?till=12345&amount=350&limit=100&hours=48
  */
 export async function fetchMpesaLocal(req, res) {
   try {
     const limit  = Math.max(1, Math.min(1000, parseInt(req.query.limit || '100')));
     const amount = req.query.amount != null && req.query.amount !== '' ? parseFloat(req.query.amount) : null;
-    const till   = req.query.till ? String(req.query.till).trim() : null;
-    const hours  = Math.max(1, Math.min(24 * 30, parseInt(req.query.hours || '24')));
-
-    const pool = await ordersDb.getPool();
-    const rq   = pool.request().input('hours', ordersSql.Int, hours);
-    const conds = ['TransTime >= DATEADD(HOUR, -@hours, GETDATE())'];
-    if (amount != null && !isNaN(amount)) {
-      rq.input('amount', ordersSql.Decimal(18, 2), amount);
-      conds.push('TransAmount = @amount');
+    const hours  = Math.max(1, Math.min(24 * 30, parseInt(req.query.hours || '48')));
+    let till     = req.query.till ? String(req.query.till).trim() : '';
+    if (!till) {
+      const shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
+      till = (await Pos.getShopBusinessShortCode(shopCode)) || '';
     }
-    if (till) {
-      rq.input('till', ordersSql.NVarChar(20), till);
-      conds.push('BusinessShortCode = @till');
-    }
-    const where = conds.join(' AND ');
-    const r = await rq.query(`
-      SELECT TOP ${limit}
-        [id],[FirstName],[MiddleName],[LastName],[TransactionType],[TransID],[TransTime],
-        [BusinessShortCode],[BillRefNumber],[InvoiceNumber],[ThirdPartyTransID],[MSISDN],
-        [TransAmount],[OrgAccountBalance],[PaymentType],[is_claimed],[created_at],[updated_at]
-      FROM   [dbo].[mpesa_transactions]
-      WHERE  ${where}
-      ORDER BY [TransTime] DESC
-    `);
-    return res.json({ success: true, count: r.recordset.length, payments: r.recordset });
+    const payments = await queryMpesaTransactions({ amount, code: '', shortCode: till, limit, hours });
+    return res.json({ success: true, count: payments.length, payments });
   } catch (e) {
     logger.error('fetchMpesaLocal failed', { error: e.message });
     return res.status(500).json({ success: false, error: e.message, count: 0, payments: [] });
@@ -1336,4 +1403,17 @@ export async function deletePaymentType(req, res) {
     await Pos.deletePaymentType(req.params.typeId);
     ok(res, { ok: true });
   } catch (e) { err(res, e); }
+}
+
+export async function reportOrders(req,res){
+ try{
+  const selected=String(req.query.shopCode||'').trim().toUpperCase();
+  let shop=selected||null;
+  if(!canReadAllShops(req.user.role)){
+   const own=await Pos.getUserShopCode(req.user.userId),allowed=await Pos.listUserShopCodes(req.user.userId);
+   if(selected&&selected!==String(own||'').toUpperCase()&&!allowed.includes(selected))return res.status(403).json({error:'Shop not assigned to your account'});
+   shop=selected||own;if(!shop)throw new Error('Select an assigned shop');
+  }
+  ok(res,await Pos.listOrders(req.user.userId,'admin',shop,req.query));
+ }catch(e){err(res,e,400)}
 }

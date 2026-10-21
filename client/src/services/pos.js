@@ -39,6 +39,8 @@ export const targetsApi = {
 
 // ── POS Reports hub ───────────────────────────────────────────────────────────
 export const posReportsApi = {
+  stockCash: params=>api.get('/pos/reports/stock-cash',{params}),
+  orders: params=>api.get('/pos/reports/orders',{params}),
   dailySales:       (params) => api.get('/pos/reports/daily-sales',       { params }),
   stockPosition:    (params) => api.get('/pos/reports/stock-position',    { params }),
   stockSnapshot:    (params) => api.get('/pos/stock/snapshot',           { params }),
@@ -78,7 +80,7 @@ export const auditApi = {
 // ── POS terminal ──────────────────────────────────────────────────────────────
 export const posApi = {
   getItems:       (company, orderId) => api.get('/pos/items', { params: { company: company || undefined, orderId: orderId || undefined } }),
-  getPaymentTypes:()           => api.get('/pos/payment-types'),
+  getPaymentTypes:(shopCode)   => api.get('/pos/payment-types',shopCode?{headers:{'X-Shop-Code':shopCode}}:{}),
   getMyShop:      ()           => api.get('/pos/my-shop'),
   listMyShops:    ()           => api.get('/pos/my-shops'),
   listContacts:   ()           => api.get('/pos/contacts'),
@@ -86,7 +88,7 @@ export const posApi = {
   getWalkIn:      ()           => api.get('/pos/walk-in'),
   setContact:     (id, contact)=> api.patch(`/pos/orders/${id}/contact`, contact),
   createOrder:    ()           => api.post('/pos/orders'),
-  listOrders:     ()           => api.get('/pos/orders'),
+  listOrders:     (params)     => api.get('/pos/orders',{params}),
   getOrder:       (id)         => api.get(`/pos/orders/${id}`),
   setLines:       (id, lines)  => api.put(`/pos/orders/${id}/lines`, { lines }),
   checkout:       (id, payload)=> api.post(`/pos/orders/${id}/checkout`, payload),

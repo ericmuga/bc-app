@@ -1,3 +1,5 @@
+import jwt from 'jsonwebtoken';
+import {workerLogin,changePasscode} from '../models/DispatchWorkerModel.js';
 import * as dispatchWorkers from '../controllers/dispatchWorkerController.js';
 import rateLimit from 'express-rate-limit';
 import * as dispatchFlow from '../controllers/dispatchWorkflowController.js';
@@ -327,6 +329,8 @@ router.get(  '/pos/stock/snapshot',                            ...canPos,    pos
 router.post( '/pos/stock/upload',                              ...canManage, posStockCtrl.uploadStock);
 
 // ── POS Reports hub (admin / shop-admin shop-comparison; others scope to own shop) ──
+router.get('/pos/reports/stock-cash', ...canPosReport, posStockCtrl.stockCashReport);
+router.get('/pos/reports/orders', ...canPosReport, posCtrl.reportOrders);
 router.get(  '/pos/reports/daily-sales',                       ...canPosReport, posStockCtrl.dailySalesSummary);
 router.get(  '/pos/reports/stock-position',                    ...canPosReport, posStockCtrl.reportStockPosition);
 router.get(  '/pos/reports/sales-by-item',                     ...canPosReport, posStockCtrl.reportSalesByItem);
@@ -524,6 +528,11 @@ router.get('/dispatch/setup/workers', ...canDispSuper, dispatchWorkers.list);
 router.post('/dispatch/setup/workers', ...canDispSuper, dispatchWorkers.save);
 router.get('/dispatch/setup/delegations', ...canDispSuper, dispatchWorkers.history);
 const delegationAttempts=rateLimit({windowMs:15*60*1000,limit:30,keyGenerator:r=>String(r.user.userId),message:{error:'Too many worker sign-in attempts. Try again in 15 minutes'}});
+router.post('/dispatch/worker-passcode', authMiddleware, delegationAttempts, async(req,res)=>{try{res.json(await changePasscode(req.user,req.body));}catch(e){res.status(400).json({error:e.message});}});
+router.post('/auth/login-worker', rateLimit({windowMs:15*60*1000,max:30,standardHeaders:true,legacyHeaders:false}), async(req,res)=>{
+ try{const {grant,user}=await workerLogin(req.body);const token=jwt.sign({...user,workerLogin:true,workerToken:grant.token},process.env.JWT_SECRET,{expiresIn:'12h'});res.json({token,user});}
+ catch(e){res.status(401).json({error:e.message});}
+});
 router.post('/dispatch/delegation', ...canDispatch, delegationAttempts, dispatchWorkers.start);
 router.post('/dispatch/delegation/end', ...canDispatch, dispatchWorkers.end);
 // Assembly (packer; admin/supervisor can view any assembler via ?userId=)

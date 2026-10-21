@@ -389,6 +389,13 @@ async function migrate(companyId) {
   // Back-fill Company for existing shops (default FCL; admins refine per variant).
   // Only touches rows with no Company yet, so it never disturbs the live shops.
   await run(`UPDATE [dbo].[PosShop] SET [Company]='FCL' WHERE [Company] IS NULL OR [Company]=''`);
+  // Per-shop M-PESA till/paybill. When set, the checkout M-PESA lookup filters
+  // mpesa_transactions by this BusinessShortCode; blank = search all tills.
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.columns
+                   WHERE object_id=OBJECT_ID('[dbo].[PosShop]') AND name='BusinessShortCode')
+      ALTER TABLE [dbo].[PosShop] ADD [BusinessShortCode] NVARCHAR(20) NULL
+  `);
   console.log('  [dbo].[PosShop] OK');
 
   // ── [dbo].[PosShopGroup] (physical shop shared across company variants) ──────
