@@ -3,13 +3,13 @@
     <div class="login-card bc-card">
       <img class="login-logo" src="/branding/bc-console.png" alt="BC Console commerce and analytics" width="88" height="88" />
       <h1 class="login-title">BC Console</h1>
-      <p class="login-sub text-muted">Sign in with your domain credentials</p>
+      <p class="login-sub text-muted">{{ workerMode ? 'Use the worker code and passcode set by your dispatch supervisor' : 'Sign in with your domain credentials' }}</p><label><input type="checkbox" v-model="workerMode" /> Login as subworker</label>
 
       <div class="field">
-        <label>Domain username</label>
+        <label>{{ workerMode ? 'Worker code' : 'Domain username' }}</label>
         <InputText
           v-model="form.username"
-          placeholder="jdoe  (not jdoe@domain.com)"
+          :placeholder="workerMode ? 'Worker code' : 'Username or user@domain'"
           class="w-full"
           autofocus
           @keyup.enter="submit"
@@ -17,7 +17,7 @@
       </div>
 
       <div class="field">
-        <label>Password</label>
+        <label>{{ workerMode ? 'Passcode' : 'Password' }}</label>
         <Password
           v-model="form.password"
           placeholder="••••••"
@@ -31,7 +31,7 @@
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
       <Button
-        label="Sign in with Active Directory"
+        :label="workerMode ? 'Login as subworker' : 'Sign in with Active Directory'"
         icon="pi pi-building"
         class="w-full"
         :loading="loading"
@@ -43,25 +43,28 @@
 
 <script setup>
 import { reactive, ref } from 'vue'
-import { useRouter }     from 'vue-router'
+import { useRouter, useRoute }     from 'vue-router'
 import InputText from 'primevue/inputtext'
 import Password  from 'primevue/password'
 import Button    from 'primevue/button'
 import Message   from 'primevue/message'
 import { useAuthStore } from '@/stores/auth.js'
+import {workerLanding} from '../../../shared/dispatchWorkerRoutes.mjs'
 
 const auth    = useAuthStore()
 const router  = useRouter()
 const loading = ref(false)
-const error   = ref('')
+const error   = ref(''), workerMode=ref(useRoute().query.worker==='1')
 const form    = reactive({ username: '', password: '' })
 
 async function submit() {
+  if(loading.value)return
   error.value   = ''
   loading.value = true
   try {
-    await auth.loginAD(form.username, form.password)
-    router.push('/')
+    if(workerMode.value)await auth.loginWorker(form.username,form.password)
+    else await auth.loginAD(form.username, form.password)
+    await router.replace(auth.user?.role==='dispatch-worker' ? workerLanding(auth.user) : '/')
   } catch (e) {
     error.value = e.response?.data?.error || 'Login failed'
   } finally {

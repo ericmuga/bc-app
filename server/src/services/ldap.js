@@ -24,6 +24,7 @@
 
 import { createManagedLdapClient } from './ldapClient.js';
 import logger from './logger.js';
+import {adIdentity, escapeLdapFilter} from './adIdentity.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,12 +76,9 @@ export async function authenticateAD(username, password) {
     throw new Error('Active Directory is not configured on this server.');
   }
 
-  // Normalise to bare sAMAccountName then build full UPN
-  const sam = username
-    .replace(/^.*\\/, '')     // strip DOMAIN\
-    .replace(/@.*$/, '');     // strip @domain
-
-  const upn = `${sam}@${process.env.AD_DOMAIN}`;
+  const identity = adIdentity(username, process.env.AD_DOMAIN);
+  let {sam} = identity;
+  const {upn} = identity;
 
   // ── Step 1: bind directly as the user (proves password is correct) ───────
   const userClient = createClient();
@@ -88,7 +86,12 @@ export async function authenticateAD(username, password) {
     await bindAsync(userClient, upn, password);
     logger.info('AD user bind OK', { upn });
   } catch (err) {
-    if (err.code === 49) throw new Error('Invalid credentials.');
+    if (Number(err.code) === 49) {
+      // Log only the AD diagnostic code, never credentials or the full bind payload.
+      const diagnostic = /\bdata\s+([0-9a-f]+)/i.exec(err.message || '')?.[1]?.toLowerCase();
+      logger.warn('AD credentials rejected', { upn, code: 49, diagnostic: diagnostic || 'unavailable' });
+      throw new Error('Invalid credentials.');
+    }
     logger.error('AD user bind failed', { upn, code: err.code, error: err.message });
     throw new Error('Active Directory authentication failed. Contact your administrator.');
   } finally {
@@ -114,13 +117,14 @@ export async function authenticateAD(username, password) {
 
       const entries = await searchAsync(svcClient, process.env.AD_BASE_DN, {
         scope:      'sub',
-        filter:     `(sAMAccountName=${sam})`,
-        attributes: ['displayName', 'mail', 'memberOf'],
+        filter:     username.trim().includes('@') ? `(userPrincipalName=${escapeLdapFilter(upn)})` : `(sAMAccountName=${escapeLdapFilter(sam)})`,
+        attributes: ['sAMAccountName', 'displayName', 'mail', 'memberOf'],
         sizeLimit:  1,
       });
 
       if (entries.length) {
         const attrs = entries[0].attributes;
+        sam = attrs.find(a => a.type.toLowerCase() === 'samaccountname')?.values[0] ?? sam;
         displayName = attrs.find(a => a.type === 'displayName')?.values[0] ?? sam;
         email       = attrs.find(a => a.type === 'mail')?.values[0]        ?? null;
 
