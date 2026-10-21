@@ -68,7 +68,8 @@
       "Bash(rm -f scripts/add-pos-columns.mjs)",
       "Bash(rmdir scripts *)",
       "Bash(python -)",
-      "Bash(grep -iE \"\\\\.\\(js|ts|sql\\)$\")"
+      "Bash(grep -iE \"\\\\.\\(js|ts|sql\\)$\")",
+      "Bash(grep -rniE \"aging|Cust\\\\\\\\. Ledger|Remaining Amt|Detailed Cust|Open.*=.*1|Salesperson Code\" server/src/controllers/financeController.js server/src/models/*.js)"
     ]
   }
 }
