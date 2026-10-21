@@ -47,6 +47,7 @@ function resolve(sourceKey, datasetKey) {
   return { source, dataset };
 }
 
+const warehouseSchemaChecks = new Map();
 async function resolveForRead(sourceKey, datasetKey) {
   const resolved = resolve(sourceKey, datasetKey);
   if (resolved.source.pool !== 'current') return resolved;
@@ -56,6 +57,25 @@ async function resolveForRead(sourceKey, datasetKey) {
     const exists = await p.request().query("SELECT OBJECT_ID('dbo.DL_CompanyState') AS Id");
     if (exists.recordset[0]?.Id) state = (await p.request().input('company', sql.NVarChar(10), resolved.source.company)
       .query('SELECT ReadyAt,LastSuccessAt,LastError FROM dbo.DL_CompanyState WHERE Company=@company')).recordset[0];
+    if (state?.ReadyAt) {
+      const key = `${sourceKey}:${datasetKey}`;
+      let check = warehouseSchemaChecks.get(key);
+      if (!check || check.expires < Date.now()) {
+        try {
+          const request = p.request();
+          const from = buildFromWhere(request, {...resolved.source,pool:'downloadWarehouse'},resolved.dataset,{},resolved.dataset.summary?.joins || []).from;
+          // Compile every selected column without reading rows. Old mirrors may
+          // be ready but lack fields added to the download registry later.
+          await request.query(`SELECT TOP (0) ${resolved.dataset.columns.map(c=>`${c.col} AS [${c.as}]`).join(',')} FROM ${from}`);
+          check = {ok:true,expires:Date.now()+60000};
+        } catch (error) {
+          check = {ok:false,expires:Date.now()+60000};
+          logger.warn('Download warehouse schema unavailable; using ERP', {source:sourceKey,dataset:datasetKey,error:error.message});
+        }
+        warehouseSchemaChecks.set(key,check);
+      }
+      if (!check.ok) state = {...state,ReadyAt:null,LastError:'Warehouse schema is awaiting an update; reading current data from ERP'};
+    }
   } catch (e) { logger.warn('Current downloads using ERP while warehouse is unavailable', { error: e.message }); }
   return { ...resolved, source: { ...resolved.source, pool: state?.ReadyAt ? 'downloadWarehouse' : 'live',
     backend: state?.ReadyAt ? 'warehouse' : 'erp', refreshedAt: state?.LastSuccessAt || null, refreshError: state?.LastError || null } };

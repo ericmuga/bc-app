@@ -35,6 +35,8 @@ function parseFilters(query) {
     vendorNo:    query.vendorNo || null,
     customerNo:  query.customerNo || null,
     glAccountNo: query.glAccountNo || null,
+    departmentCode: query.departmentCode || null,
+    projectCode: query.projectCode || null,
     sourceCode:  query.sourceCode || null,
     // Item Ledger / document line / slaughter filters
     itemNo:      query.itemNo || null,

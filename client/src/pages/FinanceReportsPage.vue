@@ -89,7 +89,7 @@
       <Button label="Refresh" icon="pi pi-refresh" severity="secondary" class="run-btn" :loading="loading" @click="forceRefresh" />
     </aside>
 
-    <div class="fin-main">
+    <div class="fin-main" :aria-busy="loading">
       <!-- Tab bar -->
       <div class="tab-bar">
         <button class="filter-toggle-btn" @click="filtersOpen = !filtersOpen">
@@ -105,8 +105,8 @@
       <div class="toolbar" v-if="loading || rows.length || mgmtResult.lines.length || agingRows.length || plData?.rows?.length">
         <div v-if="periodLabel" class="period-pill">{{ periodLabel }}</div>
         <div class="toolbar-actions">
-          <Button icon="pi pi-refresh" text size="small" @click="forceRefresh" />
-          <Button icon="pi pi-download" text size="small" :disabled="!rows.length && !mgmtResult.lines.length && !plData?.rows?.length" @click="exportExcel" />
+          <Button icon="pi pi-refresh" text size="small" :loading="loading" :disabled="loading" aria-label="Refresh report" @click="forceRefresh" />
+          <Button icon="pi pi-download" text size="small" :disabled="loading || (!rows.length && !mgmtResult.lines.length && !plData?.rows?.length)" @click="exportExcel" />
         </div>
       </div>
 
@@ -116,7 +116,12 @@
         <i class="pi pi-file-check" style="font-size:3rem;opacity:.25" />
         <p>Select filters and click <strong>Run Report</strong></p>
       </div>
-      <div v-if="loading" class="skeleton-wrap">
+      <div v-if="loading" class="report-loading" role="status" aria-live="polite">
+        <div class="report-loading-label"><i class="pi pi-spin pi-spinner" aria-hidden="true" /><strong>Loading report…</strong></div>
+        <p>{{ isPLS || isPL ? 'Fetching period and year-to-date figures. Please wait.' : 'Fetching report data. Please wait.' }}</p>
+        <ProgressBar mode="indeterminate" :showValue="false" aria-label="Loading report" style="height:6px" />
+      </div>
+      <div v-if="loading" class="skeleton-wrap" aria-hidden="true">
         <Skeleton height="2rem" class="mb" v-for="n in 10" :key="n" />
       </div>
 
@@ -165,7 +170,7 @@
       <!-- ── P&L Statement (configurable) ── -->
       <div v-if="!loading && isPLS && plData?.rows?.length" class="report-wrap">
         <div class="pls-title-row">
-          <div class="pls-title">{{ plData.title }}</div>
+          <div class="pls-title">{{ plData.title }}<small style="display:block;font-size:12px">YTD: {{ plData.ytdFrom }} – {{ plData.dateTo }}</small></div>
           <Button v-if="canEditPl" label="Edit mapping" icon="pi pi-pencil" text size="small" @click="openPlEditor" />
         </div>
         <Message v-if="plData.overlaps?.length" severity="warn" :closable="false" class="mx">
@@ -181,6 +186,9 @@
               <span :class="data.kind === 'subtotal' ? 'subtotal-val' : signClass(data.amount)">{{ signedFmt(data.amount) }}</span>
             </template>
           </Column>
+          <Column field="ytdAmount" header="YTD Amount" class="num-col" style="min-width:180px">
+            <template #body="{data}"><span :class="data.kind==='subtotal'?'subtotal-val':signClass(data.ytdAmount)">{{ signedFmt(data.ytdAmount) }}</span></template>
+          </Column>
           <Column header="" style="min-width:120px">
             <template #body="{ data }">
               <Button v-if="data.accounts?.length" :label="`${data.accounts.length} accts`" icon="pi pi-search"
@@ -194,7 +202,7 @@
       <!-- P&L line → GL accounts drill-down (aside) -->
       <Drawer v-model:visible="plDrawer.visible" position="right" :header="`${plDrawer.label} — accounts`" style="width:560px">
         <div class="toolbar" style="margin-bottom:8px">
-          <div class="period-pill">{{ fmtAmt(plDrawer.total) }}</div>
+          <div class="period-pill">GL period: {{ signedFmt(plDrawer.total) }}</div><small>Account amounts use the TB/GL sign. Statement income uses the opposite sign.</small>
           <div class="toolbar-actions">
             <Button icon="pi pi-download" label="Excel" text size="small" :disabled="!plDrawer.accounts.length" @click="exportPlLine" />
           </div>
@@ -205,6 +213,7 @@
           <Column header="Amount" class="num-col" style="min-width:140px">
             <template #body="{ data }"><span :class="signClass(data.amount)">{{ signedFmt(data.amount) }}</span></template>
           </Column>
+        <Column field="ytdAmount" header="YTD Amount" class="num-col"><template #body="{data}">{{ signedFmt(data.ytdAmount) }}</template></Column>
         </DataTable>
       </Drawer>
 
@@ -412,6 +421,7 @@
 </template>
 
 <script setup>
+import {reportDate,localReportDate} from '../../../shared/reportDates.mjs'
 import { computed, ref, watch, onMounted } from 'vue'
 import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
@@ -427,6 +437,7 @@ import MultiSelect from 'primevue/multiselect'
 import Select      from 'primevue/select'
 import InputText   from 'primevue/inputtext'
 import Skeleton   from 'primevue/skeleton'
+import ProgressBar from 'primevue/progressbar'
 import Message    from 'primevue/message'
 import Drawer     from 'primevue/drawer'
 import XLSX  from 'xlsx-js-style'   // styled header + number formats on export
@@ -509,11 +520,11 @@ async function savePlMapping() {
 }
 const plDrawer = ref({ visible: false, label: '', accounts: [], total: 0 })
 function openPlLine(row) {
-  plDrawer.value = { visible: true, label: row.label, accounts: row.accounts || [], total: row.amount };
+  plDrawer.value = { visible: true, label: row.label, accounts: row.accounts || [], total: -(row.amount||0) };
 }
 function exportPlLine() {
   const wb = XLSX.utils.book_new();
-  const data = plDrawer.value.accounts.map(a => ({ Account: a.accountNo, Name: a.name, Amount: a.amount }));
+  const data = plDrawer.value.accounts.map(a => ({ Account: a.accountNo, Name: a.name, Amount: a.amount, YTDAmount: a.ytdAmount }));
   appendSheet(wb, data, 'Accounts');
   const safe = String(plDrawer.value.label || 'line').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 24);
   XLSX.writeFile(wb, `pl-${plData.value?.company || ''}-${safe}-${toDateStr(dateTo.value)}.xlsx`);
@@ -611,7 +622,7 @@ const agingTotals = computed(() => agingGroups.value.reduce(
   { Current_: 0, Days30: 0, Days60: 0, Days90Plus: 0, Balance: 0 }
 ))
 
-const toDateStr = (d) => (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 10)
+const toDateStr = reportDate
 
 const periodLabel = computed(() => {
   if (isAging.value) return agingAsOfDate.value ? `As at ${toDateStr(agingAsOfDate.value)}` : ''
@@ -784,7 +795,7 @@ async function runPl(refresh = false) {
   plData.value = null
   try {
     const { data } = await financeReportsApi.plStatement(plCompany.value, {
-      dateFrom: toDateStr(dateFrom.value), dateTo: toDateStr(dateTo.value), refresh,
+      dateFrom: toDateStr(dateFrom.value), dateTo: toDateStr(dateTo.value), ytdFrom: toDateStr(ytdFrom.value), refresh,
     })
     plData.value = data
   } catch (err) {
@@ -966,12 +977,12 @@ function exportExcel() {
   }
   if (isPLS.value && plData.value?.rows?.length) {
     appendSheet(wb, plData.value.rows.map(r => ({
-      Line: r.label, Accounts: r.spec || '', Amount: r.amount, Type: r.kind,
+      Line: r.label, Accounts: r.spec || '', Amount: r.amount, YTDAmount: r.ytdAmount, Type: r.kind,
     })), 'P&L Statement')
     // Second sheet: the detailed GL accounts summed behind each line.
     const detail = []
     for (const row of plData.value.rows) {
-      for (const a of (row.accounts || [])) detail.push({ Line: row.label, AccountNo: a.accountNo, Name: a.name, Amount: a.amount })
+      for (const a of (row.accounts || [])) detail.push({ Line: row.label, AccountNo: a.accountNo, Name: a.name, Amount: a.amount, YTDAmount: a.ytdAmount })
     }
     if (detail.length) appendSheet(wb, detail, 'Accounts (detail)')
     XLSX.writeFile(wb, `pl-${plData.value.company}-${toDateStr(dateTo.value)}.xlsx`)
@@ -1010,7 +1021,7 @@ function exportExcel() {
 
 // ── Sticky filters: remember selections across tabs + navigation ─────────────
 const FILTER_KEY = 'fin_filters_v1'
-const asDate = (s) => (s ? new Date(s) : null)
+const asDate = localReportDate
 function restoreFilters() {
   try {
     const s = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null')
@@ -1045,6 +1056,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.report-loading{margin:12px;padding:16px;background:var(--bc-surface-card,#1e293b);color:var(--bc-text,#f1f5f9);border:1px solid var(--bc-border,#475569);border-radius:10px;flex-shrink:0}.report-loading-label{display:flex;align-items:center;gap:10px}.report-loading-label .pi{font-size:1.3rem;color:var(--p-primary-color,#2dd4bf)}.report-loading p{margin:10px 0 14px;font-size:13px}
+
 /* ── Layout ──────────────────────────────────────────────────── */
 .fin-layout { display:flex; height:100%; overflow:hidden; background:#151b28; font-size:13px; }
 

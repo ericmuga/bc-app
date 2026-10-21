@@ -93,3 +93,52 @@ test('preview and export builder binds wildcards, dedupes joins and scopes custo
   assert.ok(bound.some(([, value]) => value === 'C%'));
   assert.ok(!r.where.includes('JF*'));
 });
+
+test('GL department/project filters bind BC patterns and summary groups retain dimensions',()=>{
+ const source=getSource('FCL'),dataset=getDataset(source,'glEntries'),values=[];
+ const request={input(name,type,value){values.push(value);return this}};
+ const query=buildFromWhere(request,source,dataset,{departmentCode:'D*',projectCode:'P1|P2'},dataset.summary.joins);
+ assert.match(query.where,/Global Dimension 1 Code/);
+ assert.match(query.where,/Global Dimension 2 Code/);
+ assert.ok(values.includes('D%'));assert.ok(values.includes('P1'));assert.ok(values.includes('P2'));
+ assert.deepEqual(dataset.summary.groupBy.map(c=>c.as),['GLAccountNo','GLAccountName','DepartmentCode','ProjectCode']);
+});
+
+test('GL entry downloads include department and project dimensions across companies and periods',()=>{
+ for(const sourceCode of ['FCL','CM','FLM','RMK','FCL-CUR','CM-CUR','FLM-CUR','RMK-CUR']){
+  const columns=getDataset(getSource(sourceCode),'glEntries').columns;
+  assert.equal(columns.find(c=>c.as==='DepartmentCode')?.col,'h.[Global Dimension 1 Code]');
+  assert.equal(columns.find(c=>c.as==='ProjectCode')?.col,'h.[Global Dimension 2 Code]');
+ }
+});
+
+test('sales invoice and credit memo downloads include line return reasons',()=>{
+ for(const sourceCode of ['FCL','CM','FLM','RMK','FCL-CUR','CM-CUR','FLM-CUR','RMK-CUR']){
+  const source=getSource(sourceCode);
+  for(const key of ['postedSalesInvoices','postedSalesCreditMemos']){
+   assert.equal(getDataset(source,key).columns.find(c=>c.as==='ReturnReasonCode')?.col,'l.[Return Reason Code]');
+  }
+ }
+});
+
+test('invoice downloads include LCY conversions and line/header dimensions for legacy and current sources',()=>{
+ for(const sourceCode of ['FCL','FCL-CUR','RMK','RMK-CUR'])for(const key of ['postedSalesInvoices','postedSalesCreditMemos','postedPurchaseInvoices']){
+  const dataset=getDataset(getSource(sourceCode),key);
+  const columns=Object.fromEntries(dataset.columns.map(c=>[c.as,c.col]));
+  assert.equal(columns.AmountLCY,'l.[Amount] / COALESCE(NULLIF(h.[Currency Factor],0),1)');
+  assert.equal(columns.DepartmentCode,'l.[Shortcut Dimension 1 Code]');
+  assert.equal(columns.ProjectCode,'l.[Shortcut Dimension 2 Code]');
+  assert.ok(dataset.summary.aggregates.some(c=>c.as==='TotalAmountLCY'));
+  assert.ok(dataset.summary.groupBy.some(c=>c.as==='HeaderProjectCode'));
+ }
+});
+
+test('credit memos use credit tables and invoice-equivalent details across all source aliases',()=>{
+ for(const company of ['CM','FCL','FLM','RMK'])for(const suffix of ['','-CUR','-LIVE']){
+  const source=getSource(company+suffix),credit=getDataset(source,'postedSalesCreditMemos'),invoice=getDataset(source,'postedSalesInvoices');
+  assert.equal(credit.header,'Sales Cr_Memo Header');assert.equal(credit.line,'Sales Cr_Memo Line');
+  assert.deepEqual(credit.columns,invoice.columns.filter(c=>c.as!=='OrderNo'));
+  assert.equal(credit.filters.documentNo.label,'Credit Memo No.');
+  assert.deepEqual(credit.summary,invoice.summary);
+ }
+});

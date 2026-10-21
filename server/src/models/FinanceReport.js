@@ -12,8 +12,10 @@
  */
 
 import { bcDb, bcSql } from '../db/bcPool.js';
+import { whsDb, whsSql } from '../db/whsPool.js';
 import { bcTable, resolveCompanies } from '../services/bcTables.js';
 import { getPlDefinition, parseSpec, specMatches } from '../services/financePl.js';
+import { GL_MONTHLY_TABLE, GL_WATERMARK_TABLE } from '../services/glMonthlyEtl.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -53,19 +55,25 @@ export async function getTrialBalance({ companies, dateFrom, dateTo }) {
         a.[Account Category]  AS AccountCategory,
         a.[Income_Balance]    AS IncomeBalance,
         ISNULL(SUM(CASE WHEN e.[Posting Date] < @dateFrom THEN e.[Amount] ELSE 0 END), 0) AS OpeningBalance,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Debit Amount]  ELSE 0 END), 0) AS PeriodDebit,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Credit Amount] ELSE 0 END), 0) AS PeriodCredit,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS ClosingBalance
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Debit Amount]  ELSE 0 END), 0) AS PeriodDebit,
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Credit Amount] ELSE 0 END), 0) AS PeriodCredit,
+        ISNULL(SUM(CASE WHEN e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) AS ClosingBalance
       FROM ${acct} a
-      LEFT JOIN ${entry} e ON e.[G_L Account No_] = a.[No_]
+      -- INNER JOIN + the Posting Date upper bound lets SQL seek the (account,
+      -- date) index instead of scanning all ~111M entries incl. future-dated
+      -- rows. Accounts with no in-range entries net to zero and are dropped by
+      -- HAVING anyway, so INNER JOIN does not change the result.
+      INNER JOIN ${entry} e
+        ON e.[G_L Account No_] = a.[No_]
+       AND e.[Posting Date]    < DATEADD(day,1,@dateTo)
       -- Include blocked accounts: they can still carry a balance/movement, and
       -- excluding them unbalances the TB (movement + closing must net to zero).
       WHERE a.[Account Type] = 0
       GROUP BY a.[No_], a.[Name], a.[Account Type], a.[Account Category], a.[Income_Balance]
       HAVING
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Debit Amount]  ELSE 0 END), 0) <> 0
-        OR ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Credit Amount] ELSE 0 END), 0) <> 0
-        OR ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) <> 0
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Debit Amount]  ELSE 0 END), 0) <> 0
+        OR ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Credit Amount] ELSE 0 END), 0) <> 0
+        OR ISNULL(SUM(CASE WHEN e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) <> 0
     `;
   });
 
@@ -76,6 +84,80 @@ export async function getTrialBalance({ companies, dateFrom, dateTo }) {
       dateTo:   { type: bcSql.Date, value: new Date(dateTo) },
     }
   );
+  return recordset;
+}
+
+// ── Warehouse-backed Trial Balance (fast path) ───────────────────────────────
+// Reads pre-aggregated per-account/month balances from FCLWHS.FACT_GL_MONTHLY
+// instead of scanning the ~111M-row live G_L Entry. Month resolution: the period
+// is [month(dateFrom) .. month(dateTo)]; opening is everything in earlier months.
+// Data is as-of the last 2-hourly refresh (GLM_Watermark.RefreshedAt).
+
+const monthStartStr = (d) => {
+  const x = new Date(d);
+  return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-01`;
+};
+
+/** Build a parameterised Company IN (...) clause on a whs request. */
+function whsCompanyIn(req, companies) {
+  return resolveCompanies(companies).map((c, i) => { req.input(`co${i}`, whsSql.NVarChar(10), c); return `@co${i}`; }).join(',');
+}
+
+/** True only when every requested company has a completed refresh (watermark stamped). */
+export async function isGlMonthlyBuilt(companies) {
+  const resolved = resolveCompanies(companies);
+  try {
+    const pool = await whsDb.getPool();
+    const req  = pool.request();
+    const inList = whsCompanyIn(req, resolved);
+    const r = await req.query(`SELECT COUNT(*) AS n FROM ${GL_WATERMARK_TABLE} WHERE Company IN (${inList}) AND RefreshedAt IS NOT NULL`);
+    return (r.recordset[0]?.n || 0) >= resolved.length;
+  } catch { return false; }   // table/pool missing → not built → caller falls back to live
+}
+
+/** Oldest refresh time across the requested companies (the TB "as of" instant). */
+export async function getGlMonthlyAsOf(companies) {
+  try {
+    const pool = await whsDb.getPool();
+    const req  = pool.request();
+    const inList = whsCompanyIn(req, companies);
+    const r = await req.query(`SELECT MIN(RefreshedAt) AS asOf FROM ${GL_WATERMARK_TABLE} WHERE Company IN (${inList})`);
+    return r.recordset[0]?.asOf || null;
+  } catch { return null; }
+}
+
+/**
+ * Trial Balance from the warehouse FACT (drop-in shape for getTrialBalance):
+ * one row per (Company, AccountNo) with OpeningBalance, PeriodDebit,
+ * PeriodCredit, ClosingBalance. Sums over global dimensions within each account.
+ */
+export async function getTrialBalanceFast({ companies, dateFrom, dateTo }) {
+  const startMonth = monthStartStr(dateFrom);
+  const endMonth   = monthStartStr(dateTo);
+  const pool = await whsDb.getPool();
+  const req  = pool.request()
+    .input('startMonth', whsSql.Date, startMonth)
+    .input('endMonth',   whsSql.Date, endMonth);
+  const inList = whsCompanyIn(req, companies);
+  const { recordset } = await req.query(`
+    SELECT
+      Company, AccountNo,
+      MAX(AccountName)     AS AccountName,
+      MAX(AccountType)     AS AccountType,
+      MAX(AccountCategory) AS AccountCategory,
+      MAX(IncomeBalance)   AS IncomeBalance,
+      ISNULL(SUM(CASE WHEN MonthStart <  @startMonth                               THEN NetAmount    ELSE 0 END), 0) AS OpeningBalance,
+      ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth   THEN PeriodDebit  ELSE 0 END), 0) AS PeriodDebit,
+      ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth   THEN PeriodCredit ELSE 0 END), 0) AS PeriodCredit,
+      ISNULL(SUM(CASE WHEN MonthStart <= @endMonth                                 THEN NetAmount    ELSE 0 END), 0) AS ClosingBalance
+    FROM ${GL_MONTHLY_TABLE}
+    WHERE Company IN (${inList}) AND MonthStart <= @endMonth
+    GROUP BY Company, AccountNo
+    HAVING ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth THEN PeriodDebit  ELSE 0 END), 0) <> 0
+        OR ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth THEN PeriodCredit ELSE 0 END), 0) <> 0
+        OR ISNULL(SUM(CASE WHEN MonthStart <= @endMonth                              THEN NetAmount    ELSE 0 END), 0) <> 0
+    ORDER BY AccountNo, Company
+  `);
   return recordset;
 }
 
@@ -97,16 +179,16 @@ export async function getProfitLoss({ companies, dateFrom, dateTo, ytdFrom }) {
         a.[No_]               AS AccountNo,
         RTRIM(a.[Name])       AS AccountName,
         a.[Account Category]  AS AccountCategory,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS PeriodAmount,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @ytdFrom  AND e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS YtdAmount
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) AS PeriodAmount,
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @ytdFrom  AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) AS YtdAmount
       FROM ${acct} a
       LEFT JOIN ${entry} e ON e.[G_L Account No_] = a.[No_]
       WHERE a.[Account Type] = 0 AND a.[Income_Balance] = 0 AND a.[Blocked] = 0
         AND a.[Account Category] IN (4, 5, 6, 7)
       GROUP BY a.[No_], a.[Name], a.[Account Category]
       HAVING
-        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) <> 0
-        OR ISNULL(SUM(CASE WHEN e.[Posting Date] >= @ytdFrom  AND e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) <> 0
+        ISNULL(SUM(CASE WHEN e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) <> 0
+        OR ISNULL(SUM(CASE WHEN e.[Posting Date] >= @ytdFrom  AND e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) <> 0
     `;
   });
 
@@ -129,7 +211,21 @@ export async function getProfitLoss({ companies, dateFrom, dateTo, ytdFrom }) {
  * tax line applies its rate to its base (only when the base is a profit).
  * Returns { company, title, dateFrom, dateTo, rows[], overlaps[], unmapped }.
  */
-export async function computePlStatement({ company, dateFrom, dateTo }) {
+export async function computePlStatement({ company, dateFrom, dateTo, ytdFrom }) {
+  const end=new Date(dateTo);
+  if(!ytdFrom)ytdFrom=`${end.getUTCFullYear()-(end.getUTCMonth()<3?1:0)}-04-01`;
+  for(const date of [dateFrom,dateTo,ytdFrom])if(!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date)throw new Error('Enter valid report dates');
+  if(dateFrom>dateTo||ytdFrom>dateTo)throw new Error('Period and YTD start must not be after the end date');
+  const period=await computePlPeriod({company,dateFrom,dateTo});
+  const ytd=dateFrom===ytdFrom?period:await computePlPeriod({company,dateFrom:ytdFrom,dateTo});
+  return {...period,ytdFrom,rows:period.rows.map(row=>{
+    const yr=ytd.rows.find(r=>r.key===row.key);
+    const accounts=new Map((row.accounts||[]).map(a=>[a.accountNo,{...a,ytdAmount:0}]));
+    for(const a of yr?.accounts||[]){const existing=accounts.get(a.accountNo)||{...a,amount:0};accounts.set(a.accountNo,{...existing,ytdAmount:a.amount})}
+    return {...row,ytdAmount:yr?.amount||0,accounts:row.kind==='accounts'?[...accounts.values()].sort((a,b)=>a.accountNo.localeCompare(b.accountNo)):undefined};
+  }),ytdOverlaps:ytd.overlaps,ytdUnmapped:ytd.unmapped};
+}
+async function computePlPeriod({ company, dateFrom, dateTo }) {
   const co = String(company || '').toUpperCase();
   const def = await getPlDefinition(co);
   const entry = bcTable(co, 'G_L Entry');
@@ -138,7 +234,7 @@ export async function computePlStatement({ company, dateFrom, dateTo }) {
     `SELECT e.[G_L Account No_] AS AccountNo, MAX(RTRIM(a.[Name])) AS AccountName, SUM(e.[Amount]) AS Amount
      FROM ${entry} e
      LEFT JOIN ${acct} a ON a.[No_] = e.[G_L Account No_]
-     WHERE e.[Posting Date] >= @dateFrom AND e.[Posting Date] <= @dateTo
+     WHERE e.[Posting Date] >= @dateFrom AND e.[Posting Date] < DATEADD(day,1,@dateTo)
      GROUP BY e.[G_L Account No_]`,
     { dateFrom: { type: bcSql.Date, value: new Date(dateFrom) }, dateTo: { type: bcSql.Date, value: new Date(dateTo) } }
   );
@@ -159,7 +255,7 @@ export async function computePlStatement({ company, dateFrom, dateTo }) {
       if (specMatches(a.no, ranges)) {
         sum += a.amt; mapped.add(a.no);
         memberOf.set(a.no, (memberOf.get(a.no) || []).concat(line.key));
-        members.push({ accountNo: a.no, name: a.name, amount: -round2(a.amt) });
+        members.push({ accountNo: a.no, name: a.name, amount: round2(a.amt) });
       }
     }
     values[line.key] = -round2(sum);
@@ -208,13 +304,13 @@ export async function getBalanceSheet({ companies, dateTo }) {
         a.[No_]               AS AccountNo,
         RTRIM(a.[Name])       AS AccountName,
         a.[Account Category]  AS AccountCategory,
-        ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) AS Balance
+        ISNULL(SUM(CASE WHEN e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) AS Balance
       FROM ${acct} a
       LEFT JOIN ${entry} e ON e.[G_L Account No_] = a.[No_]
       WHERE a.[Account Type] = 0 AND a.[Income_Balance] = 1 AND a.[Blocked] = 0
         AND a.[Account Category] IN (1, 2, 3)
       GROUP BY a.[No_], a.[Name], a.[Account Category]
-      HAVING ISNULL(SUM(CASE WHEN e.[Posting Date] <= @dateTo THEN e.[Amount] ELSE 0 END), 0) <> 0
+      HAVING ISNULL(SUM(CASE WHEN e.[Posting Date] < DATEADD(day,1,@dateTo) THEN e.[Amount] ELSE 0 END), 0) <> 0
     `;
   });
 

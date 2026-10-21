@@ -62,14 +62,19 @@ test('legacy catalogue and all data endpoints enforce dataset permissions', () =
   assert.equal(canReadLegacyDataset('admin', 'unknown'), false);
 });
 
-test('cashier and chef reports cannot override their shop or fall back to all shops', async () => {
-  for (const role of ['shop', 'chef']) {
+test('cashier reports cannot override their shop or fall back to all shops', async () => {
+  for (const role of ['shop']) {
     const req = { user: { role, userId: 99 }, query: { shopCode: 'OTHER' } };
     assert.equal(await reportShopCode(req, async () => 'OWN'), 'OWN');
     await assert.rejects(reportShopCode(req, async () => null), /No shop assigned/);
   }
   assert.equal(await reportShopCode({ user: { role: 'sales' }, query: {} }), null);
   assert.equal(await reportShopCode({ user: { role: 'sales-admin' }, query: { shopCode: ' s1 ' } }), 'S1');
+});
+
+test('chef can report across shops without an assigned terminal shop', async () => {
+  assert.equal(await reportShopCode({user:{role:'chef'},query:{}}),null);
+  assert.equal(await reportShopCode({user:{role:'chef'},query:{shopCode:' cm '},headers:{'x-shop-code':'OTHER'}}),'CM');
 });
 
 test('lookup cache coalesces, expires, bounds entries and retries failures', async () => {

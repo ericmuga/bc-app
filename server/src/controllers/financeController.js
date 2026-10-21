@@ -51,6 +51,12 @@ export async function runFinanceReport(req, res) {
 
     const { value, cached } = await getOrSet('finance-report', key, async () => {
       if (type === 'trialBalance') {
+        // Fast path: read pre-aggregated balances from FCLWHS.FACT_GL_MONTHLY
+        // (refreshed every 2h) when every requested company has been built.
+        // Otherwise fall back to the live G/L Entry query.
+        if (await FinanceReport.isGlMonthlyBuilt(companies)) {
+          return FinanceReport.getTrialBalanceFast({ companies, dateFrom, dateTo });
+        }
         return FinanceReport.getTrialBalance({ companies, dateFrom, dateTo });
       }
       if (type === 'profitLoss') {
@@ -62,6 +68,14 @@ export async function runFinanceReport(req, res) {
     }, { ttlMs: 10 * 60_000, refresh });
 
     res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    // Surface the warehouse "as of" instant for the Trial Balance fast path so
+    // the UI can show how fresh the pre-aggregated data is.
+    if (type === 'trialBalance') {
+      try {
+        const asOf = await FinanceReport.getGlMonthlyAsOf(companies);
+        if (asOf) res.set('X-Report-AsOf', new Date(asOf).toISOString());
+      } catch { /* non-fatal */ }
+    }
     return res.json(value);
   } catch (err) {
     logger.error('finance/run error', { error: err.message });
@@ -81,11 +95,11 @@ export function clearFinanceCache(_req, res) {
 export async function runPlStatement(req, res) {
   try {
     const company = String(req.query.company || 'FCL').toUpperCase();
-    const { dateFrom, dateTo } = req.query;
+    const { dateFrom, dateTo, ytdFrom } = req.query;
     if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom and dateTo are required' });
     const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
-    const { value, cached } = await getOrSet('finance-pl', { query: { company, dateFrom, dateTo } },
-      () => FinanceReport.computePlStatement({ company, dateFrom, dateTo }), { ttlMs: 10 * 60_000, refresh });
+    const { value, cached } = await getOrSet('finance-pl', { query: { company, dateFrom, dateTo, ytdFrom, version: 3 } },
+      () => FinanceReport.computePlStatement({ company, dateFrom, dateTo, ytdFrom }), { ttlMs: 10 * 60_000, refresh });
     res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
     return res.json(value);
   } catch (err) {

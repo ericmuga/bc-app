@@ -42,3 +42,8 @@ Preview, detail/summary, Excel and streamed CSV share the same parameterized fil
 ## Verification
 
 Run `node --test tests/legacy-reports.mjs`. The implementation was also checked against the configured databases: all source/dataset detail and summary queries compiled, all lookup types were queried, and bounded Value Entry preview/Excel/CSV query results matched for each of the eight legacy/live companies. Client production build passed.
+
+Invoice downloads (sales and purchases) include CurrencyCode, CurrencyFactor, AmountLCY and AmountInclVATLCY. LCY = document amount / header currency factor; NULL or zero factors use 1. Original document amounts remain available. DepartmentCode is line Shortcut Dimension 1 Code; ProjectCode is line Shortcut Dimension 2 Code. HeaderDepartmentCode/HeaderProjectCode preserve the header values separately. Document summaries include header dimensions and summed LCY amounts. Line dimensions are not replaced by header defaults.
+
+
+Posted Sales Credit Memos are available for CM, FCL, FLM and RMK in both legacy and current/live sources. Details match sales invoices (excluding the invoice-specific Order No.): customer, document and line details, quantities, amounts/VAT, currency factor and LCY amounts, Department (dimension 1), Project (dimension 2), and line return reason. Existing filters, document summaries, exports, permissions and source/date cutoffs apply, including RMK legacy routing through 30 March 2025. Credit memo amounts retain their source sign.

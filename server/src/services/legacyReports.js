@@ -313,6 +313,8 @@ const LEGACY_DATASETS = [
     columns: [
       { col: 'h.[Entry No_]',           as: 'EntryNo' },
       { col: 'h.[G_L Account No_]',     as: 'GLAccountNo' },
+      { col: 'h.[Global Dimension 1 Code]', as: 'DepartmentCode' },
+      { col: 'h.[Global Dimension 2 Code]', as: 'ProjectCode' },
       { col: 'h.[Posting Date]',        as: 'PostingDate' },
       { col: 'h.[Document Type]',       as: 'DocumentType' },
       { col: 'h.[Document No_]',        as: 'DocumentNo' },
@@ -330,10 +332,12 @@ const LEGACY_DATASETS = [
     filters: {
       documentNo:  { col: 'h.[Document No_]',   label: 'Document No.' },
       glAccountNo: { col: 'h.[G_L Account No_]', label: 'G/L Account No.' },
+      departmentCode: { col: 'h.[Global Dimension 1 Code]', label: 'Department code (dimension 1)' },
+      projectCode: { col: 'h.[Global Dimension 2 Code]', label: 'Project code (dimension 2)' },
       sourceCode:  { col: 'h.[Source Code]',    label: 'Source Code' },
     },
     summary: {
-      label: 'Summary by G/L Account',
+      label: 'Summary by G/L Account, Department and Project',
       // LEFT JOIN the G/L Account master so entries still show even if the
       // account row is missing; [Name] is the account name "if available".
       joins: [
@@ -342,12 +346,14 @@ const LEGACY_DATASETS = [
       groupBy: [
         { col: 'h.[G_L Account No_]', as: 'GLAccountNo' },
         { col: 'ga.[Name]',           as: 'GLAccountName' },
+        { col: 'h.[Global Dimension 1 Code]', as: 'DepartmentCode' },
+        { col: 'h.[Global Dimension 2 Code]', as: 'ProjectCode' },
       ],
       aggregates: [
         { expr: 'COUNT_BIG(*)',      as: 'EntryCount' },
         { expr: 'SUM(h.[Amount])',   as: 'TotalAmount' },
       ],
-      order: 'h.[G_L Account No_]',
+      order: 'h.[G_L Account No_], h.[Global Dimension 1 Code], h.[Global Dimension 2 Code]',
     },
   },
 
@@ -501,13 +507,41 @@ for (const datasets of [LEGACY_DATASETS]) {
     }
   }
 }
-const LIVE_DATASETS = LEGACY_DATASETS.map(d => d.key === 'slaughterData'
-  ? { ...d, sources: ['CM-CUR', 'FCL-CUR', 'FLM-CUR', 'RMK-CUR'] } : d);
+// Invoice amounts are in document currency; BC's header factor converts by division.
+for (const dataset of LEGACY_DATASETS.filter(d => ['postedPurchaseInvoices','postedSalesInvoices'].includes(d.key))) {
+  const lcy = field => `l.[${field}] / COALESCE(NULLIF(h.[Currency Factor],0),1)`;
+  dataset.columns.push(
+    {col:'h.[Currency Code]',as:'CurrencyCode'},
+    {col:'h.[Currency Factor]',as:'CurrencyFactor'},
+    {col:lcy('Amount'),as:'AmountLCY'},
+    {col:lcy('Amount Including VAT'),as:'AmountInclVATLCY'},
+    {col:'l.[Shortcut Dimension 1 Code]',as:'DepartmentCode'},
+    {col:'l.[Shortcut Dimension 2 Code]',as:'ProjectCode'},
+    {col:'h.[Shortcut Dimension 1 Code]',as:'HeaderDepartmentCode'},
+    {col:'h.[Shortcut Dimension 2 Code]',as:'HeaderProjectCode'},
+  );
+  dataset.summary.groupBy.push(
+    {col:'h.[Currency Code]',as:'CurrencyCode'},
+    {col:'h.[Currency Factor]',as:'CurrencyFactor'},
+    {col:'h.[Shortcut Dimension 1 Code]',as:'HeaderDepartmentCode'},
+    {col:'h.[Shortcut Dimension 2 Code]',as:'HeaderProjectCode'},
+  );
+  dataset.summary.aggregates.push(
+    {expr:`SUM(${lcy('Amount')})`,as:'TotalAmountLCY'},
+    {expr:`SUM(${lcy('Amount Including VAT')})`,as:'TotalAmountInclVATLCY'},
+  );
+}
+LEGACY_DATASETS.find(d => d.key === 'postedSalesInvoices').columns.push(
+  {col:'l.[Return Reason Code]',as:'ReturnReasonCode'},
+);
 const salesInvoice = LEGACY_DATASETS.find(d => d.key === 'postedSalesInvoices');
-LIVE_DATASETS.push({ ...salesInvoice, key: 'postedSalesCreditMemos', label: 'Posted Sales Credit Memos',
+LEGACY_DATASETS.push({ ...salesInvoice, key: 'postedSalesCreditMemos', label: 'Posted Sales Credit Memos',
   header: 'Sales Cr_Memo Header', line: 'Sales Cr_Memo Line',
   columns: salesInvoice.columns.filter(c => c.as !== 'OrderNo'),
+  filters: {...salesInvoice.filters, documentNo:{...salesInvoice.filters.documentNo,label:'Credit Memo No.'}},
 });
+const LIVE_DATASETS = LEGACY_DATASETS.map(d => d.key === 'slaughterData'
+  ? { ...d, sources: ['CM-CUR', 'FCL-CUR', 'FLM-CUR', 'RMK-CUR'] } : d);
 
 // server: same box the weekly-targets feature already reaches (172.16.10.9).
 // database: the physical legacy DB. prefix: the NAV company table prefix.
