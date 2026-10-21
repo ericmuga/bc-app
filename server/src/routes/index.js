@@ -1,3 +1,4 @@
+import {productionCostReport} from '../models/ProductionCostReport.js';
 import jwt from 'jsonwebtoken';
 import {workerLogin,changePasscode} from '../models/DispatchWorkerModel.js';
 import * as dispatchWorkers from '../controllers/dispatchWorkerController.js';
@@ -45,6 +46,9 @@ import * as posBcBomCtrl from '../controllers/posBcBomController.js';
 
 const router = Router();
 const company = companyMiddleware();
+router.get('/reporting/production-cost',authMiddleware,requireRole(...INVENTORY_REPORT_ROLES),async(req,res)=>{
+ try{res.json(await productionCostReport(req.query))}catch(e){res.status(400).json({error:e.message})}
+});
 
 // Mount audit middleware: records every successful POS mutation after the response is sent.
 // Sits before the controllers so it can read req.body; uses res.on('finish') so it never blocks.
@@ -587,6 +591,7 @@ router.get('/dispatch/boxes/:boxId/label', ...canDispPack, dispatchFlow.label);
 router.post('/dispatch/boxes/:boxId/unpack', ...canDispPack, dispatchFlow.unpack);
 const canDispatchWork = [authMiddleware, requireRole('admin','dispatch-supervisor','assembler','packer','checker')];
 router.post('/dispatch/orders/:id/claim', ...canDispatchWork, dispatchFlow.claim);
+router.post('/dispatch/orders/:id/pause', ...canDispAssemble, dispatchFlow.pause);
 router.post('/dispatch/orders/:id/release', ...canDispatchWork, dispatchFlow.release);
 router.put('/dispatch/item-barcode', ...canDispatchWork, dispatchFlow.barcode);
 router.get('/dispatch/report-lookups', ...canDispatch, dispatchFlow.lookups);
