@@ -3,19 +3,22 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {db,sql} from './pool.js';
 import {migrateDispatchWorkers} from './dispatchWorkers.js';
-import {saveWorker,delegate,resolveDelegation,endDelegation} from '../models/DispatchWorkerModel.js';
+import {saveWorker,delegate,resolveDelegation,endDelegation,workerLogin,changePasscode} from '../models/DispatchWorkerModel.js';
 import * as Assembly from '../models/DispatchSessionModel.js';
 import * as Packing from '../models/DispatchPackingModel.js';
 import * as Dispatch from '../models/DispatchModel.js';
 import {dispatchDelegation} from '../middleware/dispatchDelegation.js';
 const main={userId:randomUUID(),userName:'Delegation test main',role:'admin'};
-const input={code:'TEST-'+randomUUID().slice(0,12),name:'Delegation test worker',passcode:'987654',assembly:true,packing:true,loading:true,active:true};
+const input={code:'TEST-'+randomUUID().slice(0,12),name:'Delegation test worker',passcode:'987654',assembly:true,packing:true,loading:true,stocktake:true,active:true};
 let pool,workerId;
 try{
  pool=await db.getPool();await migrateDispatchWorkers(pool);await migrateDispatchWorkers(pool);
  workerId=(await saveWorker(input,main)).WorkerId;
  const secret=(await pool.request().input('id',sql.UniqueIdentifier,workerId).query('SELECT PasscodeHash FROM dbo.DispatchWorker WHERE WorkerId=@id')).recordset[0].PasscodeHash;
  assert.notEqual(secret,input.passcode);assert.ok(secret.startsWith('$2'));
+ const direct=await workerLogin(input);assert.deepEqual(direct.user.workerStages,['assembly','packing','loading','stocktake']);
+ let passed=false;await dispatchDelegation({headers:{'x-worker-stage':'stocktake'},path:'/dispatch/stocktakes',user:{...direct.user,workerLogin:true,workerToken:direct.grant.token},method:'GET',params:{},body:{}},{status(){return this},json(e){throw new Error(e.error)}},()=>{passed=true});assert.ok(passed);
+ let denied=false;await dispatchDelegation({headers:{'x-worker-stage':'packing'},path:'/dispatch/packing',user:{...direct.user,workerStages:['assembly'],workerLogin:true,workerToken:direct.grant.token},method:'GET',params:{},body:{}},{status(n){denied=n===403;return this},json(){}},()=>{throw new Error('Unassigned function was allowed')});assert.ok(denied);
  const grant=await delegate({...input,stage:'assembly'},main);
  const actor=await resolveDelegation(grant.token,main);
  assert.equal(actor.userId,workerId);assert.equal(actor.role,'assembler');assert.equal(actor.userName,input.name);assert.equal(actor.parentUserId,main.userId);
@@ -37,11 +40,22 @@ try{
  assert.ok((await Dispatch.listLoadingSessions(loader)).every(s=>s.CreatedByUserId===workerId));
  await endDelegation(grant.token,main);await assert.rejects(()=>resolveDelegation(grant.token,main),/expired|revoked/);
  await saveWorker({...input,workerId,passcode:'876543'},main);
+ await assert.rejects(()=>resolveDelegation(direct.grant.token,{userId:'worker-login',role:'admin'}),/expired|revoked/);
  await assert.rejects(()=>resolveDelegation(packingGrant.token,main),/expired|revoked/);
  for(let n=0;n<5;n++)await assert.rejects(()=>delegate({...input,stage:'assembly'},main),/Invalid/);
  await assert.rejects(()=>delegate({...input,passcode:'876543',stage:'assembly'},main),/locked/);
  await saveWorker({...input,workerId,active:false},main);
  await assert.rejects(()=>delegate({...input,stage:'assembly'},main),/unavailable/);
+ await saveWorker({...input,workerId},main);
+ const self=await workerLogin(input),identity={userId:workerId,workerLogin:true};
+ await assert.rejects(()=>changePasscode(identity,{currentPasscode:'000000',newPasscode:'654321',confirmPasscode:'654321'}),/incorrect/);
+ await assert.rejects(()=>changePasscode(identity,{currentPasscode:input.passcode,newPasscode:'654321',confirmPasscode:'111111'}),/match/);
+ await assert.rejects(()=>changePasscode({...identity,workerLogin:false},{}),/Sign in/);
+ await changePasscode(identity,{currentPasscode:input.passcode,newPasscode:'654321',confirmPasscode:'654321'});
+ await assert.rejects(()=>resolveDelegation(self.grant.token,{userId:'worker-login',role:'admin'}),/expired|revoked/);
+ await assert.rejects(()=>workerLogin(input),/Invalid/);
+ assert.equal((await workerLogin({...input,passcode:'654321'})).user.userId,workerId);
+ console.log('PASS: self-service passcode change, current-passcode validation, confirmation, old credential rejection and session revocation');
  console.log('PASS: hashed passcodes, stage restrictions, parent binding, session attribution for assembly/packing/loading, supervisor denial, token revocation and lockout');
 }finally{
  if(pool&&workerId)await pool.request().input('id',sql.NVarChar(100),String(workerId)).input('parent',sql.NVarChar(100),main.userId).query(`

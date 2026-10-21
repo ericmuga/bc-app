@@ -19,7 +19,7 @@ const err = (res, e, code = 500) => {
 const splitCSV = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : []);
 
 export async function chillerConfig(req, res) {
-  try { ok(res, await Chillers.configuration()); } catch (e) { err(res, e); }
+  try { ok(res, await Chillers.configuration({compact:req.query.compact==='true'})); } catch (e) { err(res, e); }
 }
 export async function saveChillerConfig(req, res) {
   try { ok(res, await Chillers.saveConfiguration(req.body)); } catch (e) { err(res, e, 400); }
@@ -31,7 +31,7 @@ export async function deleteChillerMapping(req, res) {
   try { ok(res, await Chillers.deleteMapping(req.params.itemNo)); } catch (e) { err(res, e, 400); }
 }
 export async function chillerWorklist(req, res) {
-  try { ok(res, await Chillers.worklist(req.user, { userId: req.query.userId, status: req.query.status, chiller:req.query.chiller, dateFrom:req.query.dateFrom, dateTo:req.query.dateTo, customer:req.query.customer, order:req.query.order })); } catch (e) { err(res, e); }
+  try { ok(res, await Chillers.worklist(req.user, { userId: req.query.userId, status: req.query.status, chiller:req.query.chiller, dateFrom:req.query.dateFrom, dateTo:req.query.dateTo, customer:req.query.customer, order:req.query.order, page:req.query.page, pageSize:req.query.pageSize })); } catch (e) { err(res, e); }
 }
 export async function chillerMonitor(req, res) {
   try { ok(res, await Chillers.worklist(req.user, { monitor: true })); } catch (e) { err(res, e); }

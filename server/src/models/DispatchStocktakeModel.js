@@ -15,12 +15,12 @@ export async function catalog(company) {
 
 export async function list(filters = {}) {
   return (await (await db.getPool()).request()
-    .input('company',sql.NVarChar(10),filters.company || null).input('chiller',sql.NVarChar(50),filters.chiller || null)
+    .input('worker',sql.NVarChar(100),filters.workerId || null).input('company',sql.NVarChar(10),filters.company || null).input('chiller',sql.NVarChar(50),filters.chiller || null)
     .input('from',sql.Date,filters.dateFrom || null).input('to',sql.Date,filters.dateTo || null).query(`
     SELECT s.*,COALESCE(c.Lines,0) Lines,c.WeightKg,c.UntranslatedLines FROM dbo.DispatchStocktake s
     OUTER APPLY(SELECT COUNT(*) Lines,SUM(l.WeightKg) WeightKg,SUM(CASE WHEN l.WeightKg IS NULL THEN 1 ELSE 0 END) UntranslatedLines
       FROM dbo.DispatchStocktakeLine l WHERE l.StocktakeId=s.StocktakeId)c
-    WHERE (@company IS NULL OR s.Company=@company) AND (@chiller IS NULL OR s.Chiller=@chiller)
+    WHERE (@worker IS NULL OR s.UserId=@worker) AND (@company IS NULL OR s.Company=@company) AND (@chiller IS NULL OR s.Chiller=@chiller)
       AND (@from IS NULL OR DATEADD(HOUR,3,s.StartedAt)>=@from)
       AND (@to IS NULL OR DATEADD(HOUR,3,s.StartedAt)<DATEADD(DAY,1,@to)) ORDER BY s.StartedAt DESC`)).recordset;
 }
@@ -74,7 +74,7 @@ export async function saveCount(id, body, user) {
       LEFT JOIN dbo.PosItem p ON p.ItemNo=r.ItemNo AND COALESCE(NULLIF(p.SourceCompany,''),'FCL')=r.Company
       WHERE r.Company=@co AND r.ItemNo=@item AND u.Uom=@uom`)).recordset[0];
     if (!unit) throw new Error('Item/UOM is not cached for this company. Refresh items and units in Dispatch Admin');
-    const weight = unit.KgPerUom > 0 ? count.quantity * Number(unit.KgPerUom) : null;
+    const weight = count.weightKg ?? (unit.KgPerUom > 0 ? count.quantity * Number(unit.KgPerUom) : null);
     if (weight !== null && weight > 99999999999999) throw new Error('Converted weight exceeds the supported range');
     await new sql.Request(tx).input('id',sql.UniqueIdentifier,id).input('item',sql.NVarChar(30),count.itemNo)
       .input('uom',sql.NVarChar(20),count.uom).input('batch',sql.NVarChar(5),count.batchNo)
@@ -82,6 +82,7 @@ export async function saveCount(id, body, user) {
       .input('kg',sql.Decimal(18,4),weight).input('factor',sql.Decimal(18,8),unit.KgPerUom)
       .input('description',sql.NVarChar(250),unit.Description).input('revision',sql.Int,count.revision)
       .input('uid',sql.NVarChar(100),String(user.userId)).input('details',sql.NVarChar(sql.MAX),JSON.stringify(count)).query(`
+      IF @revision=0 AND EXISTS(SELECT 1 FROM dbo.DispatchStocktakeLine WHERE StocktakeId=@id AND ItemNo=@item) THROW 50000,'This item has already been counted. Open its existing count to correct the total',1;
       DECLARE @existing int=(SELECT Revision FROM dbo.DispatchStocktakeLine WHERE StocktakeId=@id AND ItemNo=@item AND Uom=@uom AND BatchNo=@batch);
       IF COALESCE(@existing,0)<>@revision THROW 50000,'This count changed. Refresh and reopen the line before saving',1;
       IF @existing IS NULL
@@ -91,13 +92,26 @@ export async function saveCount(id, body, user) {
         Revision=Revision+1,CountedAt=SYSUTCDATETIME(),CountedBy=@uid
         WHERE StocktakeId=@id AND ItemNo=@item AND Uom=@uom AND BatchNo=@batch;
       INSERT dbo.DispatchStocktakeEvent(StocktakeId,UserId,Action,Details) VALUES(@id,@uid,'count',@details);`);
+    if(body.updateMapping === true){
+      if(!['admin','dispatch-supervisor','chiller-attendant'].includes(user.role)) throw new Error('Only chiller attendants or supervisors can update mappings');
+      await new sql.Request(tx).input('item',sql.NVarChar(30),count.itemNo).input('chiller',sql.NVarChar(50),session.Chiller)
+        .input('description',sql.NVarChar(250),unit.Description).input('id',sql.UniqueIdentifier,id).input('uid',sql.NVarChar(100),String(user.userId)).query(`
+        IF @chiller<>'CHILLER U' AND EXISTS(SELECT 1 FROM dbo.DispatchItemRule WHERE ItemNo=@item AND PostingGroup='JF-SAUSAGE')
+          THROW 50000,'JF-SAUSAGE items must remain in CHILLER U. Uncheck mapping to record stock elsewhere',1;
+        MERGE dbo.DispatchItemChiller WITH(HOLDLOCK) AS t USING(SELECT @item ItemNo)s ON t.ItemNo=s.ItemNo
+        WHEN MATCHED THEN UPDATE SET Chiller=@chiller
+        WHEN NOT MATCHED THEN INSERT(ItemNo,Description,Chiller) VALUES(@item,@description,@chiller);
+        UPDATE dbo.DispatchItemRule SET Chiller=@chiller WHERE ItemNo=@item;
+        INSERT dbo.DispatchStocktakeEvent(StocktakeId,UserId,Action,Details)
+          VALUES(@id,@uid,'mapping',(SELECT @item ItemNo,@chiller Chiller FOR JSON PATH,WITHOUT_ARRAY_WRAPPER));`);
+    }
+
   });
 }
 
 export async function complete(id,user) {
   return change(id,user,async tx => {
     await new sql.Request(tx).input('id',sql.UniqueIdentifier,id).input('uid',sql.NVarChar(100),String(user.userId)).query(`
-      IF NOT EXISTS(SELECT 1 FROM dbo.DispatchStocktakeLine WHERE StocktakeId=@id) THROW 50000,'Count at least one item before completing',1;
       UPDATE dbo.DispatchStocktake SET CompletedAt=SYSUTCDATETIME() WHERE StocktakeId=@id;
       INSERT dbo.DispatchStocktakeEvent(StocktakeId,UserId,Action,Details) VALUES(@id,@uid,'complete','{}');`);
   });

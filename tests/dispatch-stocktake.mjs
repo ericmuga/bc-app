@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {validateCount,assertCanCount} from '../server/src/services/dispatchStocktake.js';
 
 test('piece counts are integral, allow explicit zero and normalise batch codes',()=>{
-  assert.deepEqual(validateCount({itemNo:' abc ',uom:'pc',quantity:0,batchNo:'a123'}),{itemNo:'ABC',uom:'PC',quantity:0,pieces:0,batchNo:'A123',revision:0});
+  assert.deepEqual(validateCount({itemNo:' abc ',uom:'pc',quantity:0,batchNo:'a123'}),{itemNo:'ABC',uom:'PC',quantity:0,pieces:0,batchNo:'A123',revision:0,weightKg:null});
   assert.throws(()=>validateCount({itemNo:'ABC',uom:'PC',quantity:1.5}),/whole/);
 });
 test('weight counts retain pieces and reject missing, negative and nonfinite quantities',()=>{
@@ -18,4 +18,9 @@ test('another attendant cannot modify a count and completed sessions cannot be c
   assertCanCount(session,{userId:'two',role:'dispatch-supervisor'});
   assert.throws(()=>assertCanCount(session,{userId:'two',role:'chiller-attendant'}),/Only/);
   assert.throws(()=>assertCanCount({...session,CompletedAt:new Date()},{userId:'one',role:'admin'}),/read-only/);
+});
+
+test('measured weight accepts zero and rejects invalid values',()=>{
+ assert.equal(validateCount({itemNo:'A',uom:'PC',quantity:2,weightKg:0}).weightKg,0);
+ for(const weightKg of [-1,Infinity,true,'bad'])assert.throws(()=>validateCount({itemNo:'A',uom:'PC',quantity:2,weightKg}));
 });

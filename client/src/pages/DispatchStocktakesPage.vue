@@ -6,8 +6,8 @@
 
     <template v-if="!session">
       <div class="filters">
-        <label>Company<Select v-model="company" :options="['FCL','CM','FLM','RMK']" :disabled="busy" @change="refresh" /></label>
         <label>Chiller<Select v-model="chiller" :options="chillers" filter show-clear placeholder="Select chiller" :disabled="busy" @change="refresh" /></label>
+        <label>Company<Select v-model="company" :options="['FCL','CM','FLM','RMK']" :disabled="busy" @change="refresh" /></label>
         <label>Location code<InputText v-model="location" maxlength="20" /></label>
         <Button label="Start stock take" icon="pi pi-play" :disabled="busy || !chiller || !location.trim()" @click="start" />
       </div>
@@ -29,12 +29,12 @@
       <div class="session-panel">
         <div><strong>{{ session.Company }} · {{ session.LocationCode }} · {{ session.Chiller }}</strong><p>{{ session.UserName }} · {{ formatDate(session.StartedAt) }}</p></div>
         <Tag :value="session.CompletedAt ? 'Completed — read only' : 'Counting · ' + elapsed" :severity="session.CompletedAt ? 'success' : 'info'" />
-        <div class="actions"><Button label="Sessions" severity="secondary" :disabled="busy" @click="back" /><Button label="Export Excel" icon="pi pi-file-excel" :disabled="busy" @click="download" /><Button v-if="canEdit" label="Complete stock take" :disabled="busy || !session.lines.length" @click="confirmComplete=true" /></div>
+        <div class="actions"><Button label="Sessions" severity="secondary" :disabled="busy" @click="back" /><Button label="Export Excel" icon="pi pi-file-excel" :disabled="busy" @click="download" /><Button v-if="canEdit" label="End stock take" :disabled="busy" @click="confirmComplete=true" /></div>
       </div>
       <div class="totals"><span>{{ session.lines.length }} counted lines</span><span>{{ totalKg.toLocaleString(undefined,{maximumFractionDigits:3}) }} known KG · {{ (totalKg/1000).toFixed(3) }} tonnes</span><span v-if="unknownWeights">{{ unknownWeights }} line(s) without a KG conversion</span></div>
       <div v-if="canEdit" class="filters">
         <form class="scanner" @submit.prevent="scan"><label>Scan barcode or enter item number<InputText ref="scanInput" v-model="barcode" placeholder="Scan then press Enter" :disabled="busy" autocomplete="off" /></label><Button type="submit" label="Find" icon="pi pi-search" :disabled="busy || !barcode.trim()" /></form>
-        <Button label="Select item manually" icon="pi pi-plus" :disabled="busy" @click="newCount()" />
+        <label>Search and select item<Select :modelValue="null" :options="items" optionLabel="SearchLabel" filter :filterFields="['SearchLabel','Barcode']" :virtualScrollerOptions="{itemSize:42}" placeholder="Item number, name or barcode" :disabled="busy" @update:modelValue="newCount" /></label>
       </div>
       <InputText v-model="lineSearch" placeholder="Search counted item, description or batch" aria-label="Search counted lines" />
       <DataTable :value="filteredLines" paginator :rows="20" scrollable size="small">
@@ -49,23 +49,26 @@
     <Dialog v-model:visible="countVisible" modal :header="editing ? 'Correct counted total' : 'Count an item'" :style="{width:'34rem',maxWidth:'96vw'}" :closable="!busy" :closeOnEscape="!busy">
       <div class="count-form">
         <Message v-if="modalError" severity="error" :closable="false">{{ modalError }}</Message>
-        <label>Item<Select v-model="selectedItem" :options="items" optionLabel="SearchLabel" filter :filterFields="['SearchLabel','Barcode']" :virtualScrollerOptions="{itemSize:42}" placeholder="Search item number, name or barcode" :disabled="busy || editing" @change="selectUnit" /></label>
+        <label>Item<Select v-model="selectedItem" :options="items" optionLabel="SearchLabel" filter :filterFields="['SearchLabel','Barcode']" :virtualScrollerOptions="{itemSize:42}" placeholder="Search item number, name or barcode" :disabled="busy || editing" @change="chooseItem" /></label>
         <Message v-if="selectedItem && selectedItem.Chiller !== session?.Chiller" severity="warn" :closable="false">This item is mapped to {{ selectedItem.Chiller || 'no chiller' }}. Count it here only if it is physically in {{ session?.Chiller }}.</Message>
-        <label>Unit of measure<Select v-model="form.uom" :options="selectedItem?.Units || []" optionLabel="Uom" optionValue="Uom" :disabled="busy || editing" /></label>
+        <label>Unit of measure<Select v-model="form.uom" :options="selectedItem?.Units || []" optionLabel="Uom" optionValue="Uom" :disabled="busy || editing" @change="recalculate" /></label>
         <Message v-if="selectedItem && !selectedItem.Units.length" severity="warn" :closable="false">No cached units. Refresh BC items and units in Dispatch Admin before counting this item.</Message>
-        <label>{{ pieceUnit ? 'Total pieces counted' : 'Total quantity counted (' + (form.uom || 'UOM') + ')' }}<InputNumber v-model="form.quantity" :min="0" :max="999999999" :maxFractionDigits="pieceUnit ? 0 : 4" fluid :disabled="busy" /></label>
-        <label v-if="!pieceUnit">Pieces (if known)<InputNumber v-model="form.pieces" :min="0" :max="999999999" :maxFractionDigits="0" fluid :disabled="busy" /></label>
+        <label>{{ pieceUnit ? 'Total pieces counted' : 'Total quantity counted (' + (form.uom || 'UOM') + ')' }}<InputNumber v-model="form.quantity" :min="0" :max="999999999" :maxFractionDigits="pieceUnit ? 0 : 4" fluid :disabled="busy" @update:modelValue="recalculate" /></label>
+        <label v-if="!pieceUnit">Pieces<InputNumber v-model="form.pieces" :min="0" :max="999999999" :maxFractionDigits="0" fluid :disabled="busy" @update:modelValue="fromPieces" /></label>
+        <label>Weight (KG)<InputNumber v-model="form.weightKg" :min="0" :max="999999999" :maxFractionDigits="4" fluid :disabled="busy" @update:modelValue="fromWeight" /></label>
+        <Message v-if="duplicateWarning" severity="warn" :closable="false">{{ duplicateWarning }}</Message>
+        <label v-if="canMap && selectedItem"><span><input type="checkbox" v-model="form.updateMapping" /> Map this item to {{ session?.Chiller }} when saving (shared across companies)</span></label>
         <label>Batch (4–5 letters/numbers; blank if unlabelled)<InputText v-model="form.batchNo" maxlength="5" :disabled="busy || editing" /></label>
-        <p v-if="estimatedKg !== null">{{ estimatedKg.toLocaleString(undefined,{maximumFractionDigits:4}) }} KG using the cached BC item UOM.</p>
+        <p v-if="estimatedKg !== null">{{ estimatedKg.toLocaleString(undefined,{maximumFractionDigits:4}) }} KG calculated from the quantity using cached BC item UOM.</p>
         <p v-else>KG translation unavailable until a BC item UOM conversion is cached.</p>
-        <small>Enter the total counted for this item, UOM and batch. Saving replaces the previous count; it does not add to it. Use Edit count to correct an existing line, including setting it to zero.</small>
+        <small>Enter the total counted for this item. Saving replaces the previous count; it does not add to it. Use Edit count to correct an existing line, including setting it to zero.</small>
         <Button label="Save count" icon="pi pi-check" :loading="busy" :disabled="!selectedItem || !form.uom || form.quantity == null" @click="save" />
       </div>
     </Dialog>
-    <Dialog v-model:visible="confirmComplete" modal header="Complete stock take" :style="{width:'28rem',maxWidth:'96vw'}" :closable="!busy">
+    <Dialog v-model:visible="confirmComplete" modal header="End stock take" :style="{width:'28rem',maxWidth:'96vw'}" :closable="!busy">
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-      <p>Complete this count? The saved lines become read-only and remain available for Excel export and future reconciliation.</p>
-      <Button label="Complete" :loading="busy" @click="finish" />
+      <p>End this session, including an empty session? The saved lines become read-only and remain available for Excel export and future reconciliation.</p>
+      <Button label="End session" :loading="busy" @click="finish" />
     </Dialog>
   </div>
 </template>
@@ -85,6 +88,8 @@ import Tag from 'primevue/tag'
 const auth=useAuthStore(),company=ref('FCL'),chiller=ref(null),location=ref(''),chillers=ref([])
 const sessions=ref([]),session=ref(null),items=ref([]),dateFrom=ref(''),dateTo=ref(''),busy=ref(false),error=ref('')
 const barcode=ref(''),scanInput=ref(null),lineSearch=ref(''),countVisible=ref(false),confirmComplete=ref(false),modalError=ref(''),editing=ref(false),selectedItem=ref(null)
+const duplicateWarning=ref('')
+const canMap=computed(()=>['admin','dispatch-supervisor','chiller-attendant'].includes(auth.user?.role))
 const form=ref({}),now=ref(Date.now()),timer=setInterval(()=>now.value=Date.now(),1000)
 onUnmounted(()=>clearInterval(timer))
 const canEdit=computed(()=>session.value&&!session.value.CompletedAt&&(String(session.value.UserId)===String(auth.user?.userId)||['admin','dispatch-supervisor'].includes(auth.user?.role)))
@@ -104,14 +109,26 @@ async function start(){await run(async()=>{const result=(await dispatchApi.start
 async function open(id){lineSearch.value='';await run(()=>loadSession(id))}
 async function back(){session.value=null;await refresh()}
 function selectUnit(){form.value.uom=selectedItem.value?.Units.find(u=>u.Uom===selectedItem.value.BaseUom)?.Uom||selectedItem.value?.Units[0]?.Uom||null;form.value.quantity=null;form.value.pieces=null}
-function newCount(item=null){editing.value=false;modalError.value='';selectedItem.value=item;form.value={uom:null,quantity:null,pieces:null,batchNo:'',revision:0};selectUnit();countVisible.value=true}
+function newCount(item=null){duplicateWarning.value='';const previous=session.value.lines.filter(l=>l.ItemNo===item?.ItemNo);if(previous.length){edit(previous[0]);duplicateWarning.value='This item is already counted. Correct the saved total instead of adding another count.';return;}editing.value=false;modalError.value='';selectedItem.value=item;form.value={uom:null,quantity:null,pieces:null,batchNo:'',revision:0,weightKg:null,updateMapping:canMap.value};selectUnit();countVisible.value=true}
+function chooseItem(){newCount(selectedItem.value)}
+function recalculate(){form.value.weightKg=estimatedKg.value==null?null:Number(estimatedKg.value.toFixed(4))}
+function fromPieces(){const pc=selectedItem.value?.Units.find(u=>/^(PC|PCS|PCE|PIECE|PIECES)$/.test(u.Uom)&&u.KgPerUom>0);const unit=selectedItem.value?.Units.find(u=>u.Uom===form.value.uom);if(pc&&unit?.KgPerUom>0&&form.value.pieces!=null){form.value.weightKg=Number((form.value.pieces*pc.KgPerUom).toFixed(4));form.value.quantity=Number((form.value.weightKg/unit.KgPerUom).toFixed(4))}}
+function fromWeight(){const unit=selectedItem.value?.Units.find(u=>u.Uom===form.value.uom);if(!pieceUnit.value&&unit?.KgPerUom>0&&form.value.weightKg!=null)form.value.quantity=Number((form.value.weightKg/unit.KgPerUom).toFixed(4))}
 function scan(){error.value='';const code=barcode.value.trim().toUpperCase();const matches=items.value.filter(i=>String(i.Barcode||'').trim().toUpperCase()===code||i.ItemNo.toUpperCase()===code);if(matches.length!==1){error.value=matches.length?'Barcode matches multiple items. Select the correct item manually.':'Item not found. Select manually, or ask a supervisor to refresh/correct the barcode in Dispatch Admin.';return}newCount(matches[0]);barcode.value=''}
-function edit(line){const item=items.value.find(i=>i.ItemNo===line.ItemNo);if(!item){error.value='Item is no longer cached. Refresh BC items in Dispatch Admin before correcting this count.';return}editing.value=true;modalError.value='';selectedItem.value=item;form.value={uom:line.Uom,quantity:Number(line.Quantity),pieces:line.Pieces,batchNo:line.BatchNo,revision:line.Revision};countVisible.value=true}
-async function save(){busy.value=true;modalError.value='';try{session.value=(await dispatchApi.saveStocktakeCount(session.value.StocktakeId,{...form.value,itemNo:selectedItem.value.ItemNo})).data;countVisible.value=false}catch(e){modalError.value=message(e)}finally{busy.value=false;await nextTick();if(!countVisible.value)scanInput.value?.$el?.focus()}}
+function edit(line){duplicateWarning.value='';const item=items.value.find(i=>i.ItemNo===line.ItemNo);if(!item){error.value='Item is no longer cached. Refresh BC items in Dispatch Admin before correcting this count.';return}editing.value=true;modalError.value='';selectedItem.value=item;form.value={uom:line.Uom,quantity:Number(line.Quantity),pieces:line.Pieces,batchNo:line.BatchNo,revision:line.Revision,weightKg:line.WeightKg==null?null:Number(line.WeightKg),updateMapping:canMap.value};countVisible.value=true}
+async function save(){busy.value=true;modalError.value='';try{session.value=(await dispatchApi.saveStocktakeCount(session.value.StocktakeId,{...form.value,itemNo:selectedItem.value.ItemNo})).data;if(form.value.updateMapping)selectedItem.value.Chiller=session.value.Chiller;countVisible.value=false}catch(e){modalError.value=message(e)}finally{busy.value=false;await nextTick();if(!countVisible.value)scanInput.value?.$el?.focus()}}
 async function finish(){await run(async()=>{session.value=(await dispatchApi.completeStocktake(session.value.StocktakeId)).data;confirmComplete.value=false})}
 async function download(){await run(async()=>{let response;try{response=await dispatchApi.exportStocktake(session.value.StocktakeId)}catch(e){if(e.response?.data instanceof Blob){const text=await e.response.data.text();try{throw new Error(JSON.parse(text).error)}catch(parsed){if(parsed instanceof SyntaxError)throw e;throw parsed}}throw e}const url=URL.createObjectURL(response.data);const a=document.createElement('a');a.href=url;a.download=`chiller-stocktake-${session.value.StocktakeId}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)})}
 onMounted(()=>run(async()=>{const config=(await dispatchApi.chillerConfig()).data;company.value=config.StockCompany||'FCL';location.value=config.StockLocation||'';chillers.value=config.chillers;await loadHistory()}))
 </script>
 <style scoped>
-.stocktakes{display:grid;gap:1rem;padding:1rem;min-width:0}header,.session-panel,.actions,.filters,.scanner,.totals{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h2,p{margin:.2rem 0}.filters,.scanner{align-items:end}label,.count-form{display:grid;gap:.5rem}.count-form{gap:1rem}.session-panel{padding:1rem;border:1px solid #99cbd0;border-radius:12px;background:#f0fdfa;color:#132e31}.totals{padding:.5rem 0;font-weight:600}.scanner{flex:1}.scanner label{flex:1;min-width:220px}small{line-height:1.5}@media(max-width:640px){.filters>label,.filters>.scanner{width:100%}.actions{width:100%}.actions>*{flex:1}.stocktakes{padding:.5rem}.session-panel{align-items:flex-start}}
+.stocktakes{display:grid;gap:1rem;padding:1rem;min-width:0}header,.session-panel,.actions,.filters,.scanner,.totals{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h2,p{margin:.2rem 0}.filters,.scanner{align-items:end}label,.count-form{display:grid;gap:.5rem}.count-form{gap:1rem}.session-panel{padding:1rem;border:1px solid #475569;border-radius:12px;background:#1e293b;color:#f1f5f9}.totals{padding:.5rem 0;font-weight:600}.scanner{flex:1}.scanner label{flex:1;min-width:220px}small{line-height:1.5}@media(max-width:640px){.filters>label,.filters>.scanner{width:100%}.actions{width:100%}.actions>*{flex:1}.stocktakes{padding:.5rem}.session-panel{align-items:flex-start}}
+.stocktakes{background:#0f172a;color:#e2e8f0;color-scheme:dark}
+.stocktakes :deep(.p-datatable),.stocktakes :deep(.p-datatable-table-container){background:#111827;color:#f1f5f9}
+.stocktakes :deep(.p-datatable-thead > tr > th){background:#020617 !important;color:#fff !important;border-color:#475569 !important}
+.stocktakes :deep(.p-datatable-tbody > tr),.stocktakes :deep(.p-datatable-tbody > tr > td){background:#1e293b !important;color:#f1f5f9 !important;border-color:#334155 !important}
+.stocktakes :deep(.p-datatable-tbody > tr:hover > td){background:#334155 !important;color:#fff !important}
+.stocktakes :deep(.p-paginator){background:#111827 !important;color:#e2e8f0 !important;border-color:#334155}
+.stocktakes :deep(.p-paginator button),.stocktakes :deep(.p-datatable-sort-icon){color:#cbd5e1}
+.stocktakes :deep(.p-button-text){color:#7dd3fc}
 </style>

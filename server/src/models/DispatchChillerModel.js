@@ -2,9 +2,10 @@ import {applyConfirmationBypass} from './DispatchConfirmationBypass.js';
 import { db, sql } from '../db/pool.js';
 import { ALL_COMPANIES } from '../services/bcTables.js';
 
-export async function configuration() {
+export async function configuration({compact=false}={}) {
   const p = await db.getPool();
   const config = (await p.request().query('SELECT BypassAssignment,BypassConfirmation,StockCompany,StockLocation FROM dbo.DispatchChillerConfig WHERE Id=1')).recordset[0];
+  if(compact){const rows=(await p.request().query('SELECT DISTINCT Chiller FROM dbo.DispatchItemChiller ORDER BY Chiller')).recordset;return {...config,chillers:rows.map(r=>r.Chiller)}}
   const mappings = (await p.request().query(`SELECT m.*,
     (SELECT r.Company,r.Barcode FROM dbo.DispatchItemRule r
       WHERE r.ItemNo=m.ItemNo AND NULLIF(LTRIM(RTRIM(r.Barcode)),'') IS NOT NULL
@@ -55,7 +56,7 @@ export async function deleteMapping(item) {
 }
 
 // One row per order line; unmapped lines remain visible instead of silently disappearing.
-export async function worklist(user, { monitor = false, userId, status = 'pending', chiller, dateFrom, dateTo, customer, order } = {}) {
+export async function worklist(user, { monitor = false, userId, status = 'pending', chiller, dateFrom, dateTo, customer, order, pageSize, page=1 } = {}) {
   const p = await db.getPool();
   if(dateFrom && dateTo && dateFrom>dateTo)throw new Error('Check the shipment date range');
   const config = (await p.request().query('SELECT BypassAssignment FROM dbo.DispatchChillerConfig WHERE Id=1')).recordset[0];
@@ -64,7 +65,11 @@ export async function worklist(user, { monitor = false, userId, status = 'pendin
   r.input('chiller',sql.NVarChar(50),chiller||null).input('dateFrom',sql.Date,dateFrom||null).input('dateTo',sql.Date,dateTo||null)
     .input('customer',sql.NVarChar(250),customer||null).input('order',sql.NVarChar(100),order||null);
   const scope = status !== 'assembled' && !monitor && !config.BypassAssignment && (!elevated || userId) ? 'AND p.AssignedToUserId=@uid' : '';
-  return (await r.query(`SELECT o.DispatchOrderId,o.DispatchNo,o.OrderNo,o.Company,o.CustomerNo,o.CustomerName,o.Status,
+  const paged=pageSize!=null&&!monitor;
+  const size=Number(pageSize)===10?10:5;
+  if(paged&&(!Number.isInteger(Number(page))||Number(page)<1||Number(page)>100000))throw new Error('Invalid page');
+  if(paged)r.input('skip',sql.Int,(Number(page)-1)*size).input('take',sql.Int,size+1);
+  const query=`SELECT o.DispatchOrderId,o.DispatchNo,o.OrderNo,o.Company,o.CustomerNo,o.CustomerName,o.Status,
       CONVERT(char(10),o.ShipmentDate,23) ShipmentDate,
       l.LineId,l.ItemNo,l.Description,l.Part,l.OrderQty,l.Uom,l.IsWeighted,
       COALESCE(a.Chiller,r.Chiller,m.Chiller,'UNMAPPED') Chiller,a.AssembledQty,a.AssembledWeight,
@@ -80,8 +85,18 @@ export async function worklist(user, { monitor = false, userId, status = 'pendin
       AND (@order IS NULL OR CHARINDEX(LOWER(@order),LOWER(CONCAT(o.OrderNo,' ',o.DispatchNo)))>0)
       AND o.Confirmed=1 AND o.Status IN ('confirmed','assigned','assembling','assembled','packing','packed','loaded') ${scope}
     ${monitor ? '' : status === 'assembled' ? `AND (p.Assembled=1 OR a.Completed=1) ${elevated && !userId ? '' : 'AND a.AssembledByUserId=@uid'}` : "AND o.Status IN ('confirmed','assigned','assembling') AND p.Assembled=0 AND ISNULL(a.Completed,0)=0"}
+    ${monitor || status === 'assembled' ? '' : status === 'paused'
+      ? "AND EXISTS(SELECT 1 FROM dbo.DispatchOrderClaim pc WHERE pc.DispatchOrderId=o.DispatchOrderId AND pc.UserId=@uid AND pc.Stage='assembly' AND pc.Paused=1)"
+      : "AND NOT EXISTS(SELECT 1 FROM dbo.DispatchOrderClaim pc WHERE pc.DispatchOrderId=o.DispatchOrderId AND pc.Paused=1)"}
     ${monitor ? '' : "AND NOT EXISTS(SELECT 1 FROM dbo.DispatchOrderClaim claim WHERE claim.DispatchOrderId=o.DispatchOrderId AND (claim.UserId<>@uid OR claim.Stage<>'assembly'))"}
-    ORDER BY Chiller,o.CreatedAt,o.DispatchNo,l.SortOrder`)).recordset;
+    `;
+  if(paged){
+    const rows=(await r.query(`WITH matched AS (${query}) SELECT DispatchOrderId,DispatchNo,OrderNo,Company,CustomerNo,CustomerName,Status,ShipmentDate,Chiller,COUNT(*) LineCount
+      FROM matched GROUP BY DispatchOrderId,DispatchNo,OrderNo,Company,CustomerNo,CustomerName,Status,ShipmentDate,Chiller
+      ORDER BY ShipmentDate DESC,DispatchOrderId,Chiller OFFSET @skip ROWS FETCH NEXT @take ROWS ONLY`)).recordset;
+    return {rows:rows.slice(0,size),hasMore:rows.length>size,page:Number(page),pageSize:size};
+  }
+  return (await r.query(query+' ORDER BY Chiller,o.CreatedAt,o.DispatchNo,l.SortOrder')).recordset;
 }
 
 export async function stockPosition(filters={}) {

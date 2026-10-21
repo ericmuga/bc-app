@@ -3,6 +3,7 @@ import {db,sql} from '../db/pool.js';
 export async function assertClaim(tx,orderId,user,stage,sessionId){
   const row=(await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId)
     .query('SELECT * FROM dbo.DispatchOrderClaim WITH(UPDLOCK,HOLDLOCK) WHERE DispatchOrderId=@id')).recordset[0];
+  if(row?.Paused)throw new Error('Resume this order before assembling');
   if(!row || row.Stage!==stage || String(row.UserId)!==String(user.userId) || (sessionId&&String(row.SessionId).toLowerCase()!==String(sessionId).toLowerCase()))
     throw new Error('Select and claim this order in your active session first; it may be held by another operator');
   return row;
@@ -31,7 +32,7 @@ export async function claim(user,orderId,stage,sessionId){
       .input('sid',sql.UniqueIdentifier,sessionId).input('uid',sql.NVarChar(100),String(user.userId)).input('name',sql.NVarChar(200),user.userName||'')
       .query(`IF NOT EXISTS(SELECT 1 FROM dbo.DispatchOrderClaim WHERE DispatchOrderId=@id)
         INSERT dbo.DispatchOrderClaim(DispatchOrderId,Stage,UserId,UserName,SessionId) VALUES(@id,@stage,@uid,@name,@sid);
-        ELSE UPDATE dbo.DispatchOrderClaim SET SessionId=@sid WHERE DispatchOrderId=@id;`);
+        ELSE UPDATE dbo.DispatchOrderClaim SET SessionId=@sid,Paused=0 WHERE DispatchOrderId=@id;`);
     await tx.commit();return {ok:true};
   }catch(e){await tx.rollback();throw e;}
 }
@@ -39,6 +40,10 @@ export async function release(user,orderId){
   const tx=new sql.Transaction(await db.getPool());await tx.begin();
   try{
     await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId).query('SELECT DispatchOrderId FROM dbo.DispatchOrder WITH(UPDLOCK,HOLDLOCK) WHERE DispatchOrderId=@id');
+    const existing=(await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId)
+      .query('SELECT UserId FROM dbo.DispatchOrderClaim WITH(UPDLOCK,HOLDLOCK) WHERE DispatchOrderId=@id')).recordset[0];
+    // A lost release response can safely be retried; never release a new owner's claim.
+    if(!existing){await tx.commit();return {ok:true};}
     const r=await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId).input('uid',sql.NVarChar(100),String(user.userId))
       .input('super',sql.Bit,['admin','dispatch-supervisor'].includes(user.role)).query('DELETE dbo.DispatchOrderClaim WHERE DispatchOrderId=@id AND (UserId=@uid OR @super=1)');
     if(!r.rowsAffected[0])throw new Error('Only the owner or a supervisor can release this order');
@@ -46,4 +51,19 @@ export async function release(user,orderId){
       .query("INSERT dbo.DispatchActionAudit(Action,EntityId,UserId) VALUES('release-order',@id,@uid)");
     await tx.commit();return {ok:true};
   }catch(e){await tx.rollback();throw e;}
+}
+
+export async function pause(user,orderId,sessionId){
+ if(!['admin','dispatch-supervisor','packer','assembler'].includes(user.role))throw new Error('Assembly permission required');
+ const tx=new sql.Transaction(await db.getPool());await tx.begin();
+ try{
+  await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId).query('SELECT DispatchOrderId FROM dbo.DispatchOrder WITH(UPDLOCK,HOLDLOCK) WHERE DispatchOrderId=@id');
+  const session=(await new sql.Request(tx).input('sid',sql.UniqueIdentifier,sessionId).input('uid',sql.NVarChar(100),String(user.userId))
+   .query('SELECT SessionId FROM dbo.DispatchAssemblySession WITH(UPDLOCK,HOLDLOCK) WHERE SessionId=@sid AND UserId=@uid AND EndedAt IS NULL')).recordset[0];
+  if(!session)throw new Error('Start your own active assembly session first');
+  const result=await new sql.Request(tx).input('id',sql.UniqueIdentifier,orderId).input('sid',sql.UniqueIdentifier,sessionId).input('uid',sql.NVarChar(100),String(user.userId))
+   .query("UPDATE dbo.DispatchOrderClaim SET Paused=1 WHERE DispatchOrderId=@id AND Stage='assembly' AND UserId=@uid AND SessionId=@sid");
+  if(!result.rowsAffected[0])throw new Error('Claim this order in your own assembly session first');
+  await tx.commit();return {ok:true};
+ }catch(e){try{await tx.rollback()}catch{}throw e}
 }

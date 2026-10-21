@@ -20,7 +20,8 @@ try {
   const input={company:fixture.Company,chiller:fixture.Chiller,location:'TEST-'+randomUUID().slice(0,8)};
   const session=await Stocktake.start(input,owner),id=session.StocktakeId;
   await assert.rejects(()=>Stocktake.start(input,owner),/open stock take/);
-  await assert.rejects(()=>Stocktake.complete(id,owner),/at least one/);
+  const empty=await Stocktake.start({...input,location:'EMPTY-'+randomUUID().slice(0,8)},owner);
+  assert.ok((await Stocktake.complete(empty.StocktakeId,owner)).CompletedAt);
   const count={itemNo:fixture.ItemNo,uom:fixture.Uom,batchNo:'T123',quantity:2,revision:0};
   await assert.rejects(()=>Stocktake.saveCount(id,count,{userId:'someone-else',role:'chiller-attendant'}),/Only/);
   const results=await Promise.allSettled([Stocktake.saveCount(id,count,owner),Stocktake.saveCount(id,count,owner)]);
@@ -29,6 +30,7 @@ try {
   let saved=await Stocktake.detail(id);
   assert.equal(saved.lines.length,1);assert.equal(saved.lines[0].Quantity,2);
   assert.ok(saved.lines[0].WeightKg>0);
+  await assert.rejects(()=>Stocktake.saveCount(id,{...count,batchNo:'T456'},owner),/already been counted/);
   saved=await Stocktake.saveCount(id,{...count,quantity:0,revision:1},owner);
   assert.equal(saved.lines[0].Quantity,0);assert.equal(saved.lines[0].Revision,2);
   await assert.rejects(()=>Stocktake.saveCount(id,{...count,quantity:4,revision:1},owner),/changed/);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { assertClaim } from './DispatchClaimModel.js';
 import { db, sql } from '../db/pool.js';
 import { assemblyValues } from '../../../shared/dispatchAssembly.mjs';
@@ -6,7 +7,17 @@ import { resolveStockUnit, recordMovement } from './DispatchMovementModel.js';
 export async function completeLine({ dispatchOrderId, lineId, body, user }) {
   if (!['admin','dispatch-supervisor','packer','assembler'].includes(user.role)) throw new Error('Assembly permission required');
   if (!body.sessionId) throw new Error('Start an assembly session first');
+  const requestId = body.requestId;
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('Invalid sync request ID');
+  const payloadHash = createHash('sha256').update(JSON.stringify([dispatchOrderId,lineId,...['sessionId','chiller','expectedRevision','correct','pieces','assembledWeight','batchNo','returnReasonCode','correctionReason'].map(k=>body[k]??null)])).digest('hex');
   const pool = await db.getPool();
+  if (requestId) {
+    const receipt=(await pool.request().input('rid',sql.UniqueIdentifier,requestId).query('SELECT * FROM dbo.DispatchAssemblyReceipt WHERE RequestId=@rid')).recordset[0];
+    if(receipt){
+      if(receipt.UserId!==String(user.userId)||receipt.PayloadHash!==payloadHash)throw new Error('Sync request does not match its original owner or contents');
+      return JSON.parse(receipt.Result);
+    }
+  }
   // Conversion is read before taking app locks. No stock balance is imported from BC.
   const meta = (await pool.request().input('id',sql.UniqueIdentifier,dispatchOrderId).input('lid',sql.UniqueIdentifier,lineId)
     .query(`SELECT l.ItemNo,l.Uom,COALESCE(NULLIF(o.Company,''),NULLIF(pi.SourceCompany,''),c.StockCompany) Company,c.StockLocation
@@ -18,6 +29,13 @@ export async function completeLine({ dispatchOrderId, lineId, body, user }) {
   const tx = new sql.Transaction(pool); await tx.begin();
   const rq = () => new sql.Request(tx);
   try {
+    if (requestId) {
+      const receipt = (await rq().input('rid',sql.UniqueIdentifier,requestId).query('SELECT * FROM dbo.DispatchAssemblyReceipt WITH(UPDLOCK,HOLDLOCK) WHERE RequestId=@rid')).recordset[0];
+      if (receipt) {
+        if (receipt.UserId !== String(user.userId) || receipt.PayloadHash !== payloadHash) throw new Error('Sync request does not match its original owner or contents');
+        await tx.commit(); return JSON.parse(receipt.Result);
+      }
+    }
     const header = (await rq().input('id',sql.UniqueIdentifier,dispatchOrderId).query(`
       SELECT * FROM dbo.DispatchOrder WITH(UPDLOCK,HOLDLOCK) WHERE DispatchOrderId=@id`)).recordset[0];
     if (!header?.Confirmed || !['confirmed','assigned','assembling','assembled'].includes(header.Status)) throw new Error('Order is not available for assembly or correction');
@@ -85,6 +103,10 @@ export async function completeLine({ dispatchOrderId, lineId, body, user }) {
       UPDATE dbo.DispatchOrder SET Status=CASE WHEN @done=1 THEN 'assembled' ELSE 'assembling' END,Assembled=@done,UpdatedAt=GETUTCDATE() WHERE DispatchOrderId=@id;
       IF @done=1 DELETE dbo.DispatchOrderClaim WHERE DispatchOrderId=@id AND Stage='assembly';
       SELECT @done fullyAssembled;`);
-    await tx.commit(); return {ok:true,revision,fullyAssembled:result.recordset[0].fullyAssembled};
+    const response = {ok:true,revision,fullyAssembled:result.recordset[0].fullyAssembled};
+    if (requestId) await rq().input('rid',sql.UniqueIdentifier,requestId).input('uid',sql.NVarChar(100),String(user.userId))
+      .input('hash',sql.VarChar(64),payloadHash).input('result',sql.NVarChar(1000),JSON.stringify(response))
+      .query('INSERT dbo.DispatchAssemblyReceipt(RequestId,UserId,PayloadHash,Result) VALUES(@rid,@uid,@hash,@result)');
+    await tx.commit(); return response;
   } catch(e) { try { await tx.rollback(); } catch {} throw e; }
 }

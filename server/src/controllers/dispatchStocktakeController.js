@@ -6,7 +6,7 @@ const action = fn => async(req,res) => {
   catch(e) { res.status(400).json({error:e.message}); }
 };
 export const catalog = action(r => Stocktake.catalog(r.query.company));
-export const list = action(r => Stocktake.list(r.query));
+export const list = action(r => Stocktake.list({...r.query,workerId:r.user.workerLogin?r.user.userId:null}));
 export const detail = action(r => Stocktake.detail(r.params.id));
 export const start = action(r => Stocktake.start(r.body,r.user));
 export const save = action(r => Stocktake.saveCount(r.params.id,r.body,r.user));

@@ -11,6 +11,7 @@ export const currentRun=action(r=>Packing.currentRun(r.user));
 export const startRun=action(r=>Packing.startRun(r.user,r.body.checkerUserId));
 export const endRun=action(r=>Packing.endRun(r.user,r.params.runId));
 export const claim=action(r=>Claims.claim(r.user,r.params.id,r.body.stage,r.body.sessionId));
+export const pause=action(r=>Claims.pause(r.user,r.params.id,r.body.sessionId));
 export const release=action(r=>Claims.release(r.user,r.params.id));
 export const list=action(r=>Packing.worklist(r.user,r.query.status));
 export const detail=action(r=>Packing.detail(r.params.id,r.user));

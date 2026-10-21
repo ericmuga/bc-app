@@ -12,7 +12,9 @@ export function validateCount(body) {
   const pieces = pieceUnit ? quantity : body.pieces == null || body.pieces === '' ? null : Number(body.pieces);
   if (pieces !== null && (!Number.isInteger(pieces) || pieces < 0 || pieces > 999999999)) throw new Error('Pieces must be a non-negative whole number');
   if (!Number.isInteger(revision) || revision < 0) throw new Error('Invalid count revision');
-  return {itemNo, uom, batchNo, quantity, pieces, revision};
+  const weightKg = body.weightKg == null || body.weightKg === '' ? null : Number(body.weightKg);
+  if (weightKg !== null && (!Number.isFinite(weightKg) || weightKg < 0 || weightKg > 999999999 || typeof body.weightKg === 'boolean')) throw new Error('Weight must be a non-negative number up to 999999999 KG');
+  return {itemNo, uom, batchNo, quantity, pieces, revision, weightKg};
 }
 
 export function assertCanCount(session, user) {
