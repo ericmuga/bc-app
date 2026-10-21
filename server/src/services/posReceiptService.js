@@ -240,7 +240,7 @@ export async function signPosOrder(order) {
     return {
       etimsNo:        etimsNo,
       etimsInvoiceNo: data.CuInvoiceNumber || data.cuInvoiceNumber || '',
-      cuSerialNo:     etimsRs.mrcNo || '',
+      cuSerialNo:     etimsRs.sdcId || '',
       qrUrl:          data.qrData || data.qrUrl || '',
       signedAt:       new Date().toISOString(),
     };
@@ -324,7 +324,7 @@ export async function signPosCreditMemo(order, { reason = 'RETURN' } = {}) {
   return {
     etimsNo: creditNoteNumber,
     etimsCreditMemoNo: data.CuInvoiceNumber || data.cuInvoiceNumber || data.creditNoteNumber || '',
-    cuSerialNo: etimsRs.mrcNo || '',
+    cuSerialNo: etimsRs.sdcId || '',
     qrUrl: data.qrData || data.qrUrl || '',
     signedAt: new Date().toISOString(),
     payload,
@@ -405,6 +405,8 @@ export async function buildPrintPayload(order, etimsResult) {
     return { line: l, vat: Math.round(vatAmount * 100) / 100, incl };
   });
   const totalIncNum = lineCalcs.reduce((s, c) => s + (c.incl ? Number(c.line.lineAmount || 0) : Number(c.line.lineAmount || 0) + c.vat), 0);
+  const roundedSale=Number(order.totalAmount);
+  const roundingAdjustment=Number.isInteger(roundedSale)&&Math.abs(roundedSale-totalIncNum)<=0.50001 ? roundedSale-totalIncNum : 0;
   const totalVatNum = lineCalcs.reduce((s, c) => s + c.vat, 0);
   const totalExNum  = totalIncNum - totalVatNum;
   const qrImage = etimsResult?.qrUrl
@@ -438,7 +440,8 @@ export async function buildPrintPayload(order, etimsResult) {
     ship_to:           order.shopCode || '',
     total_ex_vat:      totalExNum.toFixed(2),
     vat:               totalVatNum.toFixed(2),
-    total_inc_vat:     totalIncNum.toFixed(2),
+    total_inc_vat:     (totalIncNum+roundingAdjustment).toFixed(2),
+    rounding_adjustment: roundingAdjustment.toFixed(4),
     payment_lines:     payments.lines,
     amount_paid:       payments.amountPaid.toFixed(2),
     change_given:      payments.changeGiven.toFixed(2),

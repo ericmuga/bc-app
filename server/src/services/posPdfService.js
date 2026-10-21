@@ -165,6 +165,7 @@ export async function generateInvoicePdf(data) {
     doc.text('Total Amt. Ex. VAT', 110, afterY); doc.text('KSH', 160, afterY); doc.text(String(data.total_ex_vat || ''), 175, afterY);
     afterY += ls;
     doc.text('VAT Amount',         110, afterY); doc.text('KSH', 160, afterY); doc.text(String(data.vat || ''),          175, afterY);
+    if(Math.abs(Number(data.rounding_adjustment||0))>0.00001){afterY+=ls;doc.text('Rounding',110,afterY);doc.text(Number(data.rounding_adjustment).toFixed(2),175,afterY);}
     doc.setFont('helvetica', 'bold');
     doc.setDrawColor(0); doc.setLineWidth(0.3); doc.line(170, afterY + 2, 198, afterY + 2);
     afterY += ls;

@@ -1,3 +1,5 @@
+import {paymentReconciliation} from '../../../shared/posCashReconciliation.mjs';
+import {cashMovementReport} from '../models/PosTillModel.js';
 import { reportShopCode } from '../services/reportShopScope.js';
 /**
  * controllers/posStockController.js
@@ -36,7 +38,7 @@ async function userShopCode(req) {
  *  a shop user is always locked to their own shop. */
 export async function dailySalesSummary(req, res) {
   try {
-    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode, Pos.listUserShopCodes);
     const { dateFrom, dateTo } = req.query;
     ok(res, await Pos.dailySalesSummary({ shopCode, dateFrom, dateTo }));
   } catch (e) { err(res, e); }
@@ -323,7 +325,7 @@ function csvBlob(headers, rows, esc = (v) => {
 
 export async function reportStockPosition(req, res) {
   try {
-    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode, Pos.listUserShopCodes);
     const data = await Stock.stockPositionReport({
       shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo,
       itemNo: req.query.itemNo || null,
@@ -343,7 +345,7 @@ export async function reportStockPosition(req, res) {
 
 export async function reportSalesByItem(req, res) {
   try {
-    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode, Pos.listUserShopCodes);
     const data = await Stock.salesByItemReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
     if (req.query.format === 'csv') {
       const csv = csvBlob(['ItemNo','Description','Qty','Value'],
@@ -358,7 +360,7 @@ export async function reportSalesByItem(req, res) {
 
 export async function reportSalesByContact(req, res) {
   try {
-    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode, Pos.listUserShopCodes);
     const data = await Stock.salesByContactReport({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo });
     if (req.query.format === 'csv') {
       const csv = csvBlob(['ContactNo','ContactName','Orders','Value'],
@@ -579,4 +581,15 @@ export async function itemTransactions(req, res) {
     const dateTo   = req.query.dateTo   || dateFrom;
     ok(res, await Stock.listItemTransactions({ shopCode, itemNo: req.query.itemNo, dateFrom, dateTo }));
   } catch (e) { err(res, e); }
+}
+
+export async function stockCashReport(req,res){
+ try{
+  const shopCode=await reportShopCode(req,Pos.getUserShopCode,Pos.listUserShopCodes);
+  if(!shopCode)throw new Error('Select one shop for the stock and cash reconciliation');
+  const {dateFrom,dateTo}=req.query;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom||'')||!/^\d{4}-\d{2}-\d{2}$/.test(dateTo||'')||dateFrom>dateTo)throw new Error('Select a valid date range');
+  const [stock,cash]=await Promise.all([Stock.stockPositionReport({shopCode,dateFrom,dateTo}),cashMovementReport({shopCode,dateFrom,dateTo})]);
+  ok(res,{rows:stock.filter(r=>Number(r.closing)!==0),cash:paymentReconciliation(cash.rows),shopCode,dateFrom,dateTo,generatedAt:new Date().toISOString()});
+ }catch(e){err(res,e,400)}
 }

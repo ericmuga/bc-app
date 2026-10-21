@@ -94,7 +94,7 @@ export async function reportCashMovement(req, res) {
   try {
     const isAdmin = canReadAllShops(req.user.role);
     const Pos = await import('../models/PosModel.js');
-    const shopCode = await reportShopCode(req, Pos.getUserShopCode);
+    const shopCode = await reportShopCode(req, Pos.getUserShopCode, Pos.listUserShopCodes);
     const cashierUserId = isAdmin ? (req.query.cashierUserId || null) : req.user.userId;
     const data = await Till.cashMovementReport({
       shopCode, cashierUserId,

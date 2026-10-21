@@ -205,6 +205,7 @@ async function renderThermalInvoice(doc, data, widthMm) {
   // ── Totals ────────────────────────────────────────────────────────────────
   kv('Subtotal',  fmtMoney(data.total_ex_vat));
   kv('VAT',       fmtMoney(data.vat));
+  if(Math.abs(Number(data.rounding_adjustment||0))>0.00001)kv('Rounding',fmtMoney(data.rounding_adjustment));
   setF(9, true);
   doc.text('TOTAL', margin, y, TXT);
   doc.text(fmtMoney(data.total_inc_vat), widthMm - margin, y, { align: 'right', ...TXT });

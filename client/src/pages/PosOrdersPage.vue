@@ -15,13 +15,34 @@
 
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
-    <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div class="list-search mb-3" style="display:flex;gap:14px 8px;flex-wrap:wrap;align-items:end">
+      <label>From<InputText v-model="dateFrom" type="date" /></label><label>To<InputText v-model="dateTo" type="date" /></label>
+      <label v-if="reportShops.length>1">Reporting shop<Select v-model="reportShop" :options="reportShops" optionLabel="label" optionValue="code" filter placeholder="Select shop" :disabled="loading" @change="load" /></label>
+      <span v-else-if="reportShops.length===1">Shop: {{ reportShops[0].label }}</span>
+      <Button label="Apply range / shop" @click="load" :loading="loading" />
+      <Button v-if="!analysisView" label="Excel" icon="pi pi-file-excel" :disabled="loading || !orders.length" @click="exportOrders('excel')" />
+      <Button v-if="!analysisView" label="PDF" icon="pi pi-file-pdf" :disabled="loading || !orders.length" @click="exportOrders('pdf')" />
+    </div>
+    <div class="orders-view-toggle" role="group" aria-label="POS orders view">
+      <Button label="Order list" icon="pi pi-list" :outlined="analysisView" :aria-pressed="!analysisView" @click="analysisView=false" />
+      <Button label="Sales analysis" icon="pi pi-chart-bar" :outlined="!analysisView" :aria-pressed="analysisView" @click="analysisView=true" />
+    </div>
+    <PosOrderReport v-if="analysisView" :rows="orders" :loading="loading" :range="loadedRange" />
+    <template v-else>
+    <div class="list-search mb-3" style="display:flex;gap:14px 8px;align-items:center;flex-wrap:wrap">
+      <MultiSelect v-model="visibleColumns" :options="displayColumns" optionLabel="label" optionValue="field" filter placeholder="Choose columns" :maxSelectedLabels="0" selectedItemsLabel="{0} columns shown" aria-label="Columns to display" style="min-width:210px" />
+      <Button label="Reset columns" text severity="secondary" @click="visibleColumns=displayColumns.map(c=>c.field)" />
       <InputText v-model="orderFilters.global.value" placeholder="Search all columns…" style="max-width:320px" />
       <Button label="Clear filters" icon="pi pi-filter-slash" text severity="secondary" @click="orderFilters=makeOrderFilters()" /><span class="text-muted text-sm">{{ orders.length }} loaded order(s)</span>
     </div>
 
+    <section class="payment-stats" aria-label="Payment summary" :aria-busy="loading">
+      <article class="payment-stat paid"><span>Paid</span><strong>{{ paymentStats.paid.count }} orders</strong><span>{{ fmt(paymentStats.paid.total) }}</span></article>
+      <article class="payment-stat unpaid"><span>Unpaid</span><strong>{{ paymentStats.unpaid.count }} orders</strong><span>{{ fmt(paymentStats.unpaid.total) }}</span></article>
+    </section>
+    <p class="text-muted text-sm">Totals for filtered orders across all pages. Unpaid includes open, saved and checkout orders; cancelled orders are excluded.</p>
     <DataTable
-      :value="orders"
+      :value="orders" @value-change="exportRows=$event"
       dataKey="OrderId"
       size="small"
       :loading="loading"
@@ -30,38 +51,42 @@
       selection-mode="single"
       paginator :rows="25"
       v-model:filters="orderFilters" filterDisplay="row" removableSort
-      :globalFilterFields="['OrderNo','ContactName','ShopCode','CashierName','Status','Label','LineCount','TotalAmount','CreatedDate']"
+      :globalFilterFields="['OrderNo','ContactName','ShopCode','CashierName','PaymentMethods','Status','LineCount','TotalAmount','CreatedDate']"
     >
       <template #empty>No orders match the selected filters.</template>
-      <Column field="OrderNo"     header="Order No"  sortable style="width:150px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('OrderNo')" field="OrderNo"     header="Order No"  sortable style="width:150px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
           <Select v-model="filterModel.value" :options="columnOptions.OrderNo" filter show-clear editable :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search no" aria-label="Filter No" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="ContactName" header="Contact Name" sortable style="min-width:200px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('ContactName')" field="ContactName" header="Contact Name" sortable style="min-width:200px" :showFilterMenu="false">
         <template #body="{ data }">{{ data.ContactName || '—' }}</template>
         <template #filter="{ filterModel, filterCallback }">
           <Select v-model="filterModel.value" :options="columnOptions.ContactName" filter show-clear editable :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search contact" aria-label="Filter contact name" style="width:100%;min-width:180px" />
         </template>
       </Column>
-      <Column field="ShopCode"    header="Shop"      sortable style="width:90px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('ShopCode')" field="ShopCode"    header="Shop"      sortable style="width:90px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
           <Select v-model="filterModel.value" :options="columnOptions.ShopCode" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search shop" aria-label="Filter Shop" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="CashierName" header="Cashier"   sortable style="min-width:130px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('CashierName')" field="CashierName" header="Cashier"   sortable style="min-width:130px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }">
           <Select v-model="filterModel.value" :options="columnOptions.CashierName" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search cashier" aria-label="Filter Cashier" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="LineCount" header="Lines" sortable style="min-width:120px;text-align:right" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('PaymentMethods')" field="PaymentMethods" header="Payment method" sortable style="min-width:190px" :showFilterMenu="false">
+        <template #body="{data}">{{ data.PaymentMethods || '—' }}</template>
+        <template #filter="{filterModel,filterCallback}"><Select v-model="filterModel.value" :options="paymentMethodOptions" filter editable show-clear placeholder="Search payment method" aria-label="Filter payment method" fluid @change="filterCallback()" /></template>
+      </Column>
+      <Column v-if="visibleColumns.includes('LineCount')" field="LineCount" header="Lines" sortable style="min-width:120px;text-align:right" :showFilterMenu="false">
         <template #filter="{filterModel,filterCallback}"><InputNumber v-model="filterModel.value" :maxFractionDigits="0" :min="0" fluid placeholder="Equals" aria-label="Filter line count" @update:modelValue="filterCallback()" /></template>
       </Column>
-      <Column field="TotalAmount" header="Total" sortable style="min-width:160px;text-align:right" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('TotalAmount')" field="TotalAmount" header="Total" sortable style="min-width:160px;text-align:right" :showFilterMenu="false">
         <template #filter="{filterModel,filterCallback}"><InputNumber v-model="filterModel.value" :maxFractionDigits="2" fluid placeholder="Equals" aria-label="Filter total amount" @update:modelValue="filterCallback()" /></template>
         <template #body="{ data }">{{ fmt(data.TotalAmount) }}</template>
       </Column>
-      <Column field="Status" header="Status" sortable style="width:110px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('Status')" field="Status" header="Status" sortable style="width:110px" :showFilterMenu="false">
         <template #body="{ data }">
           <Tag :value="data.Status" :severity="statusSeverity(data.Status)" />
         </template>
@@ -69,18 +94,13 @@
           <Select v-model="filterModel.value" :options="columnOptions.Status" filter show-clear :virtualScrollerOptions="{itemSize:38}" @change="filterCallback()" placeholder="Search status" aria-label="Filter Status" style="width:100%;min-width:150px" />
         </template>
       </Column>
-      <Column field="CreatedAt" filterField="CreatedDate" header="Created" sortable style="min-width:160px" :showFilterMenu="false">
+      <Column v-if="visibleColumns.includes('CreatedAt')" field="CreatedAt" filterField="CreatedDate" header="Created" sortable style="min-width:160px" :showFilterMenu="false">
         <template #filter="{filterModel,filterCallback}"><InputText v-model="filterModel.value" type="date" aria-label="Filter created date (Nairobi)" @change="filterCallback()" /></template>
         <template #body="{ data }">{{ fmtTime(data.CreatedAt) }}</template>
       </Column>
-      <Column field="Label" header="Label" style="min-width:180px" :showFilterMenu="false">
-        <template #filter="{filterModel,filterCallback}"><Select v-model="filterModel.value" :options="columnOptions.Label" editable filter show-clear placeholder="Search label" aria-label="Filter label" fluid @change="filterCallback()" /></template>
-        <template #body="{ data }">
-          <span v-if="data.Label" class="cart-label">{{ data.Label }}</span>
-        </template>
-      </Column>
+
       <!-- Quick actions: resume / checkout / complete / sign / view PDF / reprint -->
-      <Column header="Actions" style="width:300px">
+      <Column v-if="visibleColumns.includes('Actions')" header="Actions" style="width:300px">
         <template #body="{ data }">
           <div class="row-actions">
             <Button
@@ -101,13 +121,7 @@
               v-tooltip.top="'Checkout here (select payment method)'"
               @click.stop="openCheckoutFlow(data)"
             />
-            <Button
-              v-if="data.Status === 'open' || data.Status === 'checkout'"
-              icon="pi pi-check" size="small" severity="success" text rounded
-              v-tooltip.top="'Quick complete (no payment selection)'"
-              :loading="completing[data.OrderId]"
-              @click.stop="quickComplete(data)"
-            />
+
             <Button
               v-if="data.Status === 'paid' && !data.EtimsInvoiceNo"
               icon="pi pi-shield" size="small" severity="warn" text rounded
@@ -151,6 +165,7 @@
         </template>
       </Column>
     </DataTable>
+    </template>
 
     <!-- PDF preview modal -->
     <PdfPreviewModal
@@ -296,11 +311,11 @@
         <Button label="Close" text @click="detailVisible = false" />
         <Button
           v-if="selectedOrder?.status === 'open' || selectedOrder?.status === 'checkout'"
-          label="Mark as Complete"
+          label="Checkout — select payment"
           icon="pi pi-check"
           severity="success"
           :loading="completing[selectedOrder?.orderId]"
-          @click="quickComplete(selectedOrder, true)"
+          @click="detailVisible=false;openCheckoutFlow({OrderId:selectedOrder.orderId})"
         />
       </template>
     </Dialog>
@@ -335,7 +350,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import {roundShillings} from '../../../shared/posCurrency.mjs'
+import { ref, reactive, computed, onMounted, watch, defineAsyncComponent } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -344,25 +360,48 @@ import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
+import MultiSelect from 'primevue/multiselect'
 import InputNumber from 'primevue/inputnumber'
-import { posApi, posSetupApi } from '@/services/pos.js'
+import api from '@/services/api.js'
+import { posApi, posSetupApi, posReportsApi } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
 import PdfPreviewModal from '@/components/PdfPreviewModal.vue'
 
+const PosOrderReport=defineAsyncComponent(()=>import('@/components/PosOrderReport.vue'))
+const analysisView=ref(false)
 const auth = useAuthStore()
+const displayColumns=[{'field': 'OrderNo', 'label': 'Order No'}, {'field': 'ContactName', 'label': 'Contact Name'}, {'field': 'ShopCode', 'label': 'Shop'}, {'field': 'CashierName', 'label': 'Cashier'}, {'field': 'PaymentMethods', 'label': 'Payment method'}, {'field': 'LineCount', 'label': 'Lines'}, {'field': 'TotalAmount', 'label': 'Total'}, {'field': 'Status', 'label': 'Status'}, {'field': 'CreatedAt', 'label': 'Created'}, {'field': 'Actions', 'label': 'Actions'}]
+const columnsKey=`pos-order-columns:${auth.user?.userId||'default'}`
+const visibleColumns=ref(displayColumns.map(c=>c.field))
+try{const saved=JSON.parse(localStorage.getItem(columnsKey));if(Array.isArray(saved))visibleColumns.value=saved.filter(f=>displayColumns.some(c=>c.field===f))}catch{}
+watch(visibleColumns,fields=>{
+ try{localStorage.setItem(columnsKey,JSON.stringify(fields))}catch{}
+ for(const column of displayColumns){const key=column.field==='CreatedAt'?'CreatedDate':column.field;if(!fields.includes(column.field)&&orderFilters.value[key])orderFilters.value[key].value=null}
+})
 const isAdmin = computed(() => auth.user?.role === 'admin')
 const isManager = computed(() => ['admin', 'shop-admin', 'sales-admin'].includes(auth.user?.role))
 const orders        = ref([])
+const today=new Date(Date.now()+3*3600000).toISOString().slice(0,10),dateFrom=ref(today),dateTo=ref(today),reportShop=ref(null),reportShops=ref([]),exportRows=ref(null),loadedRange=ref({})
+const paymentStats=computed(()=>{
+ const result={paid:{count:0,total:0},unpaid:{count:0,total:0}};
+ for(const order of exportRows.value??orders.value){
+  const status=String(order.Status||'').toLowerCase();
+  const bucket=status==='paid'?result.paid:['open','saved','checkout'].includes(status)?result.unpaid:null;
+  if(bucket){bucket.count++;bucket.total+=Number(order.TotalAmount)||0}
+ }
+ return result;
+})
 const makeOrderFilters=()=>({
   global:{value:null,matchMode:'contains'},OrderNo:{value:null,matchMode:'contains'},
-  ContactName:{value:null,matchMode:'contains'},
+  ContactName:{value:null,matchMode:'contains'},PaymentMethods:{value:null,matchMode:'contains'},
   ShopCode:{value:null,matchMode:'equals'},CashierName:{value:null,matchMode:'equals'},
-  Status:{value:null,matchMode:'equals'},Label:{value:null,matchMode:'contains'},
+  Status:{value:null,matchMode:'equals'},
   LineCount:{value:null,matchMode:'equals'},TotalAmount:{value:null,matchMode:'equals'},
   CreatedDate:{value:null,matchMode:'equals'},
 })
 const orderFilters=ref(makeOrderFilters())
-const columnOptions=computed(()=>Object.fromEntries(['OrderNo','ContactName','ShopCode','CashierName','Status','Label'].map(field=>[field,[...new Set(orders.value.map(o=>o[field]).filter(v=>v!=null&&v!==''))].sort((a,b)=>String(a).localeCompare(String(b)))])))
+const columnOptions=computed(()=>Object.fromEntries(['OrderNo','ContactName','ShopCode','CashierName','Status'].map(field=>[field,[...new Set(orders.value.map(o=>o[field]).filter(v=>v!=null&&v!==''))].sort((a,b)=>String(a).localeCompare(String(b)))])))
+const paymentMethodOptions=computed(()=>[...new Set(orders.value.flatMap(o=>(o.PaymentMethods||'').split(', ').filter(Boolean)))].sort((a,b)=>a.localeCompare(b)))
 const createdDate=value=>value?new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Nairobi',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):''
 
 const loading       = ref(false)
@@ -386,7 +425,11 @@ const creditMemo = reactive({
 async function load() {
   loading.value = true; error.value = ''
   try {
-    const { data } = await posApi.listOrders()
+    if(!reportShop.value)throw new Error('No assigned reporting shop is available. Ask an administrator to check your shop assignment.');
+    if(!dateFrom.value||!dateTo.value||dateFrom.value>dateTo.value)throw new Error('Select a valid date range');
+    const params={dateFrom:dateFrom.value,dateTo:dateTo.value,shopCode:reportShop.value||undefined};
+    const { data } = await (isManager.value&&reportShop.value==='__ALL__'?posReportsApi.orders({dateFrom:dateFrom.value,dateTo:dateTo.value}):posApi.listOrders(params));loadedRange.value={...params,shopCode:reportShop.value==='__ALL__'?'All shops':reportShop.value}
+    exportRows.value=null;
     orders.value = data.map(row=>({...row,CreatedDate:createdDate(row.CreatedAt)}))
   } catch (e) {
     error.value = e.message
@@ -570,13 +613,11 @@ async function openCheckoutFlow(row) {
   checkoutFlow.error = ''
   checkoutFlow.stkResult = null
   try {
-    const [{ data: order }, { data: pts }] = await Promise.all([
-      posApi.getOrder(id),
-      posApi.getPaymentTypes(),
-    ])
-    checkoutFlow.order        = order
+    const {data:order}=await posApi.getOrder(id)
+    const {data:pts}=await posApi.getPaymentTypes(order.shopCode)
+    checkoutFlow.order        = {...order,totalAmount:roundShillings(order.totalAmount)}
     checkoutFlow.paymentTypes = pts
-    checkoutFlow.payType      = pts[0] ?? null
+    checkoutFlow.payType      = null
     checkoutFlow.mobileNo     = order.contactPhone || ''
     checkoutFlow.visible      = true
   } catch (e) {
@@ -637,24 +678,17 @@ function payTypeIcon(cls) {
   return map[cls] ?? 'pi pi-wallet'
 }
 
-async function quickComplete(rowOrOrder, fromDialog = false) {
-  const id = rowOrOrder.OrderId || rowOrOrder.orderId
-  completing[id] = true
-  error.value = ''
-  try {
-    await posApi.completeOrder(id)
-    await load()
-    if (fromDialog) {
-      detailVisible.value = false
-    }
-  } catch (e) {
-    error.value = e.response?.data?.error ?? e.message
-  } finally {
-    completing[id] = false
-  }
-}
 
-onMounted(() => { load(); loadPrintSvcCfg() })
+async function loadReportShops(){
+ try{const {data}=await (isManager.value?api.get('/pos/reports/shops'):posApi.listMyShops());reportShops.value=(Array.isArray(data)?data:data.shops||[]).map(s=>({code:s.Code||s.code||s.shopCode,label:`${s.Code||s.code||s.shopCode} - ${s.Name||s.name||s.shopName||''}`}));if(isManager.value){reportShops.value.unshift({code:'__ALL__',label:'All shops'});reportShop.value='__ALL__'}else reportShop.value=reportShops.value[0]?.code||null}catch(e){error.value=e.response?.data?.error||e.message}
+}
+async function exportOrders(kind){
+ const fields=['OrderNo','ShopCode','ContactName','CashierName','PaymentMethods','Status','CreatedDate','LineCount','TotalAmount'],rows=exportRows.value??orders.value;
+ const body=rows.map(r=>fields.map(k=>r[k]??'')),range=loadedRange.value;
+ if(kind==='excel'){const XLSX=await import('xlsx');const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['From',range.dateFrom,'To',range.dateTo],fields,...body]),'Orders');XLSX.writeFile(wb,'pos-orders.xlsx')}
+ else{const {jsPDF}=await import('jspdf');await import('jspdf-autotable');const pdf=new jsPDF('l','mm','a4');pdf.text(`POS orders: ${range.dateFrom} - ${range.dateTo}`,14,14);pdf.autoTable({head:[fields],body,startY:22,styles:{fontSize:8}});pdf.save('pos-orders.pdf')}
+}
+onMounted(async () => { await loadReportShops();if(reportShop.value)load();else if(!error.value)error.value='No assigned reporting shop is available. Ask an administrator to check your shop assignment.'; loadPrintSvcCfg() })
 
 function statusSeverity(s) {
   return { open: 'info', checkout: 'warn', paid: 'success', cancelled: 'secondary' }[s] ?? 'secondary'
@@ -669,6 +703,10 @@ function fmtTime(v) {
 </script>
 
 <style scoped>
+.list-search{margin-bottom:18px}.orders-view-toggle{display:flex;flex-wrap:wrap;gap:14px 8px;margin-bottom:18px}
+
+.payment-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 6px}.payment-stat{display:grid;gap:4px;padding:10px 12px;border-radius:8px;color:#fff}.payment-stat strong{font-size:1.05rem}.payment-stat.paid{background:#115e59}.payment-stat.unpaid{background:#854d0e}@media(max-width:380px){.payment-stats{grid-template-columns:1fr}}
+
 .pos-orders-page { padding: 16px 20px; }
 .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
 .page-title { font-size:20px; font-weight:700; margin:0 0 2px; }

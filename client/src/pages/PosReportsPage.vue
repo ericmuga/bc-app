@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2 class="page-title">POS Reports</h2>
-        <p class="text-muted text-sm">Pick a report, set the period, and run. Each report can be exported to Excel (CSV) or PDF.</p>
+        <p class="text-muted text-sm">Pick a report, set the period, and run. Export reports to Excel or PDF; some existing reports use CSV.</p>
       </div>
     </div>
 
@@ -29,20 +29,20 @@
         <div class="filters">
           <div class="filter-field"><label>From</label><DatePicker v-model="dateFrom" date-format="yy-mm-dd" /></div>
           <div class="filter-field"><label>To</label>  <DatePicker v-model="dateTo"   date-format="yy-mm-dd" /></div>
-          <div v-if="isMgr" class="filter-field" style="min-width:210px">
+          <div class="filter-field" style="min-width:210px">
             <label>Shop</label>
             <Select v-model="selectedShop" :options="shopOptions" optionLabel="label" optionValue="code"
-                    placeholder="All shops" showClear filter :filterFields="['code','name']" />
+                    :placeholder="isMgr?'All shops':'Select shop'" :showClear="isMgr" filter :filterFields="['code','name','label']" />
           </div>
           <div v-if="tab === 'stockPosition'" class="filter-field" style="min-width:160px">
             <label>Item No (optional)</label>
             <InputText v-model="itemNo" placeholder="Drill into one item" />
           </div>
           <Button label="Run" icon="pi pi-play" @click="run" :loading="loading" />
-          <Button label="Excel" icon="pi pi-file-excel" severity="secondary"
-                  :disabled="!rows.length" :loading="exporting" @click="downloadCsv" />
-          <Button label="PDF" icon="pi pi-file-pdf" severity="secondary"
-                  :disabled="!rows.length" @click="downloadPdf" />
+          <Button v-if="tab!=='salesOrders'" label="Excel" icon="pi pi-file-excel" severity="secondary"
+                  :disabled="loading || (!rows.length && !cashRows.length)" :loading="exporting" @click="downloadCsv" />
+          <Button v-if="tab!=='salesOrders'" label="PDF" icon="pi pi-file-pdf" severity="secondary"
+                  :disabled="loading || (!rows.length && !cashRows.length)" @click="downloadPdf" />
           <template v-if="tab === 'stockPosition' && canOperateStock">
             <span class="stk-sep" />
             <Button label="Stock template" icon="pi pi-download" severity="secondary" :loading="stkBusy" @click="exportStockTemplate" v-tooltip="'Export current on-hand as an Excel template'" />
@@ -53,6 +53,8 @@
           </template>
         </div>
 
+        <PosOrderReport v-if="tab==='salesOrders'" :rows="rows" :loading="loading" :range="reportSnapshot" />
+        <div v-if="tab!=='salesOrders' && rows.length" class="totals-row"><span>Rows: <strong>{{ rows.length }}</strong></span><span v-for="t in totals" :key="t.label">{{ t.label }}: <strong>{{ fmt2(t.value) }}</strong></span></div>
         <!-- Daily sales: per-mirror (per-company) breakdown + total -->
         <div v-if="tab === 'dailySales' && byCompany.length" class="mirror-card">
           <div class="chart-title">Sold per mirror{{ selectedShop ? ' — shop ' + selectedShop : ' — all shops' }}</div>
@@ -63,9 +65,7 @@
                 <td>{{ c.company }}</td><td class="r">{{ c.orders }}</td><td class="r">{{ fmt2(c.amount) }}</td>
               </tr>
             </tbody>
-            <tfoot v-if="byCompanyTotal"><tr>
-              <td>Total</td><td class="r">{{ byCompanyTotal.orders }}</td><td class="r">{{ fmt2(byCompanyTotal.amount) }}</td>
-            </tr></tfoot>
+
           </table>
         </div>
 
@@ -85,7 +85,7 @@
           </svg>
         </div>
 
-        <DataTable :value="rows" size="small" :loading="loading" responsive-layout="scroll" :paginator="true" :rows="50"
+        <DataTable v-if="tab!=='salesOrders'" :value="rows" size="small" :loading="loading" responsive-layout="scroll" :paginator="true" :rows="50"
                    v-model:filters="colFilters" filterDisplay="row" :globalFilterFields="columns.map(c => c.field)" removableSort>
           <Column v-for="c in columns" :key="c.field" :field="c.field" :header="c.header"
                   :style="c.style || ''" sortable :showFilterMenu="false">
@@ -99,13 +99,14 @@
               <InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Filter" style="width:100%;min-width:70px" />
             </template>
           </Column>
-          <template #footer>
-            <div v-if="rows.length" class="totals-row">
-              <span>Rows: <strong>{{ rows.length }}</strong></span>
-              <span v-for="t in totals" :key="t.label">{{ t.label }}: <strong>{{ Number(t.value || 0).toFixed(2) }}</strong></span>
-            </div>
-          </template>
+
         </DataTable>
+        <section v-if="tab==='stockCash'">
+          <h3>Cash reconciliation by payment method</h3>
+          <p>Till sessions opened in the selected period. Undeclared sessions have no final declared total or variance. Stock follows the stock report's shared location/mirror rules.</p>
+          <DataTable :value="cashRows" scrollable><Column v-for="field in cashColumns" :key="field" :field="field" :header="cashLabels[field]" sortable /></DataTable>
+        </section>
+
       </section>
     </div>
   </div>
@@ -114,7 +115,7 @@
 <script setup>
 import { hasReportRole, POS_REPORT_ALL_SHOPS_ROLES } from "../../../shared/reportAccess.mjs"
 import api from "@/services/api.js"
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, defineAsyncComponent } from 'vue'
 import Button       from 'primevue/button'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
@@ -129,6 +130,7 @@ import { jsPDF }         from 'jspdf'
 import 'jspdf-autotable'
 import * as XLSX         from 'xlsx'
 
+const PosOrderReport=defineAsyncComponent(()=>import('@/components/PosOrderReport.vue'))
 const toast = useToast()
 const stkFile = ref(null)
 const stkBusy = ref(false)
@@ -142,8 +144,11 @@ const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
 const dateFrom   = ref(monthStart)
 const dateTo     = ref(today)
 const itemNo     = ref('')
-const tab        = ref('stockPosition')
+const tab        = ref('salesOrders')
 const rows       = ref([])
+const cashRows=ref([]),reportSnapshot=ref(null)
+const cashColumns=['shopCode','paymentTypeCode','paymentTypeName','opening','sales','cashIn','cashOut','expected','declared','variance','undeclaredSessions']
+const cashLabels={shopCode:'Shop',paymentTypeCode:'Method code',paymentTypeName:'Payment method',opening:'Opening',sales:'Sales',cashIn:'Cash in',cashOut:'Cash out',expected:'Expected',declared:'Declared',variance:'Variance',undeclaredSessions:'Undeclared sessions'}
 // Manager shop filter (admin/shop-admin); shop users are locked to their shop server-side.
 const shopOptions   = ref([])
 const selectedShop  = ref('')
@@ -157,6 +162,8 @@ const error      = ref('')
 
 const reports = computed(() => {
   const list = [
+    {key:'salesOrders',icon:'pi pi-list',label:'Sales orders & analysis',desc:'Filter orders and group sales'},
+    {key:'stockCash',icon:'pi pi-wallet',label:'Stock and cash reconciliation',desc:'In-stock items and payment reconciliation'},
     { key: 'dailySales',     icon: 'pi pi-receipt',      label: 'Daily sales',     desc: 'All paid orders in the period, with a total' },
     { key: 'stockPosition',  icon: 'pi pi-box',          label: 'Stock position',  desc: 'Opening + entry-type movements + closing' },
     { key: 'salesByItem',    icon: 'pi pi-shopping-bag', label: 'Sales by item',   desc: 'POS + manual sales unioned, by item' },
@@ -169,6 +176,7 @@ const reports = computed(() => {
 
 const columns = computed(() => {
   switch (tab.value) {
+    case 'salesOrders': return ['OrderNo','ShopCode','ContactName','CashierName','Status','CreatedAt','LineCount','TotalAmount'].map(field=>({field,header:field,format:field==='TotalAmount'?'num':null}))
     case 'dailySales':
       return [
         { field: 'saleDate',       header: 'Date',      style: 'width:100px' },
@@ -180,6 +188,7 @@ const columns = computed(() => {
         { field: 'etimsInvoiceNo', header: 'eTIMS Inv', style: 'min-width:150px' },
         { field: 'totalAmount',    header: 'Amount',    style: 'width:130px;text-align:right', format: 'numStrong' },
       ]
+    case 'stockCash':
     case 'stockPosition':
       return [
         { field: 'itemNo',      header: 'Item No',      style: 'width:120px' },
@@ -249,7 +258,7 @@ watch(columns, (cols) => {
 }, { immediate: true })
 
 const totals = computed(() => {
-  if (!rows.value.length) return []
+  if (!rows.value.length && !cashRows.value.length) return []
   switch (tab.value) {
     case 'dailySales':
       return [{ label: 'Total Sales', value: rows.value.reduce((s, r) => s + Number(r.totalAmount || 0), 0) }]
@@ -261,6 +270,7 @@ const totals = computed(() => {
     case 'salesByContact':
     case 'shopComparison':
       return [{ label: 'Total Value', value: rows.value.reduce((s, r) => s + Number(r.value || 0), 0) }]
+    case 'stockCash':
     case 'stockPosition':
       return [
         { label: 'Total Sales', value: rows.value.reduce((s, r) => s + Number(r.sales || 0), 0) },
@@ -277,6 +287,7 @@ const colors = ['#2563eb','#0f7173','#15803d','#9333ea','#ea580c','#0891b2','#65
 
 const chartConfig = computed(() => {
   switch (tab.value) {
+    case 'stockCash':
     case 'stockPosition':  return { title: 'Top items by closing stock', valueField: 'closing', labelField: 'description' }
     case 'salesByItem':    return { title: 'Top items by sales value',   valueField: 'value',   labelField: 'description' }
     case 'salesByContact': return { title: 'Top contacts by value',      valueField: 'value',   labelField: 'contactName' }
@@ -309,7 +320,7 @@ const chartBars = computed(() => {
   })
 })
 
-function setTab(k) { tab.value = k; rows.value = [] }
+function setTab(k) { if(loading.value)return; tab.value = k; rows.value = [];cashRows.value=[];reportSnapshot.value=null }
 
 function isoDate(d) {
   if (!d) return null; if (typeof d === 'string') return d
@@ -319,14 +330,17 @@ function commonParams() {
   const p = { dateFrom: isoDate(dateFrom.value), dateTo: isoDate(dateTo.value) }
   if (tab.value === 'stockPosition' && itemNo.value.trim()) p.itemNo = itemNo.value.trim().toUpperCase()
   // Managers can scope by shop (empty = all shops). Shop users are locked server-side.
-  if (isMgr.value && selectedShop.value) p.shopCode = selectedShop.value
+  if (selectedShop.value) p.shopCode = selectedShop.value
   return p
 }
 
 async function run() {
-  loading.value = true; error.value = ''; rows.value = []; byCompany.value = []; byCompanyTotal.value = null
+  if(loading.value)return
+  loading.value = true; error.value = ''; rows.value = [];cashRows.value=[];reportSnapshot.value=null; byCompany.value = []; byCompanyTotal.value = null
   try {
     const fn = {
+      stockCash: posReportsApi.stockCash,
+      salesOrders: posReportsApi.orders,
       dailySales:     posReportsApi.dailySales,
       stockPosition:  posReportsApi.stockPosition,
       salesByItem:    posReportsApi.salesByItem,
@@ -334,7 +348,8 @@ async function run() {
       shopComparison: posReportsApi.shopComparison,
       cashMovement:   posReportsApi.cashMovement,
     }[tab.value]
-    const { data } = await fn(commonParams())
+    const params=commonParams();if(params.dateFrom>params.dateTo)throw new Error('Check the date range');
+    const { data } = await fn(params);reportSnapshot.value={...params,shopCode:data.shopCode||params.shopCode||'Assigned/all authorized shops'};cashRows.value=data.cash||[]
     // cashMovement returns { rows, sessions, totals } — others return arrays directly
     rows.value = Array.isArray(data) ? data : (data?.rows || [])
     // Daily sales also returns a per-mirror (per-company) breakdown + total.
@@ -346,9 +361,16 @@ async function run() {
 }
 
 async function downloadCsv() {
+  if(['stockCash','salesOrders'].includes(tab.value)){
+   const wb=XLSX.utils.book_new(),meta=reportSnapshot.value||{};
+   const aoa=[['Shop',meta.shopCode],['From',meta.dateFrom,'To',meta.dateTo],[],columns.value.map(c=>c.header),...rows.value.map(r=>columns.value.map(c=>r[c.field]??''))];
+   if(tab.value==='stockCash')aoa.push([],['Cash reconciliation by payment method (till sessions opened in period)'],cashColumns.map(k=>cashLabels[k]),...cashRows.value.map(r=>cashColumns.map(k=>r[k]??'')));
+   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(aoa),'Report');XLSX.writeFile(wb,`${tab.value}-${meta.dateFrom}_${meta.dateTo}.xlsx`);return
+  }
+
   // Daily sales has no server CSV endpoint — build the Excel client-side with a total row.
   if (tab.value === 'dailySales') {
-    if (!rows.value.length) return
+    if (!rows.value.length && !cashRows.value.length) return
     const heads = columns.value.map(c => c.header)
     const aoa = [heads, ...rows.value.map(r => columns.value.map(c => r[c.field] ?? ''))]
     aoa.push([]); aoa.push(['', '', '', '', '', '', 'TOTAL', totals.value[0]?.value ?? 0])
@@ -381,27 +403,28 @@ async function downloadCsv() {
 }
 
 function downloadPdf() {
-  if (!rows.value.length) return
+  if (!rows.value.length && !cashRows.value.length) return
   const pdf = new jsPDF('l', 'mm', 'a4')
-  const slug = { dailySales: 'Daily Sales Summary', stockPosition: 'Stock Position', salesByItem: 'Sales by Item',
+  const slug = {stockCash:'Stock and Cash Reconciliation',salesOrders:'Sales Orders', dailySales: 'Daily Sales Summary', stockPosition: 'Stock Position', salesByItem: 'Sales by Item',
                  salesByContact: 'Sales by Contact', shopComparison: 'Shop Comparison',
                  cashMovement: 'Cash Movement' }[tab.value]
   pdf.setFontSize(14); pdf.text(slug, 14, 14)
-  pdf.setFontSize(10); pdf.text(`Period: ${commonParams().dateFrom} → ${commonParams().dateTo}`, 14, 21)
+  pdf.setFontSize(10); pdf.text(`Period: ${(reportSnapshot.value||commonParams()).dateFrom} - ${(reportSnapshot.value||commonParams()).dateTo} | Shop: ${reportSnapshot.value?.shopCode||selectedShop.value||"Assigned shop"}`, 14, 21)
   const head = [columns.value.map(c => c.header)]
   const body = rows.value.map(r => columns.value.map(c =>
     c.format === 'kg' ? (r[c.field] == null ? '—' : Number(r[c.field]).toFixed(3))
     : (c.format === 'num' || c.format === 'numStrong') ? Number(r[c.field] || 0).toFixed(2)
     : (r[c.field] ?? '')
   ))
-  pdf.autoTable({ head, body, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
-  // Sum(s) at the bottom.
-  if (totals.value.length) {
-    let ty = (pdf.lastAutoTable?.finalY || 26) + 8
-    pdf.setFontSize(11); pdf.setFont('helvetica', 'bold')
-    totals.value.forEach(t => { pdf.text(`${t.label}: ${Number(t.value || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 14, ty); ty += 6 })
+  let tableStart=26
+  for(const t of totals.value){pdf.text(`${t.label}: ${fmt2(t.value)}`,14,tableStart);tableStart+=6}
+  pdf.autoTable({ head, body, startY: tableStart+2, styles: { fontSize: 8 }, headStyles: { fillColor: [15, 113, 115] } })
+  if(tab.value==='stockCash'){
+    pdf.addPage();pdf.text('Cash reconciliation by payment method',14,14);
+    pdf.setFontSize(9);pdf.text('Till sessions opened in period; undeclared sessions have no final variance.',14,21);
+    pdf.autoTable({head:[cashColumns.map(k=>cashLabels[k])],body:cashRows.value.map(r=>cashColumns.map(k=>r[k]??'')),startY:26,styles:{fontSize:8}});
   }
-  pdf.save(`${slug.toLowerCase().replace(/\s+/g, '-')}-${commonParams().dateFrom}_${commonParams().dateTo}.pdf`)
+  pdf.save(`${slug.toLowerCase().replace(/\s+/g, '-')}-${(reportSnapshot.value||commonParams()).dateFrom}_${(reportSnapshot.value||commonParams()).dateTo}.pdf`)
 }
 
 // ── BC Sales export (paid POS invoice lines → Imported SalesAL schema) ────────
@@ -513,15 +536,15 @@ async function printStockSheet(format) {
 }
 
 async function loadShops() {
-  if (!isMgr.value) return
   try {
-    const { data } = await api.get('/pos/reports/shops')
+    const { data } = await api.get(isMgr.value?'/pos/reports/shops':'/pos/my-shops')
     const list = Array.isArray(data) ? data : (data?.rows || data?.shops || [])
     shopOptions.value = list.map((s) => {
       const code = s.Code || s.code || s.shopCode
       const name = s.Name || s.name || ''
       return { code, name, label: name ? `${code} — ${name}` : code }
     }).filter((s) => s.code)
+    if(!isMgr.value)selectedShop.value=shopOptions.value[0]?.code||''
   } catch { /* non-fatal — dropdown just stays empty */ }
 }
 
@@ -536,12 +559,12 @@ onMounted(async () => { await loadShops(); await run() })
 .text-sm      { font-size:13px; }
 .mb-3         { margin-bottom:12px; }
 
-.reports-layout { display:grid; grid-template-columns: 240px 1fr; gap:16px; }
+.reports-layout { display:grid; grid-template-columns: 190px minmax(0,1fr); gap:16px; }
 @media (max-width: 720px) { .reports-layout { grid-template-columns: 1fr; } }
 
 .reports-side { display:flex; flex-direction:column; gap:6px; }
 .report-tab {
-  display:flex; gap:10px; padding:10px 12px; border-radius:8px;
+  display:flex; gap:8px; padding:7px 9px; border-radius:8px;
   background:#1f2937; border:1px solid #374151; cursor:pointer; transition: background 0.15s; color:#e5e7eb;
 }
 .report-tab .pi { font-size:18px; color:#2dd4bf; }
@@ -581,4 +604,6 @@ onMounted(async () => { await loadShops(); await run() })
 .reports-page :deep(.p-datatable-tbody > tr:hover > td) { background:#374151 !important; color:#fff !important; }
 .reports-page :deep(.p-paginator) { background:#1f2937 !important; color:#e5e7eb !important; }
 .totals-row { background:#111827; color:#e5e7eb; }
+.reports-page{min-width:0}.reports-side{min-width:0}.reports-main :deep(.p-datatable-table-container){overflow-x:auto}.totals-row{padding:6px 10px;font-size:12px}
+@media(max-width:720px){.reports-page{padding:10px}.reports-side{flex-direction:row;overflow-x:auto;padding-bottom:5px}.report-tab{flex:0 0 auto;min-height:44px;align-items:center}.report-desc{display:none}.filters{gap:8px}.filter-field{flex:1 1 140px;min-width:0!important}.filters :deep(input){width:100%;font-size:16px}.mirror-card{overflow-x:auto}}
 </style>
