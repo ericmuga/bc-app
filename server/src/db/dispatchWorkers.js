@@ -5,6 +5,7 @@ export async function migrateDispatchWorkers(pool){
  PasscodeHash nvarchar(100) NOT NULL,Assembly bit NOT NULL,Packing bit NOT NULL,Loading bit NOT NULL,
  Active bit NOT NULL DEFAULT 1,Version int NOT NULL DEFAULT 1,FailedAttempts int NOT NULL DEFAULT 0,LockedUntil datetime2 NULL,
  UpdatedBy nvarchar(100) NOT NULL,UpdatedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME());
+ IF COL_LENGTH('dbo.DispatchWorker','Stocktake') IS NULL ALTER TABLE dbo.DispatchWorker ADD Stocktake bit NOT NULL DEFAULT 0;
  IF OBJECT_ID('dbo.DispatchDelegation') IS NULL CREATE TABLE dbo.DispatchDelegation(
  DelegationId uniqueidentifier PRIMARY KEY DEFAULT NEWID(),TokenHash varchar(64) NOT NULL UNIQUE,
  WorkerId uniqueidentifier NOT NULL REFERENCES dbo.DispatchWorker(WorkerId),WorkerCode nvarchar(30) NOT NULL,WorkerName nvarchar(150) NOT NULL,

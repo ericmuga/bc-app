@@ -1,3 +1,4 @@
+import { migrateDispatchOffline } from './dispatchOffline.js';
 import {migrateDispatchWorkers} from './dispatchWorkers.js';
 import { migrateDispatchPackingV2 } from './dispatchPackingV2.js';
 import { migrateDispatchChillers } from './dispatchChillers.js';
@@ -1885,6 +1886,7 @@ async function down(companyId) {
     } else {
       for (const c of companies) await migrate(c);
       await migrateDispatchWorkers(await db.getPool());
+      await migrateDispatchOffline(await db.getPool());
       console.log('\nAll migrations complete.');
     }
   } catch (err) {

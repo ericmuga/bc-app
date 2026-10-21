@@ -1,5 +1,5 @@
-export const workerStages={assembly:'assembler',packing:'packer',loading:'loader'};
-const mainRoles={assembly:['admin','dispatch-supervisor','assembler','packer'],packing:['admin','dispatch-supervisor','packer','checker'],loading:['admin','dispatch-supervisor','loader']};
+export const workerStages={assembly:'assembler',packing:'packer',loading:'loader',stocktake:'assembler'};
+const mainRoles={assembly:['admin','dispatch-supervisor','assembler','packer'],packing:['admin','dispatch-supervisor','packer','checker'],loading:['admin','dispatch-supervisor','loader'],stocktake:['admin','dispatch-supervisor','chiller-attendant','assembler']};
 export function assertDelegateStage(user,stage){if(!mainRoles[stage]?.includes(user.role)||user.delegationId)throw new Error('Your main account cannot delegate this stage');}
 export function workerInput(body){
  const code=String(body.code||'').trim().toUpperCase(),name=String(body.name||'').trim();

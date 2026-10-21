@@ -3,7 +3,7 @@ import {createHash,randomBytes} from 'node:crypto';
 import {db,sql} from '../db/pool.js';
 import {assertDelegateStage,workerInput,workerStages} from '../services/dispatchWorkerPolicy.js';
 const hash=s=>createHash('sha256').update(s).digest('hex');
-export async function workers(){return (await(await db.getPool()).request().query('SELECT WorkerId,Code,Name,Assembly,Packing,Loading,Active,UpdatedAt FROM dbo.DispatchWorker ORDER BY Name')).recordset;}
+export async function workers(){return (await(await db.getPool()).request().query('SELECT WorkerId,Code,Name,Assembly,Packing,Loading,Stocktake,Active,UpdatedAt FROM dbo.DispatchWorker ORDER BY Name')).recordset;}
 export async function saveWorker(body,user){
  const clean=workerInput(body),id=body.workerId||null;
  if(!id&&!body.passcode)throw new Error('Set a passcode for the new worker');
@@ -11,16 +11,16 @@ export async function saveWorker(body,user){
  const result=await(await db.getPool()).request().input('id',sql.UniqueIdentifier,id).input('code',sql.NVarChar(30),clean.code)
  .input('name',sql.NVarChar(150),clean.name).input('password',sql.NVarChar(100),password)
  .input('assembly',sql.Bit,body.assembly===true).input('packing',sql.Bit,body.packing===true).input('loading',sql.Bit,body.loading===true)
- .input('active',sql.Bit,body.active!==false).input('user',sql.NVarChar(100),String(user.userId)).query(`
+ .input('stocktake',sql.Bit,body.stocktake===true).input('active',sql.Bit,body.active!==false).input('user',sql.NVarChar(100),String(user.userId)).query(`
  SET XACT_ABORT ON; BEGIN TRANSACTION;
- IF @id IS NULL BEGIN SET @id=NEWID(); INSERT dbo.DispatchWorker(WorkerId,Code,Name,PasscodeHash,Assembly,Packing,Loading,Active,UpdatedBy)
- VALUES(@id,@code,@name,@password,@assembly,@packing,@loading,@active,@user); END
+ IF @id IS NULL BEGIN SET @id=NEWID(); INSERT dbo.DispatchWorker(WorkerId,Code,Name,PasscodeHash,Assembly,Packing,Loading,Stocktake,Active,UpdatedBy)
+ VALUES(@id,@code,@name,@password,@assembly,@packing,@loading,@stocktake,@active,@user); END
  ELSE BEGIN IF EXISTS(SELECT 1 FROM dbo.DispatchWorker WHERE WorkerId=@id AND Code<>@code) THROW 50000,'Worker codes cannot be changed; deactivate and create a new worker',1;
- UPDATE dbo.DispatchWorker SET Name=@name,PasscodeHash=COALESCE(@password,PasscodeHash),Assembly=@assembly,Packing=@packing,Loading=@loading,
+ UPDATE dbo.DispatchWorker SET Name=@name,PasscodeHash=COALESCE(@password,PasscodeHash),Assembly=@assembly,Packing=@packing,Loading=@loading,Stocktake=@stocktake,
  Active=@active,Version=Version+1,FailedAttempts=0,LockedUntil=NULL,UpdatedBy=@user,UpdatedAt=SYSUTCDATETIME() WHERE WorkerId=@id;
  IF @@ROWCOUNT=0 THROW 50000,'Worker not found',1; END;
  INSERT dbo.DispatchActionAudit(Action,EntityId,UserId,Details) VALUES('dispatch-worker-setup',CONVERT(nvarchar(100),@id),@user,
- (SELECT @code Code,@name Name,@active Active,@assembly Assembly,@packing Packing,@loading Loading,CAST(CASE WHEN @password IS NULL THEN 0 ELSE 1 END AS bit) PasscodeReset FOR JSON PATH,WITHOUT_ARRAY_WRAPPER));
+ (SELECT @code Code,@name Name,@active Active,@assembly Assembly,@packing Packing,@loading Loading,@stocktake Stocktake,CAST(CASE WHEN @password IS NULL THEN 0 ELSE 1 END AS bit) PasscodeReset FOR JSON PATH,WITHOUT_ARRAY_WRAPPER));
  COMMIT; SELECT @id WorkerId;`);
  return result.recordset[0];
 }
@@ -32,7 +32,7 @@ export async function delegate(body,user){
  let committed=false;
  try{
  const row=(await new sql.Request(tx).input('code',sql.NVarChar(30),code).query('SELECT * FROM dbo.DispatchWorker WITH(UPDLOCK,HOLDLOCK) WHERE Code=@code')).recordset[0];
- const field={assembly:'Assembly',packing:'Packing',loading:'Loading'}[body.stage];
+ const field={assembly:'Assembly',packing:'Packing',loading:'Loading',stocktake:'Stocktake'}[body.stage];
  if(!row||!row.Active||!row[field]||row.LockedUntil&&new Date(row.LockedUntil)>new Date())throw new Error('Worker unavailable for this stage or temporarily locked');
  if(!await bcrypt.compare(String(body.passcode),row.PasscodeHash)){
   await new sql.Request(tx).input('id',sql.UniqueIdentifier,row.WorkerId).query('UPDATE dbo.DispatchWorker SET FailedAttempts=FailedAttempts+1,LockedUntil=CASE WHEN FailedAttempts>=4 THEN DATEADD(MINUTE,15,SYSUTCDATETIME()) ELSE NULL END WHERE WorkerId=@id');
@@ -67,3 +67,35 @@ export async function endDelegation(token,parent){
  return {ok:true};
 }
 export async function history(){return (await(await db.getPool()).request().query(`SELECT TOP(500) DelegationId,WorkerId,WorkerCode,WorkerName,ParentUserId,ParentName,Stage,StartedAt,ExpiresAt,EndedAt FROM dbo.DispatchDelegation ORDER BY StartedAt DESC`)).recordset;}
+
+export async function workerLogin(body){
+ const code=String(body.code||'').trim().toUpperCase();
+ const row=(await(await db.getPool()).request().input('code',sql.NVarChar(30),code).query('SELECT Assembly,Packing,Loading,Stocktake FROM dbo.DispatchWorker WHERE Code=@code')).recordset[0];
+ const stages=['assembly','packing','loading','stocktake'].filter(s=>row?.[{assembly:'Assembly',packing:'Packing',loading:'Loading',stocktake:'Stocktake'}[s]]);
+ const grant=await delegate({...body,stage:stages[0]||'assembly'},{userId:'worker-login',userName:'Direct worker login',role:'admin'});
+ return {grant,user:{userId:grant.workerId,userName:grant.name,workerCode:grant.code,role:'dispatch-worker',workerStages:stages}};
+}
+
+export async function changePasscode(user,body){
+ if(!user.workerLogin)throw new Error('Sign in as a subworker to change your passcode');
+ if(typeof body.currentPasscode!=='string'||!body.currentPasscode)throw new Error('Enter your current passcode');
+ if(typeof body.newPasscode!=='string'||!/^\d{6,12}$/.test(body.newPasscode))throw new Error('Use a new passcode of 6–12 digits');
+ if(body.newPasscode!==body.confirmPasscode)throw new Error('New passcodes do not match');
+ if(body.currentPasscode===body.newPasscode)throw new Error('Choose a different passcode');
+ const tx=new sql.Transaction(await db.getPool());await tx.begin();let committed=false;
+ try{
+  const request=()=>new sql.Request(tx).input('id',sql.UniqueIdentifier,user.userId);
+  const row=(await request().query('SELECT * FROM dbo.DispatchWorker WITH(UPDLOCK,HOLDLOCK) WHERE WorkerId=@id')).recordset[0];
+  if(!row?.Active||row.LockedUntil&&new Date(row.LockedUntil)>new Date())throw new Error('Worker unavailable or temporarily locked');
+  if(!await bcrypt.compare(body.currentPasscode,row.PasscodeHash)){
+   await request().query('UPDATE dbo.DispatchWorker SET FailedAttempts=FailedAttempts+1,LockedUntil=CASE WHEN FailedAttempts>=4 THEN DATEADD(MINUTE,15,SYSUTCDATETIME()) ELSE NULL END WHERE WorkerId=@id');
+   await tx.commit();committed=true;throw new Error('Current passcode is incorrect');
+  }
+  const password=await bcrypt.hash(body.newPasscode,12);
+  await request().input('password',sql.NVarChar(100),password).query(`UPDATE dbo.DispatchWorker SET PasscodeHash=@password,Version=Version+1,
+    FailedAttempts=0,LockedUntil=NULL,UpdatedBy=CONVERT(nvarchar(100),@id),UpdatedAt=SYSUTCDATETIME() WHERE WorkerId=@id;
+    UPDATE dbo.DispatchDelegation SET EndedAt=SYSUTCDATETIME() WHERE WorkerId=@id AND EndedAt IS NULL;
+    INSERT dbo.DispatchActionAudit(Action,EntityId,UserId,Details) VALUES('worker-passcode-change',CONVERT(nvarchar(100),@id),CONVERT(nvarchar(100),@id),'{}');`);
+  await tx.commit();committed=true;return {ok:true};
+ }catch(e){if(!committed)await tx.rollback();throw e;}
+}

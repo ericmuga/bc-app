@@ -1,4 +1,5 @@
 import { REPORT_GROUPS, reportGroupsForRole } from '../../../shared/reportAccess.mjs'
+import {workerLanding, workerRoutes} from '../../../shared/dispatchWorkerRoutes.mjs'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.js'
 import { canAccessInvoices, canAccessOrders, canAccessReports, normalizeRole, ROLES } from '@/lib/access.js'
@@ -43,7 +44,10 @@ const routes = [
     component: () => import('@/components/base/AppShell.vue'),
     children: [
       { path: 'analytics', name: 'Analytics', component: () => import('@/pages/AnalyticsPage.vue') },
-      { path: '', redirect: () => defaultRouteForRole(useAuthStore().effectiveRole) },
+      { path: '', redirect: () => {
+        const auth=useAuthStore()
+        return auth.user?.role==='dispatch-worker' ? workerLanding(auth.user) : defaultRouteForRole(auth.effectiveRole)
+      } },
       { path: 'orders/scan',    name: 'OrderScan',    component: () => import('@/pages/OrderScanPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.DISPATCH] } },
       { path: 'orders',         name: 'Orders',       component: () => import('@/pages/OrdersListPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.DISPATCH] } },
       { path: 'invoices/scan',  name: 'InvoiceScan',  component: () => import('@/pages/InvoiceScanPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SECURITY] } },
@@ -51,6 +55,7 @@ const routes = [
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
+      { path: 'reporting/production-cost', name: 'ProductionCostReport', component: () => import('@/pages/ProductionCostReportPage.vue'), meta: { roles: ['admin','analyst','finance','costing','production'] } },
       { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'finance', 'analyst'] } },
       { path: 'reporting/warehouse-sync', name: 'WarehouseSync', component: () => import('@/pages/WarehouseSyncPage.vue'), meta: { roles: [ROLES.ADMIN, 'analyst'] } },
       { path: 'reporting/inventory', name: 'InventoryAnalytics', component: () => import('@/pages/WarehouseInventoryPage.vue'), meta: { roles: [ROLES.ADMIN, 'analyst'] } },
@@ -112,6 +117,12 @@ const router = createRouter({
 router.beforeEach((to) => {
   const auth = useAuthStore()
   if (!to.meta.public && !auth.isLoggedIn) return '/login'
+  if(auth.user?.role==='dispatch-worker'&&!to.meta.public){
+    const allowed=workerRoutes(auth.user);
+    if(allowed.includes(to.path))return true
+    if(to.path==='/no-access')return true
+    return allowed[0]||'/no-access'
+  }
   if (to.meta.roles?.length) {
     // Use effectiveRole so admin's UI-preview impersonation is honoured. A
     // real admin sees what the chosen role would see; non-admin users have

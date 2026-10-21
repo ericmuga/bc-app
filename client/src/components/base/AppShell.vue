@@ -6,8 +6,18 @@
         <i :class="sidebarOpen ? 'pi pi-times' : 'pi pi-bars'" />
       </button>
       <span class="mobile-brand">BC Console</span>
-      <div class="mobile-avatar">{{ userInitial }}</div>
+      <button class="mobile-avatar" type="button" aria-label="Open profile" title="Profile" @click="profileVisible=true">{{ userInitial }}</button>
+      <button class="mobile-signout" type="button" aria-label="Sign out" title="Sign out" @click="logout"><i class="pi pi-sign-out" aria-hidden="true" /></button>
     </header>
+    <Dialog v-model:visible="profileVisible" modal header="Your profile" :style="{width:'24rem',maxWidth:'94vw'}">
+      <div class="mobile-profile">
+        <strong>{{ auth.user?.userName }}</strong>
+        <span>{{ auth.user?.workerCode || auth.user?.email || '' }}</span>
+        <span>{{ auth.user?.role }}</span>
+        <WorkerPasscodeChange v-if="auth.user?.role==='dispatch-worker'" />
+        <Button label="Sign out" icon="pi pi-sign-out" severity="secondary" @click="logout" />
+      </div>
+    </Dialog>
 
     <!-- Overlay backdrop (mobile only) -->
     <div v-if="sidebarOpen" class="sidebar-backdrop" @click="sidebarOpen = false" />
@@ -38,7 +48,10 @@
         </p>
       </div>
 
-      <nav class="sidebar-nav">
+      <nav v-if="auth.user?.role==='dispatch-worker'" class="sidebar-nav">
+        <RouterLink v-for="stage in auth.user.workerStages" :key="stage" :to="'/dispatch/'+(stage==='stocktake'?'stocktakes':stage)" class="nav-item" active-class="active" @click="closeSidebarOnMobile">{{ {assembly:'Assembly',packing:'Packing',loading:'Loading',stocktake:'Stock take'}[stage] }}</RouterLink>
+      </nav>
+      <nav v-else class="sidebar-nav">
         <details v-if="canViewOrders" class="nav-section" :open="navOpen.orders" @toggle="onNavToggle('orders', $event)">
           <summary class="section-label">Orders</summary>
           <RouterLink to="/orders/scan" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
@@ -116,8 +129,10 @@
           </RouterLink>
         </details>
 
-        <details v-if="canViewPos" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
+        <details v-if="canViewPos || canViewPosReports" class="nav-section" :open="navOpen.pos" @toggle="onNavToggle('pos', $event)">
           <summary class="section-label">Point of Sale</summary>
+          <RouterLink v-if="canViewPosReports" to="/pos/reports" class="nav-item" active-class="active" @click="closeSidebarOnMobile"><i class="pi pi-chart-bar" /><span>POS Reports</span></RouterLink>
+          <template v-if="canViewPos">
           <RouterLink to="/pos" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-shopping-cart" />
             <span>POS Terminal</span>
@@ -162,6 +177,7 @@
             <i class="pi pi-book" />
             <span>Documentation</span>
           </RouterLink>
+          </template>
         </details>
 
         <!-- Production (Recipes + Production Orders) — admin, sales-admin, chef -->
@@ -207,6 +223,7 @@
         </RouterLink>
       </nav>
 
+      <WorkerPasscodeChange v-if="auth.user?.role==='dispatch-worker'" />
       <div class="sidebar-footer">
         <div class="user-info">
           <div class="user-avatar">{{ userInitial }}</div>
@@ -232,13 +249,16 @@
 </template>
 
 <script setup>
+import WorkerPasscodeChange from '@/components/WorkerPasscodeChange.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import { useAuthStore } from '@/stores/auth.js'
 import { useCompanyStore } from '@/stores/company.js'
 import { companiesApi } from '@/services/api.js'
+import {POS_REPORT_ROLES} from '../../../../shared/reportAccess.mjs'
 import { canAccessInvoices, canAccessOrders, canAccessReports, ROLES } from '@/lib/access.js'
 import { reportGroupsForRole } from '../../../../shared/reportAccess.mjs'
 import { canAccessFinance } from '@/lib/financeAccess.js'
@@ -251,6 +271,7 @@ const company = useCompanyStore()
 const router  = useRouter()
 
 const sidebarOpen = ref(window.innerWidth >= 768)
+const profileVisible = ref(false)
 window.addEventListener('resize', () => {
   if (window.innerWidth >= 768 && !sidebarOpen.value) sidebarOpen.value = true
 })
@@ -279,6 +300,7 @@ const isFullAdmin   = computed(() => isGlobalAdmin(role.value))
 const reportGroups = computed(() => reportGroupsForRole(role.value))
 const canViewOrders = computed(() => canAccessOrders(role.value))
 const canViewInvoices = computed(() => canAccessInvoices(role.value))
+const canViewPosReports=computed(()=>POS_REPORT_ROLES.includes(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
 // Recipes (BOM) + Production module — admin, sales-admin, chef (chef sees only this)
 const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
@@ -340,6 +362,7 @@ const companyOptions = computed(() =>
 )
 
 onMounted(async () => {
+  if(auth.user?.role==='dispatch-worker')return
   try {
     const { data } = await companiesApi.list()
     if (data.length) company.setCompanies(data)
@@ -356,6 +379,11 @@ function closeSidebarOnMobile() {
 </script>
 
 <style scoped>
+.mobile-profile{display:grid;gap:1rem;overflow-wrap:anywhere}
+.mobile-avatar,.mobile-signout{cursor:pointer;border:0;flex-shrink:0}
+.mobile-avatar:focus-visible,.mobile-signout:focus-visible{outline:2px solid var(--bc-primary);outline-offset:2px}
+.mobile-signout{display:flex;align-items:center;justify-content:center;width:44px;height:44px;background:transparent;color:var(--bc-text);font-size:18px}
+
 /* ── Shell layout ───────────────────────────────────────────── */
 .shell {
   display: flex;
@@ -586,7 +614,7 @@ details.nav-section[open] { padding-bottom: 8px; }
     color: var(--bc-text);
   }
   .mobile-avatar {
-    width: 30px; height: 30px;
+    width: 44px; height: 44px;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--bc-primary) 0%, var(--bc-primary-light) 100%);
     display: flex; align-items: center; justify-content: center;

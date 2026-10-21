@@ -31,6 +31,9 @@ export const useAuthStore = defineStore('auth', () => {
     const { data } = await axios.post('/api/auth/login', { username, password })
     _persist(data)
   }
+  async function loginWorker(code, passcode) {
+    const {data}=await axios.post('/api/auth/login-worker',{code,passcode});_persist(data)
+  }
   async function loginAD(username, password) {
     const { data } = await axios.post('/api/auth/login-ad', { username, password })
     _persist(data)
@@ -60,7 +63,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     token, user, isLoggedIn,
     actualRole, effectiveRole, isGlobalAdmin, impersonatedRole,
-    login, loginAD, logout,
+    login, loginAD, loginWorker, logout,
     setImpersonatedRole,
   }
 })

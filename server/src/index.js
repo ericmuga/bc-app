@@ -1,3 +1,4 @@
+import { migrateDispatchOffline } from './db/dispatchOffline.js';
 import {startDispatchPullScheduler,stopDispatchPullScheduler} from './services/dispatchPullScheduler.js';
 /**
  * server/src/index.js
@@ -413,6 +414,7 @@ async function start() {
   const pool = await db.getPool();
   const dispatchSchema = await pool.request().query("SELECT OBJECT_ID('dbo.DispatchAssemblyLine') AS Id");
   if (dispatchSchema.recordset[0]?.Id) await migrateDispatchChillers(pool);
+  await migrateDispatchOffline(pool);
   await migrateContactRoute(pool);
   await migrateRmkContacts(pool);
   if (dispatchSchema.recordset[0]?.Id) startDispatchPullScheduler();
