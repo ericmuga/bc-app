@@ -396,3 +396,14 @@ onMounted(load)
 .st-dark-dialog .p-paginator { background:#f8fafc !important; color:#111827 !important; border:none; }
 body > .p-dialog-mask:has(.st-dark-dialog) { background:rgba(15,23,42,0.55); }
 </style>
+
+<style>
+.st-dark-dialog.p-dialog,.st-dark-dialog.p-dialog .p-dialog-header,.st-dark-dialog.p-dialog .p-dialog-content,.st-dark-dialog.p-dialog .p-dialog-footer{background:#0f172a !important;color:#f1f5f9 !important;border-color:#475569 !important;color-scheme:dark}
+.st-dark-dialog.p-dialog .p-datatable-thead > tr > th{background:#020617 !important;color:#fff !important;border-color:#475569 !important}
+.st-dark-dialog.p-dialog .p-datatable-tbody > tr,.st-dark-dialog.p-dialog .p-datatable-tbody > tr > td{background:#1e293b !important;color:#f1f5f9 !important;border-color:#334155 !important}
+.st-dark-dialog.p-dialog .p-datatable-tbody > tr:hover > td{background:#334155 !important;color:#fff !important}
+.st-dark-dialog.p-dialog .p-paginator{background:#111827 !important;color:#e2e8f0 !important}
+.st-dark-dialog.p-dialog .p-inputtext,.st-dark-dialog.p-dialog .p-select{background:#111827 !important;color:#f1f5f9 !important;border-color:#475569 !important;color-scheme:dark}
+.st-dark-dialog.p-dialog .p-dialog-title,.st-dark-dialog.p-dialog label,.st-dark-dialog.p-dialog .p-dialog-close-button{color:#f1f5f9 !important}
+.st-dark-dialog.p-dialog .p-button-text{color:#7dd3fc !important}
+</style>
