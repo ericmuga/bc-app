@@ -1247,6 +1247,29 @@ async function migrate(companyId) {
   `);
   console.log('  [dbo].[SalesPostingGroupConfig] OK');
 
+  // ── [dbo].[RetailMtdDimensionConfig] ────────────────────────────────────────
+  // Drives the Retail MTD report (RetailMtdReport.js): admin-editable remaps
+  // from raw BC fields to the report's Region / Category dimensions, and which
+  // Customer Sector codes count as the "Retail" channel.
+  //   DimensionType='Region'   SourceCode=District Group Code  MappedValue=Region
+  //   DimensionType='Category' SourceCode=Posting Group        MappedValue=Category
+  //   DimensionType='Sector'   SourceCode=Sector code           IsRetail=1/0
+  await run(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='RetailMtdDimensionConfig' AND schema_id=SCHEMA_ID('dbo'))
+    CREATE TABLE [dbo].[RetailMtdDimensionConfig] (
+      [ConfigId]      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+      [DimensionType] NVARCHAR(20)     NOT NULL,
+      [SourceCode]    NVARCHAR(100)    NOT NULL,
+      [MappedValue]   NVARCHAR(100)    NULL,
+      [IsRetail]      BIT              NOT NULL DEFAULT 1,
+      [SortOrder]     INT              NOT NULL DEFAULT 0,
+      [CreatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      [UpdatedAt]     DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+      CONSTRAINT [UQ_RetailMtdDimensionConfig] UNIQUE ([DimensionType],[SourceCode])
+    )
+  `);
+  console.log('  [dbo].[RetailMtdDimensionConfig] OK');
+
   // ══ Dispatch / Pick-and-Pack module ([dbo], global like Pos*) ═══════════════
   // Fulfilment pipeline off a paid POS order:
   //   pending → confirmed (4 parts) → assigned → assembled → packed → loaded.

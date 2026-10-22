@@ -2,7 +2,8 @@ import * as dispatchWorkers from '../controllers/dispatchWorkerController.js';
 import rateLimit from 'express-rate-limit';
 import * as dispatchFlow from '../controllers/dispatchWorkflowController.js';
 import * as dispatchStocktake from '../controllers/dispatchStocktakeController.js';
-import { INVENTORY_REPORT_ROLES, POS_REPORT_ROLES, POS_REPORT_ALL_SHOPS_ROLES, canReadLegacyDataset } from '../../../shared/reportAccess.mjs';
+import { INVENTORY_REPORT_ROLES, POS_REPORT_ROLES, POS_REPORT_ALL_SHOPS_ROLES, RETAIL_MTD_ROLES, canReadLegacyDataset } from '../../../shared/reportAccess.mjs';
+import * as retailMtdCtrl from '../controllers/retailMtdController.js';
 /**
  * routes/index.js
  */
@@ -111,7 +112,14 @@ router.get('/bc-reports/sales/documents',    ...canReport, reportCtrl.salesDocum
 router.get('/bc-reports/sales/lines',        ...canReport, reportCtrl.salesLines);
 router.post('/bc-reports/cache/clear',       ...canReport, reportCtrl.clearCache);
 
+const canViewRetailMtd = [authMiddleware, requireRole(...RETAIL_MTD_ROLES)];
+router.get('/reporting/retail-mtd', ...canViewRetailMtd, retailMtdCtrl.getSummary);
+router.get('/reporting/retail-mtd/dimension-config', ...canViewRetailMtd, retailMtdCtrl.listDimensionConfig);
+
 const adminOnly = [authMiddleware, requireRole(...ADMIN_ROLES)];
+router.post('/reporting/retail-mtd/dimension-config',             ...adminOnly, retailMtdCtrl.saveDimensionConfig);
+router.patch('/reporting/retail-mtd/dimension-config/:configId',  ...adminOnly, retailMtdCtrl.saveDimensionConfig);
+router.delete('/reporting/retail-mtd/dimension-config/:configId', ...adminOnly, retailMtdCtrl.deleteDimensionConfig);
 router.post('/bc-reports/cust-pg-mappings',          ...adminOnly, reportCtrl.saveCustPgMapping);
 router.patch('/bc-reports/cust-pg-mappings/:mapId',  ...adminOnly, reportCtrl.saveCustPgMapping);
 router.delete('/bc-reports/cust-pg-mappings/:mapId', ...adminOnly, reportCtrl.deleteCustPgMapping);

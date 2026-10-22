@@ -51,6 +51,7 @@ const routes = [
       { path: 'reports',        name: 'Reports',      component: () => import('@/pages/ReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST] } },
       { path: 'bc-reports',     name: 'BcReports',    component: () => import('@/pages/BcReportsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, FINANCE_ROLE] } },
       { path: 'weekly-targets', name: 'WeeklyTargets', component: () => import('@/pages/WeeklyTargetsPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES] } },
+      { path: 'reporting/retail-mtd', name: 'RetailMtd', component: () => import('@/pages/RetailMtdReportPage.vue'), meta: { roles: [ROLES.ADMIN, ROLES.SALES, ROLES.ANALYST, 'sales-admin'] } },
       { path: 'reporting/legacy', name: 'LegacyDownloads', component: () => import('@/pages/LegacyDownloadsPage.vue'), meta: { roles: [ROLES.ADMIN, 'finance', 'analyst'] } },
       { path: 'reporting/warehouse-sync', name: 'WarehouseSync', component: () => import('@/pages/WarehouseSyncPage.vue'), meta: { roles: [ROLES.ADMIN, 'analyst'] } },
       { path: 'reporting/inventory', name: 'InventoryAnalytics', component: () => import('@/pages/WarehouseInventoryPage.vue'), meta: { roles: [ROLES.ADMIN, 'analyst'] } },

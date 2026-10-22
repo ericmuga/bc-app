@@ -586,6 +586,67 @@ GROUP BY [G_L Account No_]</pre>
         </div>
       </details>
 
+      <!-- ── Retail MTD Dimensions ────────────────────────────────────────────── -->
+      <details v-if="isFullAdmin" class="admin-accordion"
+               @toggle="onAccordionToggle('retailMtd', loadRetailMtdConfig, $event)">
+        <summary>
+          <i class="pi pi-shop acc-icon" />
+          <span>Retail MTD Dimensions</span>
+          <span class="acc-count">{{ retailMtdConfig.length }} mapping(s)</span>
+        </summary>
+        <div class="accordion-body">
+          <p class="text-muted text-sm">
+            Drives the <strong>Retail MTD</strong> sales report (FCL/CM/RMK). <strong>Region</strong> maps a
+            Ship-to District Group Code to a region label; <strong>Category</strong> maps a Posting Group to a
+            report category; <strong>Sector</strong> marks which BC customer Sector codes count as the
+            <em>Retail</em> channel (leave Sector empty to include every sector).
+          </p>
+
+          <div v-if="editingRetailMtd" class="builder-form" style="max-width:640px;margin-bottom:12px">
+            <div style="display:grid;grid-template-columns:1fr 1.2fr 1.2fr 70px;gap:8px;align-items:center">
+              <Select v-model="retailMtdForm.dimensionType" :options="retailMtdDimensionOptions" />
+              <InputText v-model="retailMtdForm.sourceCode" placeholder="Source code (BC field value)" />
+              <InputText v-model="retailMtdForm.mappedValue" placeholder="Mapped value (Region/Category label)"
+                :disabled="retailMtdForm.dimensionType === 'Sector'" />
+              <InputNumber v-model="retailMtdForm.sortOrder" :min="0" show-buttons fluid placeholder="Sort" />
+            </div>
+            <div v-if="retailMtdForm.dimensionType === 'Sector'" style="margin-top:10px">
+              <label style="display:flex;align-items:center;gap:6px">
+                <Checkbox v-model="retailMtdForm.isRetail" :binary="true" /> Counts as Retail channel
+              </label>
+            </div>
+            <div class="schedule-actions" style="margin-top:8px">
+              <Button label="Save" icon="pi pi-save" size="small" @click="saveRetailMtd" :loading="savingRetailMtd" />
+              <Button label="Cancel" icon="pi pi-times" text size="small" @click="cancelRetailMtd" />
+            </div>
+          </div>
+
+          <div class="builder-panel-head" style="margin-bottom:6px">
+            <span class="text-muted text-sm">{{ retailMtdConfig.length }} mapping(s) configured</span>
+            <Button icon="pi pi-plus" text size="small" v-tooltip="'New mapping'" @click="newRetailMtd" />
+          </div>
+
+          <DataTable :value="retailMtdConfig" dataKey="ConfigId" size="small" responsive-layout="scroll">
+            <Column field="DimensionType" header="Dimension" style="width:110px" />
+            <Column field="SourceCode"    header="Source Code" style="min-width:150px" />
+            <Column header="Mapped Value / Retail?" style="min-width:160px">
+              <template #body="{ data }">
+                {{ data.DimensionType === 'Sector' ? (data.IsRetail ? 'Retail' : 'Not retail') : (data.MappedValue || '—') }}
+              </template>
+            </Column>
+            <Column field="SortOrder" header="Sort" style="width:60px" />
+            <Column header="" style="width:80px">
+              <template #body="{ data }">
+                <div class="row-actions">
+                  <Button icon="pi pi-pencil" text size="small" @click="editRetailMtd(data)" />
+                  <Button icon="pi pi-trash"  text severity="danger" size="small" @click="deleteRetailMtd(data)" />
+                </div>
+              </template>
+            </Column>
+          </DataTable>
+        </div>
+      </details>
+
       <!-- ── POS Recipes (Make-to-Order BOMs) ─────────────────────────────────── -->
       <details v-if="isFullAdmin" class="admin-accordion"
                @toggle="onAccordionToggle('posBom', loadBomEditorData, $event)">
@@ -1649,6 +1710,7 @@ import { adminApi }          from '@/services/api.js'
 import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
+import { retailMtdApi }      from '@/services/retailMtd.js'
 import { posSetupApi, yieldApi, posApi } from '@/services/pos.js'
 import { useToast } from 'primevue/usetoast'
 const toast = useToast()
@@ -1891,6 +1953,40 @@ async function saveSalesPg() {
 async function deleteSalesPg(row) {
   error.value = ''
   try { await bcReportsApi.deleteSalesPgConfig(row.ConfigId); await loadSalesPgConfig() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+
+// ── Retail MTD dimension config state (Region / Category / Sector remaps) ────
+const retailMtdConfig  = ref([])
+const editingRetailMtd = ref(false)
+const savingRetailMtd  = ref(false)
+const retailMtdDimensionOptions = ['Region', 'Category', 'Sector']
+function blankRetailMtd() {
+  return { configId: null, dimensionType: 'Region', sourceCode: '', mappedValue: '', isRetail: true, sortOrder: 0 }
+}
+const retailMtdForm = ref(blankRetailMtd())
+function newRetailMtd()    { retailMtdForm.value = blankRetailMtd(); editingRetailMtd.value = true }
+function cancelRetailMtd() { editingRetailMtd.value = false }
+function editRetailMtd(row) {
+  retailMtdForm.value = {
+    configId: row.ConfigId, dimensionType: row.DimensionType, sourceCode: row.SourceCode,
+    mappedValue: row.MappedValue || '', isRetail: !!row.IsRetail, sortOrder: row.SortOrder,
+  }
+  editingRetailMtd.value = true
+}
+async function loadRetailMtdConfig() {
+  try { retailMtdConfig.value = (await retailMtdApi.listDimensionConfig()).data }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+}
+async function saveRetailMtd() {
+  savingRetailMtd.value = true; error.value = ''
+  try { await retailMtdApi.saveDimensionConfig(retailMtdForm.value); await loadRetailMtdConfig(); cancelRetailMtd() }
+  catch (err) { error.value = err.response?.data?.error || err.message }
+  finally { savingRetailMtd.value = false }
+}
+async function deleteRetailMtd(row) {
+  error.value = ''
+  try { await retailMtdApi.deleteDimensionConfig(row.ConfigId); await loadRetailMtdConfig() }
   catch (err) { error.value = err.response?.data?.error || err.message }
 }
 
