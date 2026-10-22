@@ -185,6 +185,22 @@
           </RouterLink>
         </details>
 
+        <details v-if="canViewCosting" class="nav-section" :open="navOpen.costing" @toggle="onNavToggle('costing', $event)">
+          <summary class="section-label">Costing</summary>
+          <RouterLink to="/costing" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-calculator" />
+            <span>Recipe Data (FCL)</span>
+          </RouterLink>
+          <RouterLink to="/costing/cm" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-calculator" />
+            <span>Recipe Data (CM)</span>
+          </RouterLink>
+          <RouterLink to="/costing/templates" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-clone" />
+            <span>Templates</span>
+          </RouterLink>
+        </details>
+
         <details v-if="isAdmin" class="nav-section" :open="navOpen.admin" @toggle="onNavToggle('admin', $event)">
           <summary class="section-label">Administration</summary>
           <RouterLink to="/admin/setup" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
@@ -280,6 +296,7 @@ const reportGroups = computed(() => reportGroupsForRole(role.value))
 const canViewOrders = computed(() => canAccessOrders(role.value))
 const canViewInvoices = computed(() => canAccessInvoices(role.value))
 const canViewPos     = computed(() => canAccessPos(role.value))
+const canViewCosting = computed(() => canAccessCosting(role.value))
 // Recipes (BOM) + Production module — admin, sales-admin, chef (chef sees only this)
 const canViewProduction = computed(() => ['admin', 'sales-admin', 'chef'].includes(String(role.value || '').toLowerCase()))
 const canViewDispatch = computed(() => canAccessDispatch(role.value) || role.value === 'chiller-attendant')

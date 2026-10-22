@@ -3,9 +3,10 @@
 export const SALES_REPORT_ROLES = ['admin', 'sales', 'sales-admin', 'analyst', 'finance'];
 export const FINANCE_REPORT_ROLES = ['admin', 'finance', 'analyst'];
 export const INVENTORY_REPORT_ROLES = ['admin', 'analyst', 'finance', 'costing', 'production'];
-export const POS_REPORT_ALL_SHOPS_ROLES = ['admin', 'shop-admin', 'sales-admin', 'sales', 'analyst', 'finance'];
-export const POS_REPORT_ROLES = [...POS_REPORT_ALL_SHOPS_ROLES, 'shop', 'chef'];
+export const POS_REPORT_ALL_SHOPS_ROLES = ['admin', 'shop-admin', 'sales-admin', 'sales', 'analyst', 'finance', 'chef'];
+export const POS_REPORT_ROLES = [...POS_REPORT_ALL_SHOPS_ROLES, 'shop'];
 export const LEGACY_REPORT_ROLES = ['admin', 'analyst', 'finance', 'sales', 'sales-admin', 'costing', 'production'];
+export const RETAIL_MTD_ROLES = ['admin', 'sales', 'sales-admin', 'analyst'];
 export const hasReportRole = (role, roles) => roles.includes(String(role || '').trim().toLowerCase());
 
 export const REPORT_GROUPS = [
@@ -14,14 +15,13 @@ export const REPORT_GROUPS = [
     { path: '/bc-reports', label: 'Sales Reports', icon: 'pi pi-database', roles: SALES_REPORT_ROLES },
     { path: '/pos/reports', label: 'POS Reports', icon: 'pi pi-shopping-cart', roles: POS_REPORT_ROLES },
     { path: '/weekly-targets', label: 'Sales Targets', icon: 'pi pi-bullseye', roles: ['admin', 'sales', 'sales-admin'] },
+    { path: '/reporting/retail-mtd', label: 'Retail MTD', icon: 'pi pi-shop', roles: RETAIL_MTD_ROLES },
   ] },
   { key: 'finance', label: 'Finance', reports: [
     { path: '/finance', label: 'Finance Reports', icon: 'pi pi-money-bill', roles: FINANCE_REPORT_ROLES },
   ] },
   { key: 'costing', label: 'Costing', reports: [
-    { path: '/costing', label: 'Recipe Data (FCL)', icon: 'pi pi-calculator', roles: ['admin', 'costing'] },
-    { path: '/costing/cm', label: 'Recipe Data (CM)', icon: 'pi pi-calculator', roles: ['admin', 'costing'] },
-    { path: '/costing/templates', label: 'Templates', icon: 'pi pi-clone', roles: ['admin', 'costing'] },
+    { path: '/reporting/production-cost', label: 'FG Production Costs (Live)', icon: 'pi pi-sitemap', roles: INVENTORY_REPORT_ROLES },
   ] },
   { key: 'inventory', label: 'Inventory', reports: [
     { path: '/reporting/inventory', label: 'Inventory Analytics', icon: 'pi pi-chart-bar', roles: INVENTORY_REPORT_ROLES },
