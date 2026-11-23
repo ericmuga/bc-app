@@ -6,6 +6,8 @@ import {trackSync} from './DispatchSyncModel.js';
 import { completeLine } from './DispatchSessionWriter.js';
 import { syncItemRules } from './DispatchItemRuleModel.js';
 import { configuration as chillerConfiguration } from './DispatchChillerModel.js';
+import { packSetupsSafe, lineSetup, withPacks } from './DispatchPrepackModel.js';
+import { ensurePrepackSchema } from '../db/dispatchPrepacks.js';
 /**
  * models/DispatchModel.js
  *
@@ -391,7 +393,7 @@ async function fetchBcOrderLines(bcPool, slTable, slExtTable, orderNo, company) 
 
 const partOf = (v) => { const s = String(v || '').trim().toUpperCase(); return PARTS.includes(s) ? s : null; };
 
-async function insertBcDispatchOrder(appP, company, h, lines) {
+async function insertBcDispatchOrder(appP, company, h, lines, packSetups = new Map()) {
   const source = bcOrderIdentity(h.OrderNo, lines);
   const tx = new sql.Transaction(appP);
   await tx.begin();
@@ -436,10 +438,14 @@ async function insertBcDispatchOrder(appP, company, h, lines) {
         .input('barcode',sql.NVarChar(50),ln.Barcode || null)
         .input('baseUom',sql.NVarChar(20),ln.BaseUom || null)
         .input('factor',sql.Decimal(18,6),ln.QtyPerUom || null)
+        // Pack sizes (BC MOQ and Pack Sizes) as they were when the order was imported.
+        .input('mainPack', sql.Int, lineSetup(packSetups, ln.ItemNo, uom)?.MainPackSize || 0)
+        .input('miniPack', sql.Int, lineSetup(packSetups, ln.ItemNo, uom)?.MiniPackSize || 0)
+        .input('allowLoose', sql.Bit, lineSetup(packSetups, ln.ItemNo, uom) ? (lineSetup(packSetups, ln.ItemNo, uom).AllowLoose ? 1 : 0) : null)
         .query(`
           INSERT INTO [dbo].[DispatchOrderLine]
-            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[Part],[SortOrder],[Barcode],[BaseUom],[QtyPerUom])
-          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@part,@sort,@barcode,@baseUom,@factor)
+            ([DispatchOrderId],[ItemNo],[Description],[OrderQty],[Uom],[IsWeighted],[Part],[SortOrder],[Barcode],[BaseUom],[QtyPerUom],[MainPackSize],[MiniPackSize],[AllowLoose])
+          VALUES (@doid,@itemNo,@desc,@qty,@uom,@weighted,@part,@sort,@barcode,@baseUom,@factor,@mainPack,@miniPack,@allowLoose)
         `);
     }
     // A part is Active only if the order actually has line(s) of it.
@@ -467,6 +473,7 @@ async function importFromBcWork({ companies } = {}) {
   const comps = (Array.isArray(companies) && companies.length) ? companies : ALL_COMPANIES;
   const bcPool = await bcDb.getPool();
   const appP = await appPool();
+  await ensurePrepackSchema();
 
   let imported = 0, skipped = 0;
   const errors = [];
@@ -505,11 +512,12 @@ async function importFromBcWork({ companies } = {}) {
 
     const sl = bcTable(c, 'Sales Line');
     const slExt = bcTable(c, 'Sales Line', { coreExt: true });
+    const packSetups = await packSetupsSafe(c);
     for (const h of headers) {
       if (existing.has(h.OrderNo)) { skipped++; byCompany[c].skipped++; continue; }
       try {
         const lines = await fetchBcOrderLines(bcPool, sl, slExt, h.OrderNo, c);
-        await insertBcDispatchOrder(appP, c, h, lines);
+        await insertBcDispatchOrder(appP, c, h, lines, packSetups);
         imported++; byCompany[c].imported++;
       } catch (e) {
         errors.push({company:c,orderNo:h.OrderNo,error:e.message});
@@ -612,7 +620,7 @@ export async function getAssemblyOrder(dispatchOrderId, userId) {
     const mine = new Set(parts.map((p) => p.Part));
     lines = lines.filter((l) => mine.has(l.Part));
   }
-  return { ...hdr.recordset[0], lines:await withUnitConversions(lines), parts };
+  return withPacks({ ...hdr.recordset[0], lines:await withUnitConversions(lines), parts });
 }
 
 /** Upsert a line's assembled qty/weight/return-reason. Moves order to 'assembling'. */

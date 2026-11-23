@@ -36,6 +36,7 @@ import * as templatesCtrl from '../controllers/templatesController.js';
 import * as systemCtrl    from '../controllers/systemController.js';
 import * as productionCtrl from '../controllers/productionController.js';
 import * as dispatchCtrl   from '../controllers/dispatchController.js';
+import { registerDispatchPackRoutes } from './dispatchPacks.js';
 import * as weeklyTargetsCtrl from '../controllers/weeklyTargetsController.js';
 import { auditMiddleware } from '../services/audit.js';
 import { ADMIN_ROLES, INVOICE_ROLES, ORDER_ROLES, REPORT_ROLES, REPORTING_ROLES, FINANCE_ROLES, POS_ROLES, POS_MANAGER_ROLES, COSTING_ROLES, PRODUCTION_ROLES, PRODUCTION_ORDER_ROLES, BOM_ROLES,
@@ -571,6 +572,8 @@ router.get(  '/dispatch/return-reasons',           ...canDispAssemble, dispatchC
 router.get(  '/dispatch/assembly/:id',             ...canDispAssemble, dispatchCtrl.getAssemblyOrder);
 router.put(  '/dispatch/assembly/lines/:lineId',   ...canDispAssemble, dispatchCtrl.saveAssemblyLine);
 router.post( '/dispatch/assembly/:id/complete-part', ...canDispAssemble, dispatchCtrl.completeAssemblyPart);
+// Pack sizes, numbered prepacks and the chiller DPL print
+registerDispatchPackRoutes(router, { canDispAssemble, canDispatch });
 // Packing / boxing (packer + checker)
 const canDispPack = [authMiddleware, requireRole(...DISPATCH_PACK_ROLES)];
 router.get(  '/dispatch/packing',              ...canDispPack, dispatchFlow.list);

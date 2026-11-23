@@ -105,6 +105,9 @@
             <i class="pi pi-box" />
             <span>Assembly</span>
           </RouterLink>
+          <RouterLink v-if="canDispAssemble" to="/dispatch/prepacks" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-box" /><span>Prepacks</span>
+          </RouterLink>
           <RouterLink v-if="canDispPack" to="/dispatch/packing" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-inbox" />
             <span>Packing</span>

@@ -67,6 +67,15 @@ export const dispatchApi = {
   assemblyOrder:  (id, userId)    => api.get(`/dispatch/assembly/${id}`, { params: { userId: userId || undefined } }),
   saveAssemblyLine: (lineId, body) => api.put(`/dispatch/assembly/lines/${lineId}`, body),
   completeAssemblyPart: (id, part) => api.post(`/dispatch/assembly/${id}/complete-part`, { part }),
+  // Pack sizes and numbered prepacks; DPL per chiller
+  packItems:      (company)        => api.get('/dispatch/pack-items', { params: { company } }),
+  prepacks:       (params)         => api.get('/dispatch/prepacks', { params }),
+  prepackStock:   (company)        => api.get('/dispatch/prepacks/stock', { params: { company } }),
+  createPrepacks: (body)           => api.post('/dispatch/prepacks', body),
+  voidPrepack:    (id, reason)     => api.post(`/dispatch/prepacks/${id}/void`, { reason }),
+  lookupPrepack:  (no, lineId)     => api.get('/dispatch/prepacks/lookup', { params: { no, lineId } }),
+  prepackLabels:  (ids)            => api.get('/dispatch/prepacks/labels', { params: { ids: ids.join(',') }, responseType: 'blob' }),
+  orderDpl:       (id, chiller)    => api.get(`/dispatch/orders/${id}/dpl`, { params: { chiller: chiller || undefined }, responseType: 'blob' }),
   // Packing
   packing:        (status='pending') => api.get('/dispatch/packing', {params:{status}}),
   vesselTypes:    ()        => api.get('/dispatch/vessel-types'),

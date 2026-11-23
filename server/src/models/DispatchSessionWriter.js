@@ -3,13 +3,16 @@ import { assertClaim } from './DispatchClaimModel.js';
 import { db, sql } from '../db/pool.js';
 import { assemblyValues } from '../../../shared/dispatchAssembly.mjs';
 import { resolveStockUnit, recordMovement } from './DispatchMovementModel.js';
+import { applyLinePrepacks } from './DispatchPrepackModel.js';
 
 export async function completeLine({ dispatchOrderId, lineId, body, user }) {
   if (!['admin','dispatch-supervisor','packer','assembler'].includes(user.role)) throw new Error('Assembly permission required');
   if (!body.sessionId) throw new Error('Start an assembly session first');
   const requestId = body.requestId;
   if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('Invalid sync request ID');
-  const payloadHash = createHash('sha256').update(JSON.stringify([dispatchOrderId,lineId,...['sessionId','chiller','expectedRevision','correct','pieces','assembledWeight','batchNo','returnReasonCode','correctionReason'].map(k=>body[k]??null)])).digest('hex');
+  const hashed = [dispatchOrderId,lineId,...['sessionId','chiller','expectedRevision','correct','pieces','assembledWeight','batchNo','returnReasonCode','correctionReason'].map(k=>body[k]??null)];
+  if (body.prepacks != null) { if (!Array.isArray(body.prepacks) || body.prepacks.length > 500) throw new Error('Invalid prepack list'); hashed.push(body.prepacks); }
+  const payloadHash = createHash('sha256').update(JSON.stringify(hashed)).digest('hex');
   const pool = await db.getPool();
   if (requestId) {
     const receipt=(await pool.request().input('rid',sql.UniqueIdentifier,requestId).query('SELECT * FROM dbo.DispatchAssemblyReceipt WHERE RequestId=@rid')).recordset[0];
@@ -63,6 +66,9 @@ export async function completeLine({ dispatchOrderId, lineId, body, user }) {
     if (correcting && (!correctionReason || correctionReason.length>250)) throw new Error('Enter a correction reason (up to 250 characters)');
     const v = assemblyValues(line,body);
     if(stock.KgPerUom>0)v.weight=Math.round(v.qty*Number(stock.KgPerUom)*10000)/10000;
+    // Numbered prepacks scanned onto the line: they must be for this item and fit in the pieces assembled.
+    if (Array.isArray(body.prepacks)) await applyLinePrepacks(tx,{line,company:meta.Company,orderNo:header.OrderNo,dispatchOrderId,
+      prepackNos:body.prepacks,pieces:v.pieces,user});
     const revision = Number(line.Revision || 0)+1;
     const baseQty = Math.round(v.qty*Number(stock.QtyPerUom)*10000)/10000;
     const event = (await rq().input('sid',sql.UniqueIdentifier,body.sessionId).input('oid',sql.UniqueIdentifier,dispatchOrderId)

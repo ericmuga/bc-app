@@ -87,6 +87,7 @@ const routes = [
       { path: 'dispatch/registry',   name: 'DispatchRegistry',   component: () => import('@/pages/DispatchRegistryPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'dispatch-registry'] } },
       { path: 'dispatch/assignment', name: 'DispatchAssignment', component: () => import('@/pages/DispatchAssignmentPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor'] } },
       { path: 'dispatch/assembly',   name: 'DispatchAssembly',   component: () => import('@/pages/DispatchAssemblyPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'assembler', 'packer'] } },
+      { path: 'dispatch/prepacks',   name: 'DispatchPrepacks',   component: () => import('@/pages/DispatchPrepacksPage.vue'),   meta: { roles: ['admin', 'dispatch-supervisor', 'assembler', 'packer'] } },
       { path: 'dispatch/packing',    name: 'DispatchPacking',    component: () => import('@/pages/DispatchPackingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'packer', 'checker'] } },
       { path: 'dispatch/loading',    name: 'DispatchLoading',    component: () => import('@/pages/DispatchLoadingPage.vue'),    meta: { roles: ['admin', 'dispatch-supervisor', 'loader'] } },
       { path: 'dispatch/stocktakes', name: 'DispatchStocktakes', component: () => import('@/pages/DispatchStocktakesPage.vue'), meta: { roles: ['admin', 'dispatch-supervisor', 'chiller-attendant', 'assembler'] } },

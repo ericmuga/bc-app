@@ -72,19 +72,23 @@
         <div v-if="scanMatches.length" class="line-grid scan-results"><Button v-for="match in scanMatches" :key="match.LineId" :label="`${match.ItemNo} · ${match.Description} · Part ${match.Part}${isDone(match)?' · Assembled':''}`" severity="secondary" :disabled="scanOpening || !session || !canEditOrder || queuedLine(match) || (isDone(match) && !canCorrect(match))" @click="selectScanMatch(match)" /></div>
 
         <Message v-if="orderSyncStatus" :severity="orderSyncStatus==='Synced'?'success':'info'">{{ orderSyncStatus }}</Message>
-        <div class="scan-row"><Button label="Pause order" icon="pi pi-pause" severity="secondary" :loading="pausing" :disabled="saving || syncing || preparing || unclaiming || !session || !canEditOrder" @click="pauseOrder" /><Button v-if="!offline?.active" label="Correct barcode" icon="pi pi-barcode" severity="secondary" @click="barcodeVisible=true" /><Button label="Release order" icon="pi pi-unlock" severity="secondary" :loading="unclaiming" :disabled="saving || syncing || preparing" @click="releaseOrder" /></div>
+        <div class="scan-row"><Button label="Pause order" icon="pi pi-pause" severity="secondary" :loading="pausing" :disabled="saving || syncing || preparing || unclaiming || !session || !canEditOrder" @click="pauseOrder" /><Button v-if="!offline?.active" label="Correct barcode" icon="pi pi-barcode" severity="secondary" @click="barcodeVisible=true" /><Button label="Release order" icon="pi pi-unlock" severity="secondary" :loading="unclaiming" :disabled="saving || syncing || preparing" @click="releaseOrder" />
+          <Button v-if="!offline?.active" :label="`Print DPL · ${chiller}`" icon="pi pi-print" severity="secondary" :loading="printingDpl" @click="printDpl(chiller)" />
+          <Button v-if="!offline?.active" label="Print DPL · all chillers" icon="pi pi-print" severity="secondary" :loading="printingDpl" @click="printDpl(null)" /></div>
         <Message v-if="unclaimError" severity="warn">{{ unclaimError }}</Message>
         <h3>Not assembled ({{ pendingLines.length }})</h3>
         <p v-if="!pendingLines.length">All lines for this chiller are assembled.</p>
         <div class="line-grid"><article v-for="line in pendingLines" :key="line.LineId" class="line-card">
           <strong>{{ line.ItemNo }} · Part {{ line.Part }}</strong><span>{{ line.Description }}</span>
           <span>Ordered {{ line.OrderQty }} {{ line.Uom }}</span>
+          <span v-if="packText(line)" class="pack-text">Packs {{ packText(line) }}</span>
           <Button label="Assemble item" :disabled="!session || !canEditOrder" @click="editLine(line)" />
         </article></div>
         <h3>Already assembled ({{ completedLines.length }})</h3>
         <div class="line-grid"><article v-for="line in completedLines" :key="line.LineId" class="line-card completed">
           <strong>{{ line.ItemNo }} · Part {{ line.Part }}</strong><span>{{ line.Description }}</span>
           <span>{{ line.AssembledQty }} {{ line.Uom }} · {{ line.Pieces ?? '—' }} pieces · Batch {{ line.BatchNo || 'Legacy' }}</span>
+          <small v-if="line.Prepacks?.length">Prepacks {{ line.Prepacks.map(p=>`${p.PrepackNo} (${p.PackSize})`).join(', ') }}</small>
           <small v-if="queuedLine(line)">{{ offline.queue.find(q=>q.lineId===line.LineId)?.synced ? 'Synced' : 'Pending sync' }}</small><small>{{ line.AssembledByName }} · {{ line.ReturnReasonName }}</small>
           <Button label="Correct / reassemble" severity="secondary" :disabled="!session || !canEditOrder || !canCorrect(line) || queuedLine(line)" @click="editLine(line)" />
         </article></div>
@@ -97,7 +101,18 @@
         <strong>{{ editing.ItemNo }} · {{ editing.Description }}</strong>
         <span>Ordered {{ editing.OrderQty }} {{ editing.Uom }} · {{ chiller }} · Part {{ editing.Part }}</span>
         <label v-if="weighted">Weight ({{ editing.Uom }})<InputNumber v-model="form.assembledWeight" :min="0" :maxFractionDigits="4" fluid autofocus /></label>
-        <label>Pieces assembled<InputNumber v-model="form.pieces" :min="0" :maxFractionDigits="0" fluid :autofocus="!weighted" /></label>
+        <template v-if="packItem">
+          <span class="pack-text">Packs {{ packText(editing) }}<template v-if="editing.AllowLoose===false"> · no loose pieces</template></span>
+          <template v-if="!offline?.active">
+            <label>Scan prepack<InputText v-model="prepackScan" placeholder="Scan or type a prepack number (PP…)" autocomplete="off" fluid :disabled="prepackBusy" @keydown.enter.prevent="addPrepack" /></label>
+            <div v-if="form.prepacks?.length" class="prepack-chips">
+              <Button v-for="no in form.prepacks" :key="no" :label="`${no} · ${prepackInfo[no]?.PackSize ?? '?'} pcs`" icon="pi pi-times" iconPos="right" size="small" severity="secondary" @click="removePrepack(no)" />
+            </div>
+            <label>Loose pieces (not prepacked)<InputNumber v-model="loosePieces" :min="0" :maxFractionDigits="0" fluid /></label>
+            <small>{{ prepackPieces }} pieces in {{ form.prepacks?.length || 0 }} prepack(s) + {{ loosePieces || 0 }} loose = {{ form.pieces ?? 0 }} pieces</small>
+          </template>
+        </template>
+        <label>Pieces assembled<InputNumber v-model="form.pieces" :min="0" :maxFractionDigits="0" fluid :autofocus="!weighted" :disabled="packItem && !!form.prepacks?.length && !offline?.active" /></label>
         <label>Batch number<InputText v-model="form.batchNo" maxlength="5" placeholder="4 or 5 letters / digits" autocomplete="off" fluid /></label>
         <label v-if="differs">Return reason<Select v-model="form.returnReasonCode" :options="reasons" option-label="label" option-value="value" fluid /></label>
         <label v-if="correcting">Reason for correction<InputText v-model="form.correctionReason" maxlength="250" placeholder="Explain what changed" fluid /></label>
@@ -121,6 +136,7 @@ import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '@/stores/auth.js'
 import { dispatchApi } from '@/services/dispatch.js'
 import { assemblyValues,isWeightUnit } from '../../../shared/dispatchAssembly.mjs'
+import { packBreakdown } from '../../../shared/dispatchPacks.mjs'
 const DispatchBarcodeDialog=defineAsyncComponent(()=>import('@/components/DispatchBarcodeDialog.vue'))
 const DispatchAssemblyReport=defineAsyncComponent(()=>import('@/components/DispatchAssemblyReport.vue'))
 import Button from 'primevue/button'
@@ -264,7 +280,7 @@ function changeTab(value){if(preparing.value)return;selectedOrders.value=[];tab.
 async function startSession(){sessionBusy.value=true;try{session.value=(await dispatchApi.startAssemblySession()).data;now.value=Date.now()}catch(e){error.value=message(e)}finally{sessionBusy.value=false}}
 async function endSession(){if(offline.value)return;sessionBusy.value=true;try{await dispatchApi.endAssemblySession(session.value.SessionId);session.value=null;lineVisible.value=false;orderVisible.value=false;await load()}catch(e){error.value=message(e)}finally{sessionBusy.value=false}}
 async function openOrder(row,acquire=true){if(preparing.value)return;unclaimError.value='';if(tab.value==='paused'&&!session.value){error.value='Start an assembly session to resume this order';return;}if(offline.value?.active){const o=offline.value.orders.find(o=>o.DispatchOrderId===row.DispatchOrderId);if(o)openOfflineOrder(o);return;}if(cachedOrders.value||!sessionReady.value)return;try{if(acquire&&session.value&&['confirmed','assigned','assembling','assembled'].includes(row.Status))await dispatchApi.claimOrder(row.DispatchOrderId,'assembly',session.value.SessionId);order.value=(await dispatchApi.assemblyOrder(row.DispatchOrderId)).data;if(tab.value==='paused'&&acquire)items.value=items.value.filter(x=>x.DispatchOrderId!==row.DispatchOrderId);orderVisible.value=true}catch(e){error.value=message(e)}}
-async function editLine(line){if(order.value?.releasing||unclaiming.value||syncing.value||queuedLine(line))return;try{if(!offline.value?.active)await dispatchApi.claimOrder(order.value.DispatchOrderId,'assembly',session.value.SessionId)}catch(e){error.value=message(e);return}editing.value=line;lineError.value='';form.value={pieces:line.Pieces??(!isWeightUnit(line.Uom)&&!line.IsWeighted?Number(line.OrderQty):null),assembledWeight:line.AssembledQty??Number(line.OrderQty),batchNo:line.BatchNo||'',returnReasonCode:line.ReturnReasonCode||null,correctionReason:''};draftNotice.value='';const draft=readDispatchCache(cacheScope(),'assemblyDraft');if(draft?.value?.lineId===line.LineId){if(Number(draft.value.revision)===Number(line.Revision||0)){form.value={...draft.value.form};draftNotice.value='Restored local draft — not confirmed as saved. Check the current line before saving.'}else{draftNotice.value='The server line has changed; the previous local draft was not restored.'}}lineVisible.value=true}
+async function editLine(line){if(order.value?.releasing||unclaiming.value||syncing.value||queuedLine(line))return;try{if(!offline.value?.active)await dispatchApi.claimOrder(order.value.DispatchOrderId,'assembly',session.value.SessionId)}catch(e){error.value=message(e);return}editing.value=line;lineError.value='';form.value={pieces:line.Pieces??(!isWeightUnit(line.Uom)&&!line.IsWeighted?Number(line.OrderQty):null),assembledWeight:line.AssembledQty??Number(line.OrderQty),batchNo:line.BatchNo||'',returnReasonCode:line.ReturnReasonCode||null,correctionReason:''};startPrepacks(line);draftNotice.value='';const draft=readDispatchCache(cacheScope(),'assemblyDraft');if(draft?.value?.lineId===line.LineId){if(Number(draft.value.revision)===Number(line.Revision||0)){form.value={...draft.value.form};draftNotice.value='Restored local draft — not confirmed as saved. Check the current line before saving.'}else{draftNotice.value='The server line has changed; the previous local draft was not restored.'}}lineVisible.value=true}
 const scanMatches=ref([]),scanNotice=ref(''),scanOpening=ref(false)
 let scanTimer
 watch(scan,()=>{clearTimeout(scanTimer);scanMatches.value=[];scanNotice.value='';if(scan.value.trim())scanTimer=setTimeout(scanItem,400)})
@@ -344,13 +360,42 @@ let timer,initTimer
 onMounted(()=>{const cached=readDispatchCache(cacheScope(),'assemblyFilters');if(cached){chiller.value=cached.value.chiller;dateFrom.value=cached.value.dateFrom;dateTo.value=cached.value.dateTo;customer.value=cached.value.customer;orderFilter.value=cached.value.order}try{const packet=store().read();if(packet){offline.value=packet;session.value=packet.session;sessionReady.value=true;chiller.value=packet.chiller;chillers.value=[packet.chiller]}}catch(e){error.value=`Cannot read offline work: ${message(e)}`}
 initTimer=setTimeout(load,100);timer=setInterval(()=>now.value=Date.now(),1000)})
 onUnmounted(()=>{clearInterval(timer);clearTimeout(initTimer)})
+
+// ── Pack sizes and numbered prepacks ─────────────────────────────────────────
+const printingDpl=ref(false),prepackScan=ref(''),prepackBusy=ref(false),prepackInfo=ref({}),loosePieces=ref(0)
+const packText=line=>Number(line?.MainPackSize)>0&&!isWeightUnit(line.Uom)&&!line.IsWeighted?packBreakdown(line,line.OrderQty).text:''
+const packItem=computed(()=>!!editing.value&&!!packText(editing.value))
+const prepackPieces=computed(()=>(form.value.prepacks||[]).reduce((s,no)=>s+(Number(prepackInfo.value[no]?.PackSize)||0),0))
+function startPrepacks(line){
+  const used=line.Prepacks||[];prepackInfo.value=Object.fromEntries(used.map(p=>[p.PrepackNo,p]));prepackScan.value=''
+  if(packText(line)){form.value.prepacks=used.map(p=>p.PrepackNo);loosePieces.value=used.length?Math.max(0,Number(form.value.pieces||0)-used.reduce((s,p)=>s+Number(p.PackSize||0),0)):0}
+}
+function syncPrepackPieces(){if(packItem.value&&form.value.prepacks?.length)form.value.pieces=prepackPieces.value+(Number(loosePieces.value)||0)}
+watch(loosePieces,syncPrepackPieces)
+async function addPrepack(){
+  const no=prepackScan.value.trim();if(!no||!editing.value)return
+  prepackBusy.value=true;lineError.value=''
+  try{const p=(await dispatchApi.lookupPrepack(no,editing.value.LineId)).data
+    if((form.value.prepacks||[]).includes(p.PrepackNo))throw new Error(`Prepack ${p.PrepackNo} is already scanned`)
+    prepackInfo.value={...prepackInfo.value,[p.PrepackNo]:p};form.value.prepacks=[...(form.value.prepacks||[]),p.PrepackNo];prepackScan.value='';syncPrepackPieces()}
+  catch(e){lineError.value=message(e)}finally{prepackBusy.value=false}
+}
+function removePrepack(no){form.value.prepacks=(form.value.prepacks||[]).filter(x=>x!==no);syncPrepackPieces()}
+async function printDpl(forChiller){
+  if(!order.value)return;printingDpl.value=true
+  try{const res=await dispatchApi.orderDpl(order.value.DispatchOrderId,forChiller);const url=URL.createObjectURL(new Blob([res.data],{type:'application/pdf'}));window.open(url,'_blank');setTimeout(()=>URL.revokeObjectURL(url),60000)}
+  catch(e){error.value=await blobMessage(e)}finally{printingDpl.value=false}
+}
+async function blobMessage(e){try{const d=e?.response?.data;if(d instanceof Blob)return JSON.parse(await d.text()).error||message(e)}catch{}return message(e)}
 </script>
 <style scoped>
 .scan-results{margin-bottom:1.5rem}
 
 fieldset.filters{border:0;margin:0;padding:0;min-width:0}.order-selection{display:flex;align-items:center;gap:.6rem;min-height:44px;cursor:pointer}.order-selection input{width:22px;height:22px;accent-color:#0f766e}
 
-.order-card,.line-card,.card,.box-card,.session-bar,.session,.box-banner{color:var(--bc-text)}
+.order-card,.pack-text{font-weight:600}
+.prepack-chips{display:flex;flex-wrap:wrap;gap:.35rem}
+.line-card,.card,.box-card,.session-bar,.session,.box-banner{color:var(--bc-text)}
 .view-toggle{display:flex;gap:.4rem}.view-toggle button{padding:.6rem .9rem;border:1px solid var(--bc-border);border-radius:6px;background:var(--bc-surface-card);color:var(--bc-text);cursor:pointer}.view-toggle button[aria-pressed="true"]{background:var(--bc-surface-raised);border-color:var(--p-primary-color);box-shadow:inset 0 -2px var(--p-primary-color)}
 .order-list{overflow-x:auto;border:1px solid var(--bc-border);border-radius:10px;background:var(--bc-surface-card);color:var(--bc-text)}.order-list table{width:100%;border-collapse:collapse;text-align:left}.order-list th,.order-list td{padding:.8rem;border-bottom:1px solid var(--bc-border)}.order-list th{background:var(--bc-surface-raised);white-space:nowrap}.order-list td:last-child{white-space:nowrap}.order-list tbody tr:hover{background:var(--bc-surface-raised)}
 
