@@ -106,6 +106,7 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
 
   const r = await req.query(`
     SELECT o.[OrderNo], o.[ContactNo], o.[ContactName], o.[TotalAmount],
+           o.[CustomerNo] AS BillCustomerNo, o.[CustomerCompany] AS BillCustomerCompany,
            CONVERT(varchar(10), DATEADD(HOUR, 3, o.[CreatedAt]), 23) AS OrderDate,  -- EAT calendar date, no time
            o.[EtimsInvoiceNo], o.[CuSerialNo], o.[SignedAt], o.[ShopCode],
            s.[SalespersonCode], s.[LocationCode],
@@ -133,6 +134,9 @@ export async function buildImportedSalesRows({ shopCode = null, dateFrom, dateTo
     rows.push({
       OrderNo:             x.OrderNo || '',
       LineCompany:         (x.LineCompany || '').toUpperCase(),   // BC company that owns this line
+      // Linked customer the order is billed to (null = the shop's own customer)
+      BillCustomerNo:      (x.BillCustomerNo || '').trim(),
+      BillCustomerCompany: (x.BillCustomerCompany || '').trim().toUpperCase(),
       ExtDocNo:            (x.OrderNo || '').slice(0, 30),
       LineNo:              0,   // (re)sequenced per (order, company) at push time
       CustNO:              cust,
@@ -232,7 +236,9 @@ export async function pushImportedSales({ shopCode, dateFrom, dateTo, lineType =
     for (const r of coRows) {
       const seq = (seqOf.get(r.OrderNo) || 0) + 1; seqOf.set(r.OrderNo, seq);
       r.LineNo = seq * 10000;
-      r.CustNO = cust; r.BillTo = cust; r.Location = loc; r.SPCode = sp;
+      // Lines of a linked customer's company bill that customer; the rest stay on the shop's.
+      const rowCust = r.BillCustomerNo && r.BillCustomerCompany === company ? r.BillCustomerNo.slice(0, 10) : cust;
+      r.CustNO = rowCust; r.BillTo = rowCust; r.Location = loc; r.SPCode = sp;
       const a = agg.get(r.OrderNo);
       r.TotalHeaderAmount = round4(a.amt); r.TotalHeaderQty = round4(a.qty); r['Expected Line Count'] = a.count;
     }

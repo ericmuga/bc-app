@@ -211,6 +211,9 @@
           <Column header="Total Amount" class="num-col" style="min-width:130px">
             <template #body="{ data }">{{ fmtAmt(data._totAmount) }}</template>
           </Column>
+          <Column v-if="reportType === 'sector'" header="Price / Kg" class="num-col" style="min-width:110px">
+            <template #body="{ data }">{{ fmtAmt(ratio(data._totAmount, data._totQty)) }}</template>
+          </Column>
           <Column v-if="reportType === 'postingGroup'" header="" style="width:60px">
             <template #body="{ data }">
               <Button v-if="!data._isTotal" icon="pi pi-list" text rounded size="small" v-tooltip.left="'Items'" @click="openPgItemDrawer(data)" />
@@ -2097,8 +2100,9 @@ async function runReport(refresh = false) {
 function exportExcel() {
   const wb = XLSX.utils.book_new()
   if (isMatrixReport.value) {
-    const headers = [dimLabel.value, ...activeCompanies.value.flatMap((co) => [`${co} Qty`, `${co} Amount`]), 'Total Qty', 'Total Amount']
-    const rows = matrixRows.value.map((row) => [row.GroupKey, ...activeCompanies.value.flatMap((co) => [row[co]?.Qty ?? '', row[co]?.Amount ?? '']), row._totQty, row._totAmount])
+    const withPpk = reportType.value === 'sector'
+    const headers = [dimLabel.value, ...activeCompanies.value.flatMap((co) => [`${co} Qty`, `${co} Amount`]), 'Total Qty', 'Total Amount', ...(withPpk ? ['Price / Kg'] : [])]
+    const rows = matrixRows.value.map((row) => [row.GroupKey, ...activeCompanies.value.flatMap((co) => [row[co]?.Qty ?? '', row[co]?.Amount ?? '']), row._totQty, row._totAmount, ...(withPpk ? [ratio(row._totAmount, row._totQty)] : [])])
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headers, ...rows]), dimLabel.value)
   } else if (isRouteReport.value) {
     // Flat export: one row per (Route, Sector)

@@ -89,6 +89,16 @@
 
       <!-- Customer selector -->
       <div class="order-customer">
+        <!-- Bill-to customer: the shop customer by default; switch to a linked customer
+             (e.g. a distributor) to sell at that customer's BC prices. -->
+        <div v-if="linkedCustomers.length" class="bill-to" :class="{ switched: !!billToId }">
+          <i class="pi pi-id-card" />
+          <span class="bill-to-label">Bill to</span>
+          <Select :model-value="billToId" :options="billToOptions" option-label="label" option-value="value"
+                  size="small" class="bill-to-select" :loading="switchingCustomer" :disabled="switchingCustomer"
+                  @update:model-value="switchCustomer" />
+        </div>
+
         <!-- Walk-in (umbrella) shop account banner -->
         <div v-if="walkIn" class="walk-in-banner" v-tooltip.bottom="'This is the shop account; sub-contacts below are linked to it.'">
           <i class="pi pi-building" />
@@ -782,7 +792,7 @@ async function saveCart() {
     // The order may not exist yet if the 600ms auto-save hasn't fired — create it
     // now so parking always works, even right after adding the first item.
     if (!orderId.value) {
-      const { data } = await posApi.createOrder()
+      const { data } = await posApi.createOrder(billToId.value)
       orderId.value = data.OrderId || data.orderId
       orderNo.value = data.OrderNo || data.orderNo
     }
@@ -927,9 +937,71 @@ const canConfirm = computed(() => {
   return true
 })
 
+// ── Bill-to (linked customers) ────────────────────────────────────
+// Every sale starts on the shop customer; the cashier may switch to a linked
+// customer, which re-prices the cart at that customer's BC prices.
+const linkedCustomers   = ref([])
+const billToId          = ref(null)    // null = the shop's own customer
+const switchingCustomer = ref(false)
+const billToOptions = computed(() => [
+  { label: `${walkIn.value?.Name || myShop.value?.Name || 'Shop customer'} (shop)`, value: null },
+  ...linkedCustomers.value.map(c => ({
+    label: `${c.customerName} · ${c.company} ${c.customerNo}${c.isGlobal ? '' : ' · this shop'}`,
+    value: c.linkedCustomerId,
+  })),
+])
+
+async function switchCustomer(id) {
+  const next = id || null
+  if (next === billToId.value) return
+  switchingCustomer.value = true
+  try {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; await persistLines() }
+    if (orderId.value) {
+      // Server switches the order and re-prices its lines.
+      const { data } = await posApi.setOrderCustomer(orderId.value, next)
+      lines.value = (data.lines || []).map(l => ({
+        itemNo: l.itemNo, description: l.description,
+        quantity: Number(l.quantity) || 0, unitPrice: Number(l.unitPrice) || 0,
+        lineAmount: Number(l.lineAmount) || 0, company: (l.company || '').toUpperCase(),
+      }))
+      billToId.value = data.linkedCustomerId || null
+      categories.value = (await posApi.getItems(null, orderId.value)).data
+    } else {
+      billToId.value = next
+      categories.value = (await posApi.getItems(null, null, next)).data
+      repriceLinesFromCatalogue()
+    }
+    const name = billToOptions.value.find(o => o.value === billToId.value)?.label || 'shop customer'
+    toast.add({ severity: 'info', summary: 'Billing customer', detail: name, life: 2500 })
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not switch customer', detail: e.response?.data?.error ?? e.message, life: 5000 })
+  } finally {
+    switchingCustomer.value = false
+  }
+}
+
+// Cart lines not yet saved to an order follow the catalogue's current prices.
+function repriceLinesFromCatalogue() {
+  const price = new Map()
+  for (const c of categories.value) for (const it of c.items) price.set(it.itemNo, it.unitPrice)
+  for (const l of lines.value) {
+    if (!price.has(l.itemNo)) continue
+    l.unitPrice = price.get(l.itemNo)
+    l.lineAmount = round(l.quantity * l.unitPrice)
+  }
+}
+
+async function loadLinkedCustomers() {
+  try { linkedCustomers.value = (await posApi.listLinkedCustomers()).data || [] }
+  catch { linkedCustomers.value = [] }
+}
+
 // A fresh cart must return to today's prices after a historical order is cleared.
+// It also returns to the shop customer — a new sale ALWAYS starts there.
 watch(orderId, async (id, previous) => {
   if (id || !previous) return
+  billToId.value = null
   try {
     const { data } = await posApi.getItems()
     if (!orderId.value) categories.value = data
@@ -943,8 +1015,8 @@ async function loadCatalogue() {
   loading.value = true
   try {
     const [itemsRes, ptRes, shopRes, contactsRes, walkInRes] = await Promise.all([
-      posApi.getItems(null, orderId.value), posApi.getPaymentTypes(), posApi.getMyShop(),
-      posApi.listContacts(), posApi.getWalkIn(),
+      posApi.getItems(null, orderId.value, orderId.value ? null : billToId.value), posApi.getPaymentTypes(), posApi.getMyShop(),
+      posApi.listContacts(), posApi.getWalkIn(), loadLinkedCustomers(),
     ])
     categories.value  = itemsRes.data
     paymentTypes.value = ptRes.data
@@ -972,6 +1044,8 @@ async function loadMyShops() {
 async function onAdminShopChange() {
   // Per-tab so switching in one tab doesn't hijack another tab's shop.
   setAdminShopCode(selectedAdminShop.value, { perTab: true })
+  // Linked customers are per shop — a cart not yet saved goes back to the new shop's customer.
+  if (!orderId.value) billToId.value = null
   // Reload everything that's shop-scoped
   await loadCatalogue()
 }
@@ -1164,6 +1238,7 @@ async function loadResumedOrder(oid) {
       lineAmount: Number(l.lineAmount ?? l.LineAmount ?? ((l.quantity || 0) * (l.unitPrice || 0))) || 0,
       company:    (l.company || l.Company || '').toUpperCase(),
     }))
+    billToId.value = data.linkedCustomerId || null
     categories.value = (await posApi.getItems(null, orderId.value)).data
     const cName = data.contactName || data.ContactName
     if (cName) contactDraft.value = { name: cName, phone: data.contactPhone || '', pin: data.contactPin || '' }
@@ -1258,11 +1333,15 @@ function removeLine(idx) {
 }
 
 function clearOrder() {
+  // No order yet → the orderId watcher won't fire, so drop a pre-order customer switch here.
+  const resetPrices = !orderId.value && !!billToId.value
   lines.value           = []
   orderId.value         = null
   orderNo.value         = ''
   selectedContact.value = null
+  billToId.value        = null
   syncDraftFromContact(null)
+  if (resetPrices) posApi.getItems().then(r => { if (!orderId.value) categories.value = r.data }).catch(() => {})
   debounceSave()
 }
 
@@ -1277,7 +1356,7 @@ async function persistLines() {
   savingLines.value = true
   try {
     if (!orderId.value && lines.value.length) {
-      const { data } = await posApi.createOrder()
+      const { data } = await posApi.createOrder(billToId.value)
       orderId.value = data.OrderId || data.orderId
       orderNo.value = data.OrderNo || data.orderNo
     }
@@ -1878,6 +1957,18 @@ function remainingClass(qty) {
 .mpesa-matched .mm-total { display: flex; justify-content: space-between; border-top: 1px dashed #e4e7ec;
   margin-top: 4px; padding-top: 4px; font-size: 13px; color: #15803d; }
 .mpesa-matched .mm-total.short { color: #b45309; }
+
+/* Bill-to customer switcher (shop customer ↔ linked customers) */
+.bill-to {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin-bottom: 6px;
+  border: 1px solid #e4e7ec; border-radius: 8px; background: #f9fafb;
+}
+.bill-to.switched { border-color: #f59e0b; background: #fffbeb; }
+.bill-to .pi { color: #6b7280; }
+.bill-to.switched .pi { color: #b45309; }
+.bill-to-label { font-size: 12px; font-weight: 600; color: #475467; white-space: nowrap; }
+.bill-to-select { flex: 1; min-width: 0; }
 
 .empty-state {
   flex: 1;

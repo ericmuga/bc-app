@@ -70,7 +70,8 @@ const routes = [
       { path: 'pos/stock-report',   name: 'StockReport',   component: () => import('@/pages/StockMovementsReportPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/stock-take',     name: 'StockTake',     component: () => import('@/pages/StockTakePage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
       { path: 'pos/till',           name: 'PosTill',       component: () => import('@/pages/TillPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE, POS_ROLE] } },
-      { path: 'pos/yield',          name: 'PosYield',      component: () => import('@/pages/YieldPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'pos/portioning',     name: 'PosYield',      component: () => import('@/pages/YieldPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
+      { path: 'pos/yield',          redirect: '/pos/portioning' },
       { path: 'pos/targets',        name: 'PosTargets',    component: () => import('@/pages/TargetsPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/coupons',        name: 'PosCoupons',    component: () => import('@/pages/CouponsPage.vue'),    meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
       { path: 'pos/mpesa-matching', name: 'MpesaMatching', component: () => import('@/pages/MpesaMatchingPage.vue'), meta: { roles: [ROLES.ADMIN, SHOP_ADMIN_ROLE] } },
@@ -120,6 +121,8 @@ router.beforeEach((to) => {
   if (!to.meta.public && !auth.isLoggedIn) return '/login'
   if(auth.user?.role==='dispatch-worker'&&!to.meta.public){
     const allowed=workerRoutes(auth.user);
+    // Prepacks are assembler work: assembly subworkers may open that page too.
+    if(auth.user.workerStages?.includes('assembly'))allowed.push('/dispatch/prepacks');
     if(allowed.includes(to.path))return true
     if(to.path==='/no-access')return true
     return allowed[0]||'/no-access'

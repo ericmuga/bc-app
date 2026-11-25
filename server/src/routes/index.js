@@ -155,6 +155,7 @@ router.get( '/reporting/warehouse/jobs/:name/history',...canWarehouse, warehouse
 router.get( '/reporting/warehouse/procedures',        ...canWarehouse, warehouseSyncCtrl.getProcedures);
 router.get( '/reporting/warehouse/facts',             ...canWarehouse, warehouseSyncCtrl.getFacts);
 router.get( '/reporting/warehouse/download-etl',      ...canWarehouse, warehouseSyncCtrl.getDownloadEtl);
+router.get( '/reporting/warehouse/sector-check',      ...canWarehouse, warehouseSyncCtrl.getSectorCheck);
 router.post('/reporting/warehouse/jobs/:name/run',    ...canWarehouse, warehouseSyncCtrl.runJob);
 const canInventoryReport = [authMiddleware, requireRole(...INVENTORY_REPORT_ROLES)];
 // Inventory analytics over the materialised item-ledger fact (fact_ILE_MV)
@@ -169,6 +170,8 @@ router.get('/finance/run',                    ...canFinance, financeCtrl.runFina
 router.post('/finance/cache/clear',           ...canFinance, financeCtrl.clearFinanceCache);
 // Configurable P&L statement (per-company account mapping)
 router.get('/finance/pl',                     ...canFinance, financeCtrl.runPlStatement);
+router.get('/finance/ar-recon/summary',       ...canFinance, financeCtrl.arReconSummary);
+router.get('/finance/ar-recon/detail',        ...canFinance, financeCtrl.arReconDetail);
 router.get('/finance/pl/definition',          ...canFinance, financeCtrl.getPlDef);
 router.put('/finance/pl/definition',          authMiddleware, requireRole('admin', 'finance'), financeCtrl.savePlDef);
 router.get('/finance/gl-mappings',            ...canFinance, financeCtrl.listGlMappings);
@@ -247,6 +250,8 @@ router.post('/pos/orders/:orderId/checkout',       ...canPos, posCtrl.checkout);
 router.post('/pos/orders/:orderId/checkout-multi', ...canPos, posCtrl.checkoutMulti);
 router.post('/pos/orders/:orderId/complete',       ...canPos, posCtrl.completeOrder);
 router.patch('/pos/orders/:orderId/contact',       ...canPos, posCtrl.setOrderContact);
+router.put(  '/pos/orders/:orderId/customer',      ...canPos, posCtrl.setOrderCustomer);
+router.get(  '/pos/linked-customers',              ...canPos, posCtrl.listShopLinkedCustomers);
 router.post('/pos/orders/:orderId/cancel',         ...canPos, posCtrl.cancelOrder);
 // Reopen an accidentally-paid order (manager only; refused once posted/signed).
 router.post('/pos/orders/:orderId/reopen',         ...canManage, posCtrl.reopenOrder);
@@ -349,6 +354,7 @@ router.get(  '/pos/stock/daily-movements.csv',                 ...canPos, posSto
 router.get(  '/pos/stock/item-transactions',                   ...canStoreOps, posStockCtrl.itemTransactions);
 
 // ── POS Till (cash sessions, transactions, cash report) ────────────────────
+router.get('/pos/till/requirement', authMiddleware, posTillCtrl.requirement);
 router.get(  '/pos/till/current',                              ...canPos, posTillCtrl.currentSession);
 router.get(  '/pos/till/sessions',                             ...canPos, posTillCtrl.listSessions);
 router.post( '/pos/till/sessions',                             ...canPos, posTillCtrl.openSession);
@@ -384,6 +390,17 @@ router.post( '/pos/manual-sales',                              ...canManage, pos
 router.post( '/pos/manual-sales/batch',                        ...canManage, posYieldCtrl.recordManualSaleBatch);
 
 router.get(  '/pos/reports/yield',                             ...canManage, posYieldCtrl.yieldReport);
+
+// ── Portioning: sources, stock sheet (sales / write-off / final count), upload, report
+router.get(   '/pos/portioning/sources',                       ...canPos, posYieldCtrl.portioningSources);
+router.get(   '/pos/portion-sheets',                           ...canPos, posYieldCtrl.listSheets);
+router.post(  '/pos/portion-sheets',                           ...canManage, posYieldCtrl.createSheet);
+router.post(  '/pos/portion-sheets/upload',                    ...canManage, posYieldCtrl.uploadSheets);
+router.get(   '/pos/portion-sheets/:sheetId',                  ...canPos, posYieldCtrl.getSheet);
+router.put(   '/pos/portion-sheets/:sheetId/lines',            ...canManage, posYieldCtrl.saveSheetLines);
+router.post(  '/pos/portion-sheets/:sheetId/post',             ...canManage, posYieldCtrl.postSheet);
+router.delete('/pos/portion-sheets/:sheetId',                  ...canManage, posYieldCtrl.deleteSheet);
+router.get(   '/pos/reports/portioning',                       ...canManage, posYieldCtrl.portioningReport);
 router.get(  '/pos/exports/:kind',                             ...canManage, posYieldCtrl.exportYieldCsv);
 
 // ── POS Coupons (admin / shop-admin) ───────────────────────────────────────
@@ -451,6 +468,14 @@ router.post(  '/pos/setup/items/:itemId/photo',    ...canManage, posCtrl.uploadI
 
 router.post(  '/pos/setup/sync-from-bc',           ...canManage, posCtrl.syncFromBc);
 router.post(  '/pos/setup/sync-from-bc/:kind',     ...canManage, posCtrl.syncStepFromBc);
+// Linked customers (sell to another BC customer than the shop's, e.g. distributor prices)
+router.get(   '/pos/setup/linked-customers',                         ...canManage, posCtrl.adminListLinkedCustomers);
+router.post(  '/pos/setup/linked-customers',                         ...canManage, posCtrl.adminSaveLinkedCustomer);
+router.put(   '/pos/setup/linked-customers/:linkedCustomerId',       ...canManage, posCtrl.adminSaveLinkedCustomer);
+router.delete('/pos/setup/linked-customers/:linkedCustomerId',       ...canManage, posCtrl.adminDeleteLinkedCustomer);
+router.post(  '/pos/setup/linked-customers/sync-prices',             ...canManage, posCtrl.adminSyncLinkedCustomerPrices);
+router.post(  '/pos/setup/linked-customers/:linkedCustomerId/sync-prices', ...canManage, posCtrl.adminSyncLinkedCustomerPrices);
+router.get(   '/pos/setup/bc-customers',                             ...canManage, posCtrl.adminSearchBcCustomers);
 
 // Cashier ↔ Shops
 router.get(   '/pos/setup/cashier-shops',          ...canManage, posCtrl.listCashiersWithShops);

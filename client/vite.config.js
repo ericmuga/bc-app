@@ -10,6 +10,11 @@ export default defineConfig(({ mode }) => {
   
   return {
     plugins: [vue()],
+    // Scan the browser entry only; build tooling is not a browser dependency.
+    optimizeDeps: {
+      entries: ['index.html'],
+      exclude: ['vite', '@vitejs/plugin-vue'],
+    },
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url))

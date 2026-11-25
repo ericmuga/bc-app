@@ -2,6 +2,7 @@ import {roundShillings} from '../../../shared/posCurrency.mjs';
 import {blockedPaymentMethod,requirePaymentMethod,paymentClassForCode,defaultPaymentCodes} from '../../../shared/posPaymentPolicy.mjs';
 import { priceWindowSql, pricePrioritySql } from '../services/posPricePolicy.js';
 import { syncShopPricesFromBc } from './PosShopPriceModel.js';
+import { priceCustomerFor, syncLinkedCustomerPrices } from './PosLinkedCustomerModel.js';
 import { paymentReference } from '../../../shared/paymentReference.mjs';
 /**
  * models/PosModel.js
@@ -139,9 +140,12 @@ export async function listPosItems(opts = {}) {
   return { rows: r.recordset, total: cnt.recordset[0].n, page: pg.page, pageSize: pg.pageSize };
 }
 
-export async function listPosItemsGrouped({ shopCode = null, userId = null, company = null, orderId = null } = {}) {
+export async function listPosItemsGrouped({ shopCode = null, userId = null, company = null, orderId = null, linkedCustomerId = null } = {}) {
   const pool = await appPool();
   const companyFilter = company ? String(company).toUpperCase() : null;
+  // Linked customer (e.g. a distributor) whose BC prices override the shop price
+  // for items of the customer's company: the order's customer, else the one requested.
+  const priceCustomer = await priceCustomerFor({ orderId, linkedCustomerId, shopCode });
 
   // Resolve the shop's LocationCode (we keep stock at the location, not the shop).
   let locationCode = null;
@@ -170,6 +174,10 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
     if (!order.recordset.length) throw new Error('Order not found for this shop');
     req.replaceInput('priceDate',sql.Date,order.recordset[0].PriceDate);
   }
+  if (priceCustomer) {
+    req.input('custCo', sql.NVarChar(20), priceCustomer.company);
+    req.input('custNo', sql.NVarChar(20), priceCustomer.customerNo);
+  }
 
   // Active special price subquery: matches by item, optionally by shop, within date range.
   // Picks the most specific match (shop-specific beats global).
@@ -185,6 +193,16 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
       FROM [dbo].[PosSpecialPrice] sp
       WHERE ${priceWindowSql}
         ${shopCode ? "AND (sp.[ShopCode] IS NULL OR sp.[ShopCode] = @shopCode)" : "AND sp.[ShopCode] IS NULL"}
+    )
+    , CustPrice AS (
+      SELECT cp.[ItemNo], cp.[UnitPrice],
+             ROW_NUMBER() OVER (PARTITION BY cp.[ItemNo]
+                                ORDER BY cp.[SalesType], cp.[StartingDate] DESC, cp.[UnitPrice]) AS rn
+      FROM [dbo].[PosLinkedCustomerPrice] cp
+      ${priceCustomer
+        ? `WHERE cp.[Company]=@custCo AND cp.[CustomerNo]=@custNo AND cp.[StartingDate]<=@priceDate
+             AND (cp.[EndingDate] IS NULL OR cp.[EndingDate]>=@priceDate)`
+        : 'WHERE 1=0'}
     )
     ${
       locationCode
@@ -208,6 +226,7 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
            c.[Name] AS CategoryName, i.[UnitPrice] AS BasePrice,
            ap.[UnitPrice] AS OfferPrice,
            ap.[Description] AS OfferDescription,
+           cpx.[UnitPrice] AS CustomerPrice,
            i.[Barcode],i.[ImageUrl],
            i.[SortOrder],
            i.[EtimsItemCode],i.[EtimsItemClassCode],i.[TaxType],i.[UnitOfMeasure],
@@ -217,7 +236,9 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
     FROM [dbo].[PosItem] i
     LEFT JOIN [dbo].[PosCategory] c  ON c.[Code]   = i.[CategoryCode]
     LEFT JOIN ActivePrice ap         ON ap.[ItemNo] = i.[ItemNo] AND ap.rn = 1
-    LEFT JOIN OnHandLoc oh           ON oh.[ItemNo] = i.[ItemNo]
+    LEFT JOIN CustPrice cpx          ON cpx.[ItemNo] = i.[ItemNo] AND cpx.rn = 1
+                                    ${priceCustomer ? "AND UPPER(ISNULL(NULLIF(i.[SourceCompany],''),'FCL')) = @custCo" : ''}
+    LEFT JOIN OnHandLoc oh          ON oh.[ItemNo] = i.[ItemNo]
     ${userId ? 'LEFT JOIN [dbo].[PosFavourite] f ON f.[ItemNo] = i.[ItemNo] AND f.[UserId] = @userId' : ''}
     WHERE i.[IsActive]=1
       ${companyFilter ? "AND UPPER(ISNULL(i.[SourceCompany],'FCL')) = @company" : ''}
@@ -230,7 +251,9 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
   const favItems = [];
   catMap.set('__uncategorised__', { code: '', name: 'Uncategorised', items: [] });
   for (const item of items) {
-    const offer    = item.OfferPrice != null ? Number(item.OfferPrice) : null;
+    // A linked customer's own price beats any shop offer for that customer's items.
+    const custPrice = item.CustomerPrice != null ? Number(item.CustomerPrice) : null;
+    const offer    = custPrice ?? (item.OfferPrice != null ? Number(item.OfferPrice) : null);
     const base     = Number(item.BasePrice);
     const effective = offer != null ? offer : base;
     const mapped = {
@@ -240,7 +263,8 @@ export async function listPosItemsGrouped({ shopCode = null, userId = null, comp
       unitPrice:          effective,
       basePrice:          base,
       offerPrice:         offer,
-      offerDescription:   item.OfferDescription || '',
+      offerDescription:   custPrice != null ? `${priceCustomer.customerName} price` : (item.OfferDescription || ''),
+      customerPrice:      custPrice,
       barcode:            item.Barcode || '',
       imageUrl:           item.ImageUrl || '',
       etimsItemCode:      item.EtimsItemCode || '',
@@ -1909,6 +1933,8 @@ export async function syncMasterFromBc(companyId = 'FCL') {
   const r6 = await syncPaymentTypesFromBc(companyId);     result.paymentTypes    = r6.count; r6.errors.forEach(m => result.errors.push(`paymentTypes: ${m}`));
   // Shop prices last — depends on shops (price group) and items (VAT%) being synced first.
   const r7 = await syncShopPricesFromBc(companyId);       result.shopPrices      = r7.count; r7.errors.forEach(m => result.errors.push(`shopPrices: ${m}`));
+  // Linked customers (distributors etc.) refresh with the shop prices.
+  const r8 = await syncLinkedCustomerPrices();            result.linkedCustomerPrices = r8.prices; r8.errors.forEach(m => result.errors.push(`linkedCustomerPrices: ${m}`));
 
   return result;
 }
@@ -2406,6 +2432,7 @@ export async function getOrder(orderId) {
       SELECT o.[OrderId],o.[OrderNo],o.[ShopCode],o.[CashierUserId],o.[CashierName],o.[Status],
              o.[Label],
              o.[TotalAmount],o.[Notes],o.[ContactNo],o.[ContactName],o.[ContactPhone],o.[ContactPin],
+             o.[LinkedCustomerId],o.[CustomerNo],o.[CustomerName],o.[CustomerCompany],o.[CustomerPin],
              ${hasEtimsNo ? 'o.[EtimsNo]' : 'CAST(NULL AS NVARCHAR(50))'} AS [EtimsNo],
              o.[EtimsInvoiceNo],o.[CuSerialNo],o.[QrUrl],o.[SignedAt],o.[PrintedAt],o.[PdfFileName],
              o.[CreatedAt],o.[UpdatedAt],
@@ -2429,6 +2456,11 @@ export async function getOrder(orderId) {
     notes: first.Notes || '',
     contactNo: first.ContactNo || null, contactName: first.ContactName || null,
     contactPhone: first.ContactPhone || null, contactPin: first.ContactPin || null,
+    // Bill-to customer: null = the shop's own customer; else a linked customer
+    linkedCustomerId: first.LinkedCustomerId || null,
+    customerNo: first.CustomerNo || null, customerName: first.CustomerName || null,
+    customerCompany: first.CustomerCompany || null,
+    customerPin: first.CustomerPin || null,
     etimsNo: first.EtimsNo || null,
     etimsInvoiceNo: first.EtimsInvoiceNo || null,
     cuSerialNo:     first.CuSerialNo     || null,

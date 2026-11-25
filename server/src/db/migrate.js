@@ -805,6 +805,7 @@ async function migrate(companyId) {
     )
   `);
   console.log('  [dbo].[PosTillSession] + balances + tx OK');
+  await (await import('./tillRequirement.js')).migrateTillRequirement(await db.getPool());
 
   // ── [dbo].[PosStockMovement] (ledger — every quantity change in/out) ──────
   await run(`

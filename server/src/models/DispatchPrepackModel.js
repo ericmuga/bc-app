@@ -165,16 +165,66 @@ export async function lookupForLine(scanned, lineId) {
 }
 
 export async function voidPrepack(prepackId, reason, user = {}) {
+  return (await voidPrepacks({ ids: [prepackId], reason }, user)).voided[0];
+}
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Voids one or more prepacks (by id, number or scanned QR) in one transaction.
+ * The serial is cancelled for good (numbers come from a sequence and are never reused)
+ * and the pieces drop out of prepack stock, so they are loose again and can be prepacked.
+ * Only available prepacks can be voided; a used one must first be removed from its order line.
+ */
+export async function voidPrepacks({ ids = [], nos = [], reason } = {}, user = {}) {
   await ensurePrepackSchema();
   const why = String(reason || '').trim();
   if (!why) throw new Error('Enter a reason for voiding the prepack');
+  const keys = [...(ids || []), ...(nos || [])].map((v) => String(v || '').trim()).filter(Boolean);
+  if (!keys.length) throw new Error('Select or scan the prepacks to void');
+  if (keys.length > 500) throw new Error('Void at most 500 prepacks at a time');
   const pool = await db.getPool();
-  const r = await pool.request().input('id', sql.UniqueIdentifier, prepackId)
-    .input('why', sql.NVarChar(200), why.slice(0, 200)).input('un', sql.NVarChar(200), user.userName || String(user.userId || ''))
-    .query(`UPDATE dbo.DispatchPrepack SET Status='void',VoidReason=@why,VoidedByName=@un,VoidedAt=GETUTCDATE(),UpdatedAt=GETUTCDATE()
-      OUTPUT inserted.* WHERE PrepackId=@id AND Status='available'`);
-  if (!r.recordset.length) throw new Error('Only an available prepack can be voided');
-  return r.recordset[0];
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    const found = new Map();
+    for (const k of keys) {
+      const r = new sql.Request(tx);
+      const q = GUID.test(k)
+        ? r.input('id', sql.UniqueIdentifier, k).query('SELECT * FROM dbo.DispatchPrepack WITH (UPDLOCK,HOLDLOCK) WHERE PrepackId=@id')
+        : r.input('v', sql.NVarChar(64), k.toUpperCase()).input('t', sql.NVarChar(64), k)
+          .query('SELECT * FROM dbo.DispatchPrepack WITH (UPDLOCK,HOLDLOCK) WHERE PrepackNo=@v OR QrToken=@t');
+      const p = (await q).recordset[0];
+      if (!p) throw new Error(`Prepack ${k} not found`);
+      if (p.Status === 'void') throw new Error(`Prepack ${p.PrepackNo} is already void`);
+      if (p.Status === 'used') throw new Error(`Prepack ${p.PrepackNo} is used on order ${p.OrderNo || ''} — remove it from that order line in assembly first`.replace(/  +/g, ' '));
+      found.set(String(p.PrepackId).toLowerCase(), p);
+    }
+    const voided = [];
+    const un = user.userName || String(user.userId || '');
+    for (const p of found.values()) {
+      const r = await new sql.Request(tx).input('id', sql.UniqueIdentifier, p.PrepackId)
+        .input('why', sql.NVarChar(200), why.slice(0, 200)).input('un', sql.NVarChar(200), un)
+        .query(`UPDATE dbo.DispatchPrepack SET Status='void',VoidReason=@why,VoidedByName=@un,VoidedAt=GETUTCDATE(),UpdatedAt=GETUTCDATE()
+          OUTPUT inserted.* WHERE PrepackId=@id AND Status='available'`);
+      if (!r.recordset.length) throw new Error(`Prepack ${p.PrepackNo} changed while voiding — try again`);
+      voided.push(r.recordset[0]);
+      await new sql.Request(tx).input('id', sql.NVarChar(100), String(p.PrepackId))
+        .input('uid', sql.NVarChar(100), String(user.userId || '')).input('un', sql.NVarChar(200), un)
+        .input('details', sql.NVarChar(sql.MAX), JSON.stringify({ prepackNo: p.PrepackNo, company: p.Company, itemNo: p.ItemNo,
+          packType: p.PackType, packSize: p.PackSize, batchNo: p.BatchNo, reason: why }))
+        .query("INSERT dbo.DispatchActionAudit(Action,EntityId,UserId,UserName,Details) VALUES('prepack-void',@id,@uid,@un,@details)");
+    }
+    await tx.commit();
+    // Pieces returned to loose stock for prepacking, per item.
+    const released = new Map();
+    for (const p of voided) {
+      const k = `${p.Company}|${p.ItemNo}`;
+      const e = released.get(k) || { Company: p.Company, ItemNo: p.ItemNo, Description: p.Description, Packs: 0, Pieces: 0 };
+      e.Packs += 1; e.Pieces += Number(p.PackSize) || 0; released.set(k, e);
+    }
+    return { voided, released: [...released.values()] };
+  } catch (e) { try { await tx.rollback(); } catch { /* rolled back */ } throw e; }
 }
 
 /**

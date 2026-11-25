@@ -1,7 +1,7 @@
 <template>
   <div class="fin-layout">
     <!-- Filter sidebar -->
-    <aside class="fin-slicer" :class="{ 'closed': !filtersOpen }">
+    <aside v-if="!isRecon" class="fin-slicer" :class="{ 'closed': !filtersOpen }">
       <div class="fin-slicer-header">
         <i class="pi pi-money-bill" />
         <span>Finance Filters</span>
@@ -92,7 +92,7 @@
     <div class="fin-main" :aria-busy="loading">
       <!-- Tab bar -->
       <div class="tab-bar">
-        <button class="filter-toggle-btn" @click="filtersOpen = !filtersOpen">
+        <button v-if="!isRecon" class="filter-toggle-btn" @click="filtersOpen = !filtersOpen">
           <i class="pi pi-sliders-h" />
           <span class="filter-toggle-label">{{ filtersOpen ? 'Hide' : 'Filters' }}</span>
         </button>
@@ -101,18 +101,21 @@
         </button>
       </div>
 
+      <!-- AR reconciliation: self-contained (own filters, tables, export) -->
+      <ArReconPanel v-if="isRecon" />
+
       <!-- Toolbar -->
-      <div class="toolbar" v-if="loading || rows.length || mgmtResult.lines.length || agingRows.length || plData?.rows?.length">
+      <div class="toolbar" v-if="!isRecon && (loading || rows.length || mgmtResult.lines.length || agingRows.length || plData?.rows?.length)">
         <div v-if="periodLabel" class="period-pill">{{ periodLabel }}</div>
         <div class="toolbar-actions">
           <Button icon="pi pi-refresh" text size="small" :loading="loading" :disabled="loading" aria-label="Refresh report" @click="forceRefresh" />
-          <Button icon="pi pi-download" text size="small" :disabled="loading || (!rows.length && !mgmtResult.lines.length && !plData?.rows?.length)" @click="exportExcel" />
+          <Button icon="pi pi-download" text size="small" :disabled="loading || (!rows.length && !mgmtResult.lines.length && !agingRows.length && !plData?.rows?.length)" @click="exportExcel" />
         </div>
       </div>
 
       <!-- Status messages -->
       <Message v-if="error" severity="error" :closable="false" class="mx">{{ error }}</Message>
-      <div v-if="!loading && !error && !rows.length && !mgmtResult.lines.length && !agingRows.length && !plData?.rows?.length" class="empty-state">
+      <div v-if="!isRecon && !loading && !error && !rows.length && !mgmtResult.lines.length && !agingRows.length && !plData?.rows?.length" class="empty-state">
         <i class="pi pi-file-check" style="font-size:3rem;opacity:.25" />
         <p>Select filters and click <strong>Run Report</strong></p>
       </div>
@@ -441,6 +444,7 @@ import ProgressBar from 'primevue/progressbar'
 import Message    from 'primevue/message'
 import Drawer     from 'primevue/drawer'
 import XLSX  from 'xlsx-js-style'   // styled header + number formats on export
+import ArReconPanel from '@/components/ArReconPanel.vue'
 
 const ALL_COMPANIES = ['FCL', 'CM', 'FLM', 'RMK']
 
@@ -450,6 +454,7 @@ const TABS = [
   { value: 'balanceSheet',   label: 'Balance Sheet',     icon: 'pi pi-chart-bar' },
   { value: 'mgmt',           label: 'Management Accts',  icon: 'pi pi-table' },
   { value: 'customerAging',  label: 'Customer Aging',    icon: 'pi pi-clock' },
+  { value: 'arRecon',        label: 'AR Reconciliation', icon: 'pi pi-sync' },
 ]
 
 // BC GL Account Category codes
@@ -532,6 +537,7 @@ function exportPlLine() {
 const isBS    = computed(() => reportType.value === 'balanceSheet')
 const isMgmt  = computed(() => reportType.value === 'mgmt')
 const isAging = computed(() => reportType.value === 'customerAging')
+const isRecon = computed(() => reportType.value === 'arRecon')
 const multiCompany = computed(() => companies.value.length > 1)
 
 // ── Management Accounts state ────────────────────────────────────────────────

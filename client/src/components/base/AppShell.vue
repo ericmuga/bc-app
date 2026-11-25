@@ -50,6 +50,7 @@
 
       <nav v-if="auth.user?.role==='dispatch-worker'" class="sidebar-nav">
         <RouterLink v-for="stage in auth.user.workerStages" :key="stage" :to="'/dispatch/'+(stage==='stocktake'?'stocktakes':stage)" class="nav-item" active-class="active" @click="closeSidebarOnMobile">{{ {assembly:'Assembly',packing:'Packing',loading:'Loading',stocktake:'Stock take'}[stage] }}</RouterLink>
+        <RouterLink v-if="auth.user.workerStages?.includes('assembly')" to="/dispatch/prepacks" class="nav-item" active-class="active" @click="closeSidebarOnMobile"><i class="pi pi-box" /><span>Prepacks</span></RouterLink>
       </nav>
       <nav v-else class="sidebar-nav">
         <details v-if="canViewOrders" class="nav-section" :open="navOpen.orders" @toggle="onNavToggle('orders', $event)">
@@ -156,9 +157,9 @@
             <i class="pi pi-money-bill" />
             <span>Cash Till</span>
           </RouterLink>
-          <RouterLink v-if="isAdmin" to="/pos/yield" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
-            <i class="pi pi-percentage" />
-            <span>Yield &amp; Loss</span>
+          <RouterLink v-if="isAdmin" to="/pos/portioning" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
+            <i class="pi pi-th-large" />
+            <span>Portioning</span>
           </RouterLink>
           <RouterLink v-if="isAdmin" to="/pos/targets" class="nav-item" active-class="active" @click="closeSidebarOnMobile">
             <i class="pi pi-flag" />
@@ -246,12 +247,13 @@
 
     <!-- Main content -->
     <main class="main-content">
-      <RouterView />
+      <TillRequirement><RouterView /></TillRequirement>
     </main>
   </div>
 </template>
 
 <script setup>
+import TillRequirement from '@/components/TillRequirement.vue'
 import WorkerPasscodeChange from '@/components/WorkerPasscodeChange.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'

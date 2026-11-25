@@ -33,6 +33,7 @@
       <div class="form-row"><h3 class="grow">Prepack register</h3>
         <label>Status<Select v-model="status" :options="['available','used','void','all']" @change="loadList" /></label>
         <Button label="Print selected labels" icon="pi pi-print" severity="secondary" :disabled="!picked.length" @click="printLabels(picked.map(p=>p.PrepackId))" />
+        <Button label="Void prepacks" icon="pi pi-ban" severity="danger" outlined @click="openVoid(picked.filter(p=>p.Status==='available'))" />
       </div>
       <DataTable v-model:selection="picked" :value="list" data-key="PrepackId" size="small" paginator :rows="20" striped-rows>
         <Column selection-mode="multiple" header-style="width:3rem" />
@@ -40,9 +41,24 @@
         <Column header="Pack"><template #body="{data}">{{ data.PackType==='mini'?'Mini':'Main' }} · {{ data.PackSize }}</template></Column>
         <Column field="BatchNo" header="Batch" /><Column field="Chiller" header="Chiller" /><Column field="Status" header="Status" />
         <Column field="OrderNo" header="Used on order" /><Column field="CreatedByName" header="Made by" />
-        <Column header=""><template #body="{data}"><Button v-if="data.Status==='available'" label="Void" size="small" severity="danger" text @click="voidOne(data)" /></template></Column>
+        <Column header="Voided"><template #body="{data}"><span v-if="data.Status==='void'">{{ data.VoidReason }} · {{ data.VoidedByName }}<template v-if="data.VoidedAt"> · {{ new Date(data.VoidedAt).toLocaleString() }}</template></span></template></Column>
+        <Column header=""><template #body="{data}"><Button v-if="data.Status==='available'" label="Void" size="small" severity="danger" text @click="openVoid([data])" /></template></Column>
       </DataTable>
     </section>
+
+    <Dialog v-model:visible="voidOpen" modal header="Void prepacks" :style="{ width: '34rem', maxWidth: '95vw' }" :closable="!voiding">
+      <p class="hint">The prepack number is cancelled for good and its pieces go back to loose stock, ready to be prepacked again. Only prepacks still in stock can be voided — a prepack used on an order must be removed from that order line in assembly first.</p>
+      <label class="field">Scan prepack label<InputText v-model="voidScan" placeholder="Scan or type a prepack number (PP…)" autocomplete="off" fluid :disabled="voiding" @keydown.enter.prevent="addVoidScan" /></label>
+      <div v-if="voidNos.length" class="chips">
+        <Button v-for="no in voidNos" :key="no" :label="no" icon="pi pi-times" icon-pos="right" size="small" severity="secondary" :disabled="voiding" @click="voidNos = voidNos.filter(x => x !== no)" />
+      </div>
+      <small v-else>No prepacks selected yet.</small>
+      <label class="field">Reason<InputText v-model="voidReason" placeholder="e.g. damaged pack, wrong item, label misprint" maxlength="200" fluid :disabled="voiding" /></label>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text :disabled="voiding" @click="voidOpen = false" />
+        <Button :label="`Void ${voidNos.length || ''} prepack${voidNos.length === 1 ? '' : 's'}`" icon="pi pi-ban" severity="danger" :loading="voiding" :disabled="!voidNos.length || !voidReason.trim()" @click="confirmVoid" />
+      </template>
+    </Dialog>
   </div>
 </template>
 <script setup>
@@ -56,6 +72,7 @@ import InputNumber from 'primevue/inputnumber'
 import Message from 'primevue/message'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
+import Dialog from 'primevue/dialog'
 
 const toast = useToast()
 const companies = ['FCL', 'CM', 'FLM', 'RMK']
@@ -96,10 +113,29 @@ async function create() {
     await Promise.all([loadStock(), loadList()])
   } catch (e) { error.value = message(e) } finally { creating.value = false }
 }
-async function voidOne(p) {
-  const reason = window.prompt(`Reason for voiding prepack ${p.PrepackNo}?`)
-  if (!reason) return
-  try { await dispatchApi.voidPrepack(p.PrepackId, reason); await Promise.all([loadStock(), loadList()]) } catch (e) { error.value = message(e) }
+// ── Void (scan or select; serial cancelled, pieces back to loose stock) ──────
+const voidOpen = ref(false), voidNos = ref([]), voidScan = ref(''), voidReason = ref(''), voiding = ref(false)
+function openVoid(rows = []) {
+  voidNos.value = rows.map(p => p.PrepackNo); voidScan.value = ''; voidReason.value = ''; voidOpen.value = true
+}
+function addVoidScan() {
+  const no = voidScan.value.trim(); voidScan.value = ''
+  if (!no) return
+  // A QR scan reads the prepack number; normalise typed numbers to upper case.
+  const v = /^pp\d+$/i.test(no) ? no.toUpperCase() : no
+  if (voidNos.value.includes(v)) { toast.add({ severity: 'warn', summary: `${v} is already in the list`, life: 2500 }); return }
+  voidNos.value = [...voidNos.value, v]
+}
+async function confirmVoid() {
+  voiding.value = true; error.value = ''
+  try {
+    const { voided, released } = (await dispatchApi.voidPrepacks({ nos: voidNos.value, reason: voidReason.value })).data
+    const back = released.map(r => `${r.Pieces} pcs of ${r.ItemNo}`).join(', ')
+    toast.add({ severity: 'success', summary: `${voided.length} prepack(s) voided`, detail: `${voided.map(p => p.PrepackNo).join(', ')} cancelled · back for prepacking: ${back}`, life: 6000 })
+    voidOpen.value = false
+    await Promise.all([loadStock(), loadList()])
+  } catch (e) { toast.add({ severity: 'error', summary: 'Nothing was voided', detail: message(e), life: 6000 }) }
+  finally { voiding.value = false }
 }
 onMounted(loadAll)
 </script>
@@ -110,4 +146,7 @@ onMounted(loadAll)
 .form-row label{display:flex;flex-direction:column;gap:.25rem;min-width:9rem}
 .grow{flex:1;min-width:14rem}
 h3{margin:0 0 .5rem}
+.field{display:flex;flex-direction:column;gap:.25rem;margin:.75rem 0 .5rem}
+.chips{display:flex;flex-wrap:wrap;gap:.35rem}
+.hint{margin:0;color:var(--p-text-muted-color,#666);font-size:.9rem}
 </style>

@@ -13,6 +13,7 @@ export const warehouseApi = {
   facts:      ()            => api.get('/reporting/warehouse/facts'),
   downloadEtl: ()           => api.get('/reporting/warehouse/download-etl'),
   runJob:     (name)        => api.post(`/reporting/warehouse/jobs/${encodeURIComponent(name)}/run`),
+  sectorCheck: ()           => api.get('/reporting/warehouse/sector-check'),
 
   // Inventory analytics (item-ledger fact)
   invDimensions: ()         => api.get('/reporting/warehouse/inventory/dimensions'),

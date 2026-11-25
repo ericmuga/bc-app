@@ -279,6 +279,7 @@ async function doOpenTill() {
       openingAmount:   openingAmounts[pt.Code] || 0,
     }))
     await tillApi.openSession({ balances, notes: openNotes.value })
+    window.dispatchEvent(new Event('till-changed'))
     openDialog.value = false
     await load()
   } catch (e) { error.value = e.response?.data?.error ?? e.message }
@@ -313,6 +314,7 @@ async function doCloseTill() {
   closing.value = true; error.value = ''
   try {
     await tillApi.closeSession(current.value.sessionId, closeDeclared)
+    window.dispatchEvent(new Event('till-changed'))
     closeDialog.value = false
     await load()
   } catch (e) { error.value = e.response?.data?.error ?? e.message }

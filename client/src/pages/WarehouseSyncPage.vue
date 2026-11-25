@@ -50,6 +50,9 @@
       </div>
     </section>
 
+    <!-- ── Customer sector check (live BC vs warehouse) ───────────────────── -->
+    <WarehouseSectorCheck />
+
     <!-- ── SQL Agent jobs ─────────────────────────────────────────────────── -->
     <section class="card">
       <div class="card-head">
@@ -143,6 +146,7 @@ import Message   from 'primevue/message'
 import Dialog    from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import { warehouseApi } from '@/services/warehouse.js'
+import WarehouseSectorCheck from '@/components/WarehouseSectorCheck.vue'
 
 const toast = useToast()
 const loading = ref(false)

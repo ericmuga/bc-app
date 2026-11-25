@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as Pos from '../models/PosModel.js';
+import * as Linked from '../models/PosLinkedCustomerModel.js';
 import * as Stock from '../models/PosStockModel.js';
 import * as Bom from '../models/PosBomModel.js';
 import * as BcSync from '../models/PosBcSyncModel.js';
@@ -116,7 +117,12 @@ export async function getItems(req, res) {
     // Optional company toggle: when the terminal selects a company, show only that
     // company's items (PosItem.SourceCompany; NULL treated as FCL).
     const company = (req.query?.company || '').trim().toUpperCase() || null;
-    ok(res, await Pos.listPosItemsGrouped({ shopCode, userId: req.user.userId, company, orderId: req.query?.orderId || null }));
+    ok(res, await Pos.listPosItemsGrouped({
+      shopCode, userId: req.user.userId, company,
+      orderId: req.query?.orderId || null,
+      // Before an order exists the terminal may already have switched customer.
+      linkedCustomerId: req.query?.linkedCustomerId || null,
+    }));
   } catch (e) { err(res, e); }
 }
 
@@ -154,8 +160,68 @@ export async function createOrder(req, res) {
   try {
     const shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
     const result   = await Pos.createOrder(req.user.userId, req.user.userName, shopCode);
+    // A sale starts on the shop customer unless the cashier already switched.
+    if (req.body?.linkedCustomerId) await Linked.setOrderCustomer(result.OrderId, req.body.linkedCustomerId);
     ok(res, result);
   } catch (e) { err(res, e); }
+}
+
+// ── Linked customers (bill a sale to another customer, e.g. a distributor) ──
+
+/** GET /pos/linked-customers — the customers this terminal's shop may bill (shop-specific + global). */
+export async function listShopLinkedCustomers(req, res) {
+  try {
+    const shopCode = await resolveShopCode(req.user.userId, req.user.role, req);
+    if (!shopCode) return ok(res, []);
+    ok(res, await Linked.listLinkedCustomers({ shopCode, activeOnly: true }));
+  } catch (e) { err(res, e); }
+}
+
+/**
+ * PUT /pos/orders/:orderId/customer  body: { linkedCustomerId | null }
+ * Switch who the open order is billed to and re-price its lines.
+ */
+export async function setOrderCustomer(req, res) {
+  try {
+    const orderId = req.params.orderId;
+    const { shopCode } = await Linked.setOrderCustomer(orderId, req.body?.linkedCustomerId || null);
+    const order = await Pos.getOrder(orderId);
+    const cats = await Pos.listPosItemsGrouped({ shopCode, orderId });
+    const price = new Map();
+    for (const c of cats) for (const it of c.items) price.set(String(it.itemNo).toUpperCase(), it.unitPrice);
+    if (order.lines.length) {
+      await Pos.setOrderLines(orderId, order.lines.map((l) => ({
+        ...l, unitPrice: price.get(String(l.itemNo).toUpperCase()) ?? l.unitPrice,
+      })));
+    }
+    ok(res, await Pos.getOrder(orderId));
+  } catch (e) { err(res, e, 400); }
+}
+
+// Admin: linked-customer setup
+export async function adminListLinkedCustomers(req, res) {
+  try { ok(res, await Linked.listLinkedCustomers({ shopCode: req.query.shopCode || null })); }
+  catch (e) { err(res, e); }
+}
+export async function adminSaveLinkedCustomer(req, res) {
+  try {
+    ok(res, await Linked.saveLinkedCustomer(
+      { ...req.body, linkedCustomerId: req.params.linkedCustomerId || req.body?.linkedCustomerId || null },
+      { createdBy: req.user.userName || req.user.userId },
+    ));
+  } catch (e) { err(res, e, 400); }
+}
+export async function adminDeleteLinkedCustomer(req, res) {
+  try { ok(res, await Linked.deleteLinkedCustomer(req.params.linkedCustomerId)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function adminSyncLinkedCustomerPrices(req, res) {
+  try { ok(res, await Linked.syncLinkedCustomerPrices({ linkedCustomerId: req.params.linkedCustomerId || null })); }
+  catch (e) { err(res, e); }
+}
+export async function adminSearchBcCustomers(req, res) {
+  try { ok(res, await Linked.searchBcCustomers(req.query.company || 'FCL', req.query.q || '')); }
+  catch (e) { err(res, e, 400); }
 }
 
 export async function listOrders(req, res) {
@@ -914,6 +980,15 @@ export async function setCashierShops(req, res) {
   } catch (e) { err(res, e, 400); }
 }
 
+async function shopAndLinkedPrices(company) {
+  const result = await Pos.syncShopPricesFromBc(company);
+  const linked = await Linked.syncLinkedCustomerPrices();
+  result.linkedCustomerPrices = linked.prices;
+  result.linkedCustomers = linked.customers;
+  linked.errors.forEach((m) => result.errors.push(`linked customers: ${m}`));
+  return result;
+}
+
 /** Per-step BC sync. POST /pos/setup/sync-from-bc/:kind  body: { company, wipe? } */
 export async function syncStepFromBc(req, res) {
   try {
@@ -929,13 +1004,15 @@ export async function syncStepFromBc(req, res) {
       'items':           (c) => Pos.syncItemsFromBc(c, { wipe }),
       'payment-types':   (c) => Pos.syncPaymentTypesFromBc(c),
       'paymenttypes':    (c) => Pos.syncPaymentTypesFromBc(c),
-      'shop-prices':     (c) => Pos.syncShopPricesFromBc(c),
-      'shopprices':      (c) => Pos.syncShopPricesFromBc(c),
+      // Shop prices also refresh the linked customers' (distributor) prices.
+      'shop-prices':     (c) => shopAndLinkedPrices(c),
+      'shopprices':      (c) => shopAndLinkedPrices(c),
+      'linked-customer-prices': () => Linked.syncLinkedCustomerPrices(),
     };
     const fn = stepFns[kind];
     if (!fn) {
       return res.status(400).json({
-        error: `Unknown sync step "${kind}". Use one of: shops, walk-ins, contacts, categories, items, payment-types, shop-prices`,
+        error: `Unknown sync step "${kind}". Use one of: shops, walk-ins, contacts, categories, items, payment-types, shop-prices, linked-customer-prices`,
       });
     }
     const result = await fn(company);

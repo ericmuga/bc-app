@@ -126,39 +126,114 @@ export async function getGlMonthlyAsOf(companies) {
   } catch { return null; }
 }
 
+const addDaysStr   = (s, n) => { const d = new Date(`${s}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n);   return d.toISOString().slice(0, 10); };
+const addMonthsStr = (s, n) => { const d = new Date(`${s}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 10); };
+
+/** Live per-account Debit/Credit/Net from G/L Entry for [from, toExcl) — partial-month edges only. */
+async function liveGlByAccount(companies, from, toExcl) {
+  const blocks = resolveCompanies(companies).map((c) => `
+    SELECT '${c}' AS Company, e.[G_L Account No_] AS AccountNo,
+      MAX(RTRIM(a.[Name])) AS AccountName, MAX(a.[Account Type]) AS AccountType,
+      MAX(a.[Account Category]) AS AccountCategory, MAX(a.[Income_Balance]) AS IncomeBalance,
+      SUM(e.[Debit Amount]) AS Dr, SUM(e.[Credit Amount]) AS Cr, SUM(e.[Amount]) AS Net
+    FROM ${bcTable(c, 'G_L Entry')} e
+    INNER JOIN ${bcTable(c, 'G_L Account')} a ON a.[No_] = e.[G_L Account No_]
+    WHERE e.[Posting Date] >= @from AND e.[Posting Date] < @toExcl AND a.[Account Type] = 0
+    GROUP BY e.[G_L Account No_]`);
+  const { recordset } = await queryBc(blocks.join('\nUNION ALL\n'), {
+    from:   { type: bcSql.Date, value: new Date(from) },
+    toExcl: { type: bcSql.Date, value: new Date(toExcl) },
+  });
+  return recordset;
+}
+
 /**
  * Trial Balance from the warehouse FACT (drop-in shape for getTrialBalance):
  * one row per (Company, AccountNo) with OpeningBalance, PeriodDebit,
  * PeriodCredit, ClosingBalance. Sums over global dimensions within each account.
+ * The FACT is month-grain, so only whole calendar months inside the range come
+ * from it; a partial first/last month (and the days of the first month before
+ * dateFrom, which belong to the opening) are summed live from G/L Entry.
  */
 export async function getTrialBalanceFast({ companies, dateFrom, dateTo }) {
   const startMonth = monthStartStr(dateFrom);
   const endMonth   = monthStartStr(dateTo);
+  const dayAfterTo = addDaysStr(dateTo, 1);
+  const headWhole  = dateFrom === startMonth;                   // starts on the 1st
+  const tailWhole  = dayAfterTo === addMonthsStr(endMonth, 1);  // ends on a month end
+
+  // Whole months served by the FACT: [factFrom .. factTo] (month starts, inclusive).
+  let factFrom = headWhole ? startMonth : addMonthsStr(startMonth, 1);
+  let factTo   = tailWhole ? endMonth   : addMonthsStr(endMonth, -1);
+  const livePeriod = [];
+  if (factFrom > factTo) {            // no whole month inside → the whole period is live
+    livePeriod.push([dateFrom, dayAfterTo]);
+    factFrom = factTo = null;
+  } else {
+    if (!headWhole) livePeriod.push([dateFrom, factFrom]);
+    if (!tailWhole) livePeriod.push([endMonth, dayAfterTo]);
+  }
+  const liveOpening = headWhole ? null : [startMonth, dateFrom];
+
   const pool = await whsDb.getPool();
   const req  = pool.request()
     .input('startMonth', whsSql.Date, startMonth)
-    .input('endMonth',   whsSql.Date, endMonth);
+    .input('endMonth',   whsSql.Date, endMonth)
+    .input('factFrom',   whsSql.Date, factFrom)
+    .input('factTo',     whsSql.Date, factTo);
   const inList = whsCompanyIn(req, companies);
-  const { recordset } = await req.query(`
-    SELECT
-      Company, AccountNo,
-      MAX(AccountName)     AS AccountName,
-      MAX(AccountType)     AS AccountType,
-      MAX(AccountCategory) AS AccountCategory,
-      MAX(IncomeBalance)   AS IncomeBalance,
-      ISNULL(SUM(CASE WHEN MonthStart <  @startMonth                               THEN NetAmount    ELSE 0 END), 0) AS OpeningBalance,
-      ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth   THEN PeriodDebit  ELSE 0 END), 0) AS PeriodDebit,
-      ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth   THEN PeriodCredit ELSE 0 END), 0) AS PeriodCredit,
-      ISNULL(SUM(CASE WHEN MonthStart <= @endMonth                                 THEN NetAmount    ELSE 0 END), 0) AS ClosingBalance
-    FROM ${GL_MONTHLY_TABLE}
-    WHERE Company IN (${inList}) AND MonthStart <= @endMonth
-    GROUP BY Company, AccountNo
-    HAVING ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth THEN PeriodDebit  ELSE 0 END), 0) <> 0
-        OR ISNULL(SUM(CASE WHEN MonthStart >= @startMonth AND MonthStart <= @endMonth THEN PeriodCredit ELSE 0 END), 0) <> 0
-        OR ISNULL(SUM(CASE WHEN MonthStart <= @endMonth                              THEN NetAmount    ELSE 0 END), 0) <> 0
-    ORDER BY AccountNo, Company
-  `);
-  return recordset;
+  const [fact, openGap, ...periodGaps] = await Promise.all([
+    req.query(`
+      SELECT
+        Company, AccountNo,
+        MAX(AccountName)     AS AccountName,
+        MAX(AccountType)     AS AccountType,
+        MAX(AccountCategory) AS AccountCategory,
+        MAX(IncomeBalance)   AS IncomeBalance,
+        ISNULL(SUM(CASE WHEN MonthStart <  @startMonth                     THEN NetAmount    ELSE 0 END), 0) AS OpeningBalance,
+        ISNULL(SUM(CASE WHEN MonthStart BETWEEN @factFrom AND @factTo      THEN PeriodDebit  ELSE 0 END), 0) AS PeriodDebit,
+        ISNULL(SUM(CASE WHEN MonthStart BETWEEN @factFrom AND @factTo      THEN PeriodCredit ELSE 0 END), 0) AS PeriodCredit
+      FROM ${GL_MONTHLY_TABLE}
+      WHERE Company IN (${inList}) AND MonthStart <= @endMonth
+      GROUP BY Company, AccountNo
+    `).then((r) => r.recordset),
+    liveOpening ? liveGlByAccount(companies, ...liveOpening) : [],
+    ...livePeriod.map(([from, toExcl]) => liveGlByAccount(companies, from, toExcl)),
+  ]);
+
+  const rows = new Map();
+  const rowFor = (r) => {
+    const key = `${r.Company}|${r.AccountNo}`;
+    if (!rows.has(key)) rows.set(key, {
+      Company: r.Company, AccountNo: r.AccountNo, AccountName: r.AccountName, AccountType: r.AccountType,
+      AccountCategory: r.AccountCategory, IncomeBalance: r.IncomeBalance,
+      OpeningBalance: 0, PeriodDebit: 0, PeriodCredit: 0,
+    });
+    return rows.get(key);
+  };
+  for (const r of fact) {
+    const row = rowFor(r);
+    row.OpeningBalance += Number(r.OpeningBalance) || 0;
+    row.PeriodDebit    += Number(r.PeriodDebit)    || 0;
+    row.PeriodCredit   += Number(r.PeriodCredit)   || 0;
+  }
+  for (const r of openGap) rowFor(r).OpeningBalance += Number(r.Net) || 0;
+  for (const gap of periodGaps) for (const r of gap) {
+    const row = rowFor(r);
+    row.PeriodDebit  += Number(r.Dr) || 0;
+    row.PeriodCredit += Number(r.Cr) || 0;
+  }
+
+  return [...rows.values()]
+    .map((r) => ({
+      ...r,
+      OpeningBalance: round2(r.OpeningBalance),
+      PeriodDebit:    round2(r.PeriodDebit),
+      PeriodCredit:   round2(r.PeriodCredit),
+      ClosingBalance: round2(r.OpeningBalance + r.PeriodDebit - r.PeriodCredit),
+    }))
+    .filter((r) => r.PeriodDebit !== 0 || r.PeriodCredit !== 0 || r.ClosingBalance !== 0)
+    .sort((a, b) => a.AccountNo.localeCompare(b.AccountNo) || a.Company.localeCompare(b.Company));
 }
 
 /**

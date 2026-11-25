@@ -16,7 +16,7 @@ export async function dispatchDelegation(req,res,next){
   }
   const path=req.path.replace('/dispatch/','');
   const shared=( !direct || !/^reports(\/|$)/.test(path)) && /^(chillers\/config|bc-routes|bc-salespersons|report-lookups|reports)(\/|$)/.test(path);
-  const assembly=/^(assembly|assembly-sessions|return-reasons|chillers\/worklist)(\/|$)/.test(path);
+  const assembly=/^(assembly|assembly-sessions|return-reasons|chillers\/worklist|pack-items|prepacks)(\/|$)/.test(path);
   const packing=/^(packing|packing-runs|boxes|box-lines|box-by-qr|vessel-types|checkers)(\/|$)/.test(path);
   const loading=/^(loading|loading-lines|vehicles)(\/|$)/.test(path)||(req.method==='GET'&&path==='setup/vehicles');
   const barcode=path==='item-barcode'&&['assembly','packing'].includes(actor.delegationStage);

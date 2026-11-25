@@ -6,6 +6,21 @@ import { reportShopCode, canReadAllShops } from '../services/reportShopScope.js'
 import * as Pos  from '../models/PosModel.js';
 import * as Till from '../models/PosTillModel.js';
 import logger from '../services/logger.js';
+import { db, sql } from '../db/pool.js';
+import { tillAction, isTillExempt } from '../../../shared/tillRequirement.mjs';
+
+export async function requirement(req, res) {
+  if (isTillExempt(req.user)) return ok(res, { required: false, action: null, session: null });
+  try {
+    const pool = await db.getPool();
+    const result = await pool.request().input('id', sql.UniqueIdentifier, req.user.userId)
+      .query('SELECT RequireDailyTill FROM dbo.Users WHERE UserId=@id');
+    const required = Boolean(result.recordset[0]?.RequireDailyTill);
+    const session = required ? await Till.getCurrentSession(req.user.userId) : null;
+    ok(res, { required, action: tillAction(required, session), session });
+  } catch (e) { err(res, e); }
+}
+
 
 function ok(res, data) { return res.json(data); }
 function err(res, e, code = 500) {

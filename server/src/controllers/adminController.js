@@ -69,8 +69,10 @@ export async function updateUser(req, res) {
     role: String(req.body.role || '').trim().toLowerCase(),
     isActive: req.body.isActive !== false,
     receiveScheduledReports: Boolean(req.body.receiveScheduledReports),
+    requireDailyTill: req.body.requireDailyTill === true,
     shopCode: String(req.body.shopCode || '').trim() || null,
   };
+  if (payload.requireDailyTill && !['admin', 'shop-admin', 'sales-admin', 'shop'].includes(payload.role)) return res.status(400).json({ error: 'Daily cash till requires a role with POS access.' });
   if (!payload.displayName) return res.status(400).json({ error: 'displayName is required' });
   if (!VALID_ROLES.includes(payload.role)) return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
   try {

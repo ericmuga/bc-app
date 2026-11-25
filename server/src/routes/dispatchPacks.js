@@ -11,6 +11,7 @@ export function registerDispatchPackRoutes(router, { canDispAssemble, canDispatc
   router.get(   '/dispatch/prepacks/lookup',       ...canDispAssemble, packs.lookupPrepack);
   router.get(   '/dispatch/prepacks/labels',       ...canDispAssemble, packs.prepackLabels);
   router.post(  '/dispatch/prepacks',              ...canDispAssemble, packs.createPrepacks);
+  router.post(  '/dispatch/prepacks/void',         ...canDispAssemble, packs.voidPrepacks);
   router.post(  '/dispatch/prepacks/:id/void',     ...canDispAssemble, packs.voidPrepack);
   router.get(   '/dispatch/orders/:id/dpl',        ...canDispatch,     packs.orderDpl);
 }

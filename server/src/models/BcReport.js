@@ -2167,12 +2167,18 @@ export async function runCustomerAging({ asOfDate, companies: companiesFilter })
 
   const asOf = parseDateOnly(asOfDate);
 
-  // Build one sub-query per company; each returns pre-bucketed rows at (PostingGroup, CustomerNo)
+  // Build one sub-query per company; each returns pre-bucketed rows at (PostingGroup, CustomerNo).
+  // Amounts are LCY so the total ties to the G/L receivables account (Amount is
+  // in each entry's own currency). Applications are often back-dated before the
+  // applying document's posting date, so an application only counts once every
+  // ledger entry it touches (same Application No_) is posted by the as-of date —
+  // otherwise old invoices look settled by documents that did not exist yet.
   const segments = [];
   for (const companyId of companies) {
     const cle      = bcTable(companyId, 'Cust_ Ledger Entry');
     const dcle     = bcTable(companyId, 'Detailed Cust_ Ledg_ Entry');
     const customer = bcTable(companyId, 'Customer');
+    const amountAsOf = `CASE WHEN dcle.[Entry Type] = 2 AND CAST(appl.LastCle AS date) > @AsOfDate THEN 0 ELSE dcle.[Amount (LCY)] END`;
     segments.push(`
       SELECT
         '${companyId}' AS Company,
@@ -2189,18 +2195,26 @@ export async function runCustomerAging({ asOfDate, companies: companiesFilter })
           cle.[Customer No_]         AS CustomerNo,
           cle.[Customer Posting Group] AS PostingGroup,
           DATEDIFF(day, CAST(cle.[Posting Date] AS date), @AsOfDate) AS AgeDays,
-          SUM(dcle.[Amount])         AS Remaining
+          SUM(${amountAsOf})         AS Remaining
         FROM ${cle} cle
         JOIN ${dcle} dcle
           ON dcle.[Cust_ Ledger Entry No_] = cle.[Entry No_]
          AND CAST(dcle.[Posting Date] AS date) <= @AsOfDate
+        LEFT JOIN (
+          SELECT d2.[Application No_] AS AppNo, MAX(c2.[Posting Date]) AS LastCle
+          FROM ${dcle} d2
+          JOIN ${cle} c2 ON c2.[Entry No_] = d2.[Cust_ Ledger Entry No_]
+          WHERE d2.[Entry Type] = 2 AND d2.[Application No_] <> 0
+            AND CAST(d2.[Posting Date] AS date) <= @AsOfDate
+          GROUP BY d2.[Application No_]
+        ) appl ON appl.AppNo = dcle.[Application No_] AND dcle.[Entry Type] = 2
         WHERE CAST(cle.[Posting Date] AS date) <= @AsOfDate
         GROUP BY
           cle.[Entry No_],
           cle.[Customer No_],
           cle.[Customer Posting Group],
           cle.[Posting Date]
-        HAVING SUM(dcle.[Amount]) <> 0
+        HAVING SUM(${amountAsOf}) <> 0
       ) ae
       LEFT JOIN ${customer} c ON c.[No_] = ae.CustomerNo
       GROUP BY ae.PostingGroup, ae.CustomerNo

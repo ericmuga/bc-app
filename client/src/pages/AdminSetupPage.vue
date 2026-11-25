@@ -56,6 +56,9 @@
                   placeholder="Role" show-clear @change="filterCallback()" style="width:100%" />
               </template>
             </Column>
+            <Column field="requireDailyTill" header="Require daily cash till" style="min-width:170px">
+              <template #body="{ data }"><input type="checkbox" v-model="data.requireDailyTill" aria-label="Require daily cash till" /></template>
+            </Column>
             <Column field="shopCode" header="Shop" sortable style="min-width:120px" :showFilterMenu="false">
               <template #body="{ data }">
                 <Select v-model="data.shopCode" :options="posShopOptions" option-label="label" option-value="value"
@@ -873,6 +876,14 @@ GROUP BY [G_L Account No_]</pre>
             </div>
           </details>
 
+          <!-- Linked customers: other BC customers a shop may bill (e.g. distributor prices) -->
+          <details class="pos-sub-accordion">
+            <summary><i class="pi pi-users" /> Linked Customers <span class="acc-count-sm">{{ linkedCustomerCount }}</span></summary>
+            <div class="pos-setup-section">
+              <LinkedCustomersAdmin :shops="posShops" @count="linkedCustomerCount = $event" />
+            </div>
+          </details>
+
           <!-- Third Parties (HQ → these recipients during transfers) -->
           <details class="pos-sub-accordion">
             <summary><i class="pi pi-truck" /> Third Parties <span class="acc-count-sm">{{ thirdParties.length }}</span></summary>
@@ -1650,6 +1661,8 @@ import { financeReportsApi } from '@/services/financeReports.js'
 import { mgmtApi }           from '@/services/mgmtReports.js'
 import { bcReportsApi }      from '@/services/bcReports.js'
 import { posSetupApi, yieldApi, posApi } from '@/services/pos.js'
+import LinkedCustomersAdmin from '@/components/pos/LinkedCustomersAdmin.vue'
+const linkedCustomerCount = ref(0)
 import { useToast } from 'primevue/usetoast'
 const toast = useToast()
 import { dispatchApi } from '@/services/dispatch.js'
@@ -2261,6 +2274,7 @@ async function saveUser(user) {
     await adminApi.updateUser(user.userId, {
       displayName: user.displayName, email: user.email, role: user.role,
       isActive: user.isActive, shopCode: user.shopCode || null,
+      requireDailyTill: Boolean(user.requireDailyTill),
     })
   } catch (err) { error.value = err.response?.data?.error || err.message }
 }

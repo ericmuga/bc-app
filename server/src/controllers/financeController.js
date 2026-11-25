@@ -3,6 +3,7 @@
  * Handlers for finance reporting endpoints: Trial Balance, P&L, Balance Sheet.
  */
 import * as FinanceReport from '../models/FinanceReport.js';
+import * as ArRecon from '../models/ArRecon.js';
 import { db } from '../db/pool.js';
 import logger from '../services/logger.js';
 import { getOrSet, clearNamespace } from '../services/reportCache.js';
@@ -162,5 +163,48 @@ export async function deleteGlMapping(req, res) {
   } catch (err) {
     logger.error('finance/gl-mappings DELETE error', { error: err.message });
     return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Receivables reconciliation (sub-ledger vs G/L control accounts) ──────────
+const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && Number.isFinite(Date.parse(v));
+
+function arReconArgs(req) {
+  const company  = String(req.query.company || 'FCL').toUpperCase();
+  const { dateFrom, dateTo } = req.query;
+  if (!isoDate(dateFrom) || !isoDate(dateTo)) throw Object.assign(new Error('dateFrom and dateTo (YYYY-MM-DD) are required'), { status: 400 });
+  if (dateFrom > dateTo) throw Object.assign(new Error('dateFrom must not be after dateTo'), { status: 400 });
+  const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
+  return { company, dateFrom, dateTo, refresh };
+}
+
+/** GET /api/finance/ar-recon/summary?company&dateFrom&dateTo */
+export async function arReconSummary(req, res) {
+  try {
+    const { refresh, ...args } = arReconArgs(req);
+    const { value, cached } = await getOrSet('finance-ar-recon', { fn: 'summary', ...args },
+      () => ArRecon.summary(args), { ttlMs: 10 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
+  } catch (err) {
+    logger.error('finance/ar-recon/summary error', { error: err.message });
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+}
+
+/** GET /api/finance/ar-recon/detail?company&account&dateFrom&dateTo&scope=period|all */
+export async function arReconDetail(req, res) {
+  try {
+    const { refresh, ...args } = arReconArgs(req);
+    const account = String(req.query.account || '').trim();
+    if (!account) return res.status(400).json({ error: 'account is required' });
+    const scope = req.query.scope === 'all' ? 'all' : 'period';
+    const { value, cached } = await getOrSet('finance-ar-recon', { fn: 'detail', ...args, account, scope },
+      () => ArRecon.detail({ ...args, account, scope }), { ttlMs: 10 * 60_000, refresh });
+    res.set('X-Report-Cache', cached ? 'HIT' : 'MISS');
+    return res.json(value);
+  } catch (err) {
+    logger.error('finance/ar-recon/detail error', { error: err.message });
+    return res.status(err.status || (/not a receivables account|Unknown company/.test(err.message) ? 400 : 500)).json({ error: err.message });
   }
 }

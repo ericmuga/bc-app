@@ -13,6 +13,20 @@
 
     <Message v-if="error" severity="error" :closable="false" class="mb-3">{{ error }}</Message>
 
+    <!-- Shop + document filters (used where requests are reviewed across shops, e.g. Portioning) -->
+    <div v-if="showFilters" class="sr-filters mb-3">
+      <div v-if="isManager" class="sr-filter">
+        <label>Shop</label>
+        <Select v-model="shopFilter" :options="shopFilterOpts" option-label="label" option-value="value"
+                filter size="small" style="min-width:220px" @change="reloadAll" />
+      </div>
+      <div class="sr-filter">
+        <label>Document No</label>
+        <InputText v-model="docFilter" placeholder="e.g. SR-20261110-001" size="small" style="width:220px" />
+      </div>
+      <Button v-if="docFilter || shopFilter" label="Clear" icon="pi pi-filter-slash" text size="small" @click="clearFilters" />
+    </div>
+
     <div class="list-search mb-3" style="display:flex;gap:8px;align-items:center">
       <InputText v-model="reqFilters.global.value" placeholder="Search requests…" style="max-width:300px" />
       <span class="text-muted text-sm">{{ requests.length }} request(s)</span>
@@ -60,6 +74,7 @@
       paginator :rows="25" v-model:filters="lineFilters" filterDisplay="row" removableSort
       :globalFilterFields="['requestNo','itemNo','description','status']">
       <Column field="requestDate" header="Date" sortable style="width:100px" />
+      <Column v-if="showFilters" field="shopCode" header="Shop" sortable style="width:80px" />
       <Column field="requestNo"   header="Request" sortable style="width:160px" :showFilterMenu="false">
         <template #filter="{ filterModel, filterCallback }"><InputText v-model="filterModel.value" @input="filterCallback()" placeholder="Request" style="width:100%" /></template>
       </Column>
@@ -243,7 +258,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Button       from 'primevue/button'
 import DataTable    from 'primevue/datatable'
 import Column       from 'primevue/column'
@@ -260,6 +275,30 @@ import 'jspdf-autotable'
 import * as XLSX from 'xlsx'
 
 const auth = useAuthStore()
+
+// Opt-in shop + document number filters (the Portioning page turns these on).
+const props = defineProps({ showFilters: { type: Boolean, default: false } })
+const shopFilter = ref('')      // '' = current shop, 'ALL' = every shop, else a shop code (managers only)
+const docFilter  = ref('')
+const shopOptions = ref([])
+const shopFilterOpts = computed(() => [
+  { label: 'Current shop', value: '' },
+  { label: 'All shops', value: 'ALL' },
+  ...shopOptions.value.map(s => ({ label: `${s.Code} — ${s.Name}`, value: s.Code })),
+])
+const listParams = () => (props.showFilters && shopFilter.value ? { shop: shopFilter.value } : {})
+function reloadAll() { load(); loadLines() }
+function clearFilters() {
+  const hadShop = !!shopFilter.value
+  shopFilter.value = ''; docFilter.value = ''
+  if (hadShop) reloadAll()
+}
+// Document No narrows both the requests and their lines.
+watch(docFilter, (v) => {
+  const q = String(v || '').trim() || null
+  reqFilters.value.RequestNo.value = q
+  lineFilters.value.requestNo.value = q
+})
 
 const requests      = ref([])
 const reqFilters = ref({
@@ -282,7 +321,7 @@ const lineFilters = ref({
 async function loadLines() {
   linesLoading.value = true
   try {
-    const { data } = await stockApi.requestLines({})
+    const { data } = await stockApi.requestLines(listParams())
     reqLines.value = (data || []).map((r, i) => ({ ...r, _k: `${r.requestNo}_${r.itemNo}_${i}` }))
   } catch (e) { error.value = e.response?.data?.error ?? e.message }
   finally { linesLoading.value = false }
@@ -473,7 +512,7 @@ const dialogHeader = computed(() => current.value ? `Stock Request ${current.val
 
 async function load() {
   loading.value = true; error.value = ''
-  try { requests.value = (await stockApi.listRequests()).data }
+  try { requests.value = (await stockApi.listRequests(listParams())).data }
   catch (e) { error.value = e.response?.data?.error ?? e.message }
   finally  { loading.value = false }
 }
@@ -657,7 +696,12 @@ function fmtTime(v) {
   return new Date(v).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })
 }
 
-onMounted(() => { load(); loadLines() })
+onMounted(async () => {
+  load(); loadLines()
+  if (props.showFilters && isManager.value) {
+    try { shopOptions.value = (await posApi.listShops()).data || [] } catch { shopOptions.value = [] }
+  }
+})
 </script>
 
 <style scoped>
@@ -669,6 +713,10 @@ onMounted(() => { load(); loadLines() })
 .mb-3       { margin-bottom: 12px; }
 .mb-2       { margin-bottom: 8px; }
 .mt-2       { margin-top: 8px; }
+
+.sr-filters { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+.sr-filter { display:flex; flex-direction:column; gap:4px; }
+.sr-filter label { font-size:12px; font-weight:600; color:#374151; }
 
 .elev-box { margin-top: 12px; display:flex; flex-direction:column; gap:6px;
   padding:10px; border:1px solid var(--bc-border,#e4e7ec); border-radius:8px; background:var(--bc-surface-raised,#f9fafb); }

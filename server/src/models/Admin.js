@@ -73,6 +73,7 @@ function mapUser(row) {
     shopCode: row.ShopCode ?? null,
     isActive: Boolean(row.IsActive),
     receiveScheduledReports: Boolean(row.ReceiveScheduledReports),
+    requireDailyTill: Boolean(row.RequireDailyTill),
     authProvider: row.AuthProvider,
     createdAt: row.CreatedAt,
     updatedAt: row.UpdatedAt,
@@ -114,6 +115,7 @@ export async function listUsers() {
       Email,
       Role,
       IsActive,
+      RequireDailyTill,
       CASE
         WHEN COL_LENGTH('dbo.Users', 'ReceiveScheduledReports') IS NULL THEN CAST(0 AS bit)
         ELSE ReceiveScheduledReports
@@ -173,6 +175,7 @@ export async function updateUser(userId, payload) {
   req.input('Email', sql.NVarChar(200), payload.email || null);
   req.input('Role', sql.NVarChar(20), payload.role);
   req.input('IsActive', sql.Bit, payload.isActive ? 1 : 0);
+  req.input('RequireDailyTill', sql.Bit, payload.requireDailyTill ? 1 : 0);
   req.input('ReceiveScheduledReports', sql.Bit, payload.receiveScheduledReports ? 1 : 0);
   req.input('ShopCode', sql.NVarChar(50), payload.shopCode?.trim().toUpperCase() || null);
   await req.query(`
@@ -183,6 +186,7 @@ export async function updateUser(userId, payload) {
           Email = @Email,
           Role = @Role,
           IsActive = @IsActive,
+          RequireDailyTill = @RequireDailyTill,
           UpdatedAt = GETUTCDATE()
       WHERE UserId = @UserId
     END
@@ -193,6 +197,7 @@ export async function updateUser(userId, payload) {
           Email = @Email,
           Role = @Role,
           IsActive = @IsActive,
+          RequireDailyTill = @RequireDailyTill,
           ReceiveScheduledReports = @ReceiveScheduledReports,
           ShopCode = CASE WHEN COL_LENGTH('dbo.Users','ShopCode') IS NULL THEN NULL ELSE @ShopCode END,
           UpdatedAt = GETUTCDATE()

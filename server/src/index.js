@@ -4,6 +4,7 @@ import {startDispatchPullScheduler,stopDispatchPullScheduler} from './services/d
  * server/src/index.js
  */
 import 'dotenv/config';
+import { migrateTillRequirement } from './db/tillRequirement.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -15,6 +16,8 @@ import { db } from './db/pool.js';
 import { migrateDispatchChillers } from './db/dispatchChillers.js';
 import { migrateContactRoute } from './db/contactRoute.js';
 import { migrateRmkContacts } from './db/rmkContacts.js';
+import { migratePortionStockSheet } from './db/portionStockSheet.js';
+import { migrateLinkedCustomers } from './db/linkedCustomers.js';
 import routes from './routes/index.js';
 import logger from './services/logger.js';
 import swaggerSpec from './docs/swagger.js';
@@ -409,6 +412,7 @@ async function ensurePosItemColumns() {
 
 async function start() {
   await db.connect();
+  await migrateTillRequirement(await db.getPool());
   await ensurePosItemColumns();
   // Existing dispatch deployments need this additive upgrade before serving requests.
   const pool = await db.getPool();
@@ -417,6 +421,8 @@ async function start() {
   await migrateDispatchOffline(pool);
   await migrateContactRoute(pool);
   await migrateRmkContacts(pool);
+  await migratePortionStockSheet(pool);
+  await migrateLinkedCustomers(pool);
   if (dispatchSchema.recordset[0]?.Id) startDispatchPullScheduler();
   startReportScheduler();
   startBcPullScheduler();

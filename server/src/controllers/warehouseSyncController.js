@@ -5,7 +5,13 @@
  * Gated to admin + analyst in routes/index.js.
  */
 import * as Wh from '../models/WarehouseSyncModel.js';
+import { sectorCheck } from '../models/WarehouseSectorCheckModel.js';
 import logger from '../services/logger.js';
+
+export async function getSectorCheck(_req, res) {
+  try { res.json(await sectorCheck()); }
+  catch (e) { logger.error('warehouse/sector-check', { error: e.message }); res.status(500).json({ error: e.message }); }
+}
 
 export async function getDownloadEtl(_req, res) {
   try { res.json(await Wh.downloadEtlStatus()); }

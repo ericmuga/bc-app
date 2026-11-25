@@ -163,6 +163,19 @@ export async function summary({ source = 'orders', groupBy = 'CustomerNo', dateF
   const blocks = sourceBlocks(source);
   if (!cos.length) return [];
 
+  // Honour the SalesPostingGroupConfig include-volume / include-value flags for
+  // EVERY dimension (not just PostingGroup). Without this, by-customer / by-
+  // salesperson / by-route / by-sector totals include posting groups the business
+  // excludes from sales (e.g. BY PDCT, PETROL/DSL) and so disagree with the
+  // by-posting-group report. Excluded groups contribute 0 to value/volume.
+  const pgCfg   = await loadPgConfig();
+  const sqlList = (arr) => arr.map((s) => `'${String(s).replace(/'/g, "''")}'`).join(',');
+  const valExcl = [...pgCfg].filter(([, c]) => !c.includeValue).map(([k]) => k);
+  const volExcl = [...pgCfg].filter(([, c]) => !c.includeVolume).map(([k]) => k);
+  const pgStrip = `UPPER(${postingGroupStripExpr('l')})`;
+  const valMul  = valExcl.length ? `CASE WHEN ${pgStrip} IN (${sqlList(valExcl)}) THEN 0 ELSE 1 END` : '1';
+  const volMul  = volExcl.length ? `CASE WHEN ${pgStrip} IN (${sqlList(volExcl)}) THEN 0 ELSE 1 END` : '1';
+
   const segments = [];
   for (const companyId of cos) {
     const tables = makeTables(companyId);
@@ -171,9 +184,9 @@ export async function summary({ source = 'orders', groupBy = 'CustomerNo', dateF
       segments.push(`
         SELECT ${dim.expr} AS GroupKey,
                COUNT(DISTINCT h.[No_]) AS DocumentCount,
-               ${block.sign}SUM(CAST(l.[Quantity] AS decimal(38,20))) AS TotalQuantity,
-               ${block.sign}SUM(CAST(l.[Quantity (Base)] AS decimal(38,20))) AS TotalQuantityBase,
-               ${block.sign}SUM(${amountExpr()}) AS TotalLineAmount
+               ${block.sign}SUM(CAST(l.[Quantity] AS decimal(38,20)) * ${volMul}) AS TotalQuantity,
+               ${block.sign}SUM(CAST(l.[Quantity (Base)] AS decimal(38,20)) * ${volMul}) AS TotalQuantityBase,
+               ${block.sign}SUM((${amountExpr()}) * ${valMul}) AS TotalLineAmount
         FROM ${tables[block.h]} h
         JOIN ${tables[block.l]} l ON ${lineJoinOn(block)}
         ${joinSql(dim.joins, tables)}

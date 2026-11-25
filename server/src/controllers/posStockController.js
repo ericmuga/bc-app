@@ -33,6 +33,15 @@ async function userShopCode(req) {
   return Pos.getUserShopCode(req.user.userId);
 }
 
+// Stock-request listings: managers may filter by ?shop=CODE or ?shop=ALL (every
+// shop); without it — and always for other roles — the current shop applies.
+async function requestListShop(req) {
+  const isManager = ['admin', 'shop-admin'].includes(req.user.role);
+  const q = String(req.query?.shop || '').trim().toUpperCase();
+  if (isManager && q) return q === 'ALL' ? null : q;
+  return userShopCode(req);
+}
+
 /** GET /pos/reports/daily-sales — paid orders + per-mirror breakdown.
  *  Managers (admin/shop-admin) may filter by ?shopCode (omit = all shops);
  *  a shop user is always locked to their own shop. */
@@ -47,7 +56,7 @@ export async function dailySalesSummary(req, res) {
 /** GET /pos/stock-request-lines — flat, filterable listing of request lines (shop-scoped). */
 export async function listRequestLines(req, res) {
   try {
-    const shopCode = await userShopCode(req);
+    const shopCode = await requestListShop(req);
     ok(res, await Stock.listStockRequestLines({ shopCode, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo }));
   } catch (e) { err(res, e); }
 }
@@ -229,7 +238,7 @@ export async function loadStockFromBc(req, res) {
 
 export async function listRequests(req, res) {
   try {
-    const shopCode = await userShopCode(req);
+    const shopCode = await requestListShop(req);
     ok(res, await Stock.listStockRequests({ shopCode, role: req.user.role }));
   } catch (e) {
     logger.error('listRequests failed', {

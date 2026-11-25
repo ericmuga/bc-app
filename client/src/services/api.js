@@ -9,8 +9,11 @@ api.interceptors.request.use((config) => {
   const auth    = useAuthStore()
   const company = useCompanyStore()
 
-  if(auth.user?.role==='dispatch-worker')config.headers['X-Worker-Stage']=window.location.pathname.includes('/dispatch/stocktakes')?'stocktake':currentWorkerStage()
-  const stage=currentWorkerStage(),worker=workerFor(stage,auth.user?.userId)
+  // Prepacks are assembler work, so that page runs under the assembly stage.
+  const path=window.location.pathname
+  const stage=/^\/dispatch\/prepacks(?:\/|$)/.test(path)?'assembly':currentWorkerStage()
+  if(auth.user?.role==='dispatch-worker')config.headers['X-Worker-Stage']=path.includes('/dispatch/stocktakes')?'stocktake':stage
+  const worker=workerFor(stage,auth.user?.userId)
   if(worker && config.url?.startsWith('/dispatch/') && !config.url.startsWith('/dispatch/delegation'))config.headers['X-Dispatch-Delegation']=worker.token
   if (auth.token) config.headers.Authorization = `Bearer ${auth.token}`
   if (company.currentCompanyId) config.headers['X-Company-ID'] = company.currentCompanyId

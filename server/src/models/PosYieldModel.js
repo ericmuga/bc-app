@@ -271,11 +271,36 @@ export async function getPortioning(portioningId) {
   };
 }
 
-export async function createPortioning({ portioningDate, sourceTransferLineId, shopCode, notes, createdBy }) {
+export async function createPortioning({ portioningDate, sourceTransferLineId, sourceRequestLineId = null,
+                                         sourceQuantity = null, shopCode, notes, createdBy }) {
   const pool = await appPool();
   // Pull source-line details so the source qty/cost are captured at creation time
   let src = {};
-  if (sourceTransferLineId) {
+  if (sourceRequestLineId) {
+    // Received stock-request line (the Portioning flow's normal source)
+    const r = await pool.request()
+      .input('id', sql.UniqueIdentifier, sourceRequestLineId)
+      .query(`
+        SELECT l.[ItemNo],l.[Description],l.[QuantityReceived],l.[UnitOfMeasure],
+               ISNULL(NULLIF(pi.[UnitCost],0), ISNULL(pi.[UnitPrice],0)) AS UnitCost,
+               ISNULL((SELECT SUM(p.[SourceQuantity]) FROM [dbo].[PosPortioning] p
+                       WHERE p.[SourceRequestLineId]=l.[LineId]),0) AS UsedQty
+        FROM [dbo].[PosStockRequestLine] l
+        LEFT JOIN [dbo].[PosItem] pi ON pi.[ItemNo]=l.[ItemNo]
+        WHERE l.[LineId]=@id
+      `);
+    if (!r.recordset.length) throw new Error('Source stock-request line not found');
+    const ln = r.recordset[0];
+    const remaining = Number(ln.QuantityReceived || 0) - Number(ln.UsedQty || 0);
+    const qty = sourceQuantity != null && Number(sourceQuantity) > 0 ? Number(sourceQuantity) : remaining;
+    if (qty <= 0) throw new Error('Nothing left to portion on this received line');
+    if (qty > remaining + 0.00005) throw new Error(`Only ${remaining} ${ln.UnitOfMeasure || ''} left to portion on this line`);
+    const unitCost = Number(ln.UnitCost || 0);
+    src = {
+      itemNo: ln.ItemNo, description: ln.Description, qty, uom: ln.UnitOfMeasure || '',
+      unitCost, totalCost: Math.round(qty * unitCost * 10000) / 10000,
+    };
+  } else if (sourceTransferLineId) {
     const r = await pool.request()
       .input('id', sql.UniqueIdentifier, sourceTransferLineId)
       .query(`
@@ -296,7 +321,8 @@ export async function createPortioning({ portioningDate, sourceTransferLineId, s
   const r = await pool.request()
     .input('portioningNo',         sql.NVarChar(30),    portioningNo)
     .input('portioningDate',       sql.Date,            portioningDate || new Date())
-    .input('sourceTransferLineId', sql.UniqueIdentifier, sourceTransferLineId || null)
+    .input('sourceTransferLineId', sql.UniqueIdentifier, sourceRequestLineId ? null : (sourceTransferLineId || null))
+    .input('sourceRequestLineId',  sql.UniqueIdentifier, sourceRequestLineId || null)
     .input('sourceItemNo',         sql.NVarChar(30),    src.itemNo || '')
     .input('sourceDescription',    sql.NVarChar(200),   src.description || '')
     .input('sourceQuantity',       sql.Decimal(18, 4),  src.qty || 0)
@@ -308,10 +334,10 @@ export async function createPortioning({ portioningDate, sourceTransferLineId, s
     .input('createdBy',            sql.NVarChar(100),   createdBy || null)
     .query(`
       INSERT INTO [dbo].[PosPortioning]
-        ([PortioningNo],[PortioningDate],[SourceTransferLineId],[SourceItemNo],[SourceDescription],
+        ([PortioningNo],[PortioningDate],[SourceTransferLineId],[SourceRequestLineId],[SourceItemNo],[SourceDescription],
          [SourceQuantity],[SourceUom],[SourceUnitCost],[SourceTotalCost],[ShopCode],[Notes],[CreatedBy])
       OUTPUT INSERTED.[PortioningId], INSERTED.[PortioningNo]
-      VALUES(@portioningNo,@portioningDate,@sourceTransferLineId,@sourceItemNo,@sourceDescription,
+      VALUES(@portioningNo,@portioningDate,@sourceTransferLineId,@sourceRequestLineId,@sourceItemNo,@sourceDescription,
              @sourceQuantity,@sourceUom,@sourceUnitCost,@sourceTotalCost,@shopCode,@notes,@createdBy)
     `);
   return r.recordset[0];

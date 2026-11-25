@@ -24,6 +24,7 @@ export const listPrepacks = action((r) => Prepacks.listPrepacks(r.query));
 export const prepackStock = action((r) => Prepacks.prepackStock(r.query.company));
 export const createPrepacks = action((r) => Prepacks.createPrepacks(r.body, userOf(r)));
 export const voidPrepack = action((r) => Prepacks.voidPrepack(r.params.id, r.body?.reason, userOf(r)));
+export const voidPrepacks = action((r) => Prepacks.voidPrepacks(r.body || {}, userOf(r)));
 export const lookupPrepack = action((r) => Prepacks.lookupForLine(r.query.no, r.query.lineId));
 
 export const prepackLabels = pdf(async (r) => {

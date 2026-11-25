@@ -4,6 +4,7 @@
  */
 import * as Pos   from '../models/PosModel.js';
 import * as Yield from '../models/PosYieldModel.js';
+import * as Sheet from '../models/PosPortionSheetModel.js';
 import logger from '../services/logger.js';
 
 function ok(res, data) { return res.json(data); }
@@ -100,6 +101,8 @@ export async function createPortioning(req, res) {
     const result = await Yield.createPortioning({
       portioningDate:       req.body.portioningDate,
       sourceTransferLineId: req.body.sourceTransferLineId,
+      sourceRequestLineId:  req.body.sourceRequestLineId || null,
+      sourceQuantity:       req.body.sourceQuantity ?? null,
       shopCode,
       notes:                req.body.notes,
       createdBy:            req.user.userId,
@@ -351,5 +354,99 @@ export async function yieldReport(req, res) {
     const dateTo   = req.query.dateTo;
     if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom, dateTo required' });
     ok(res, await Yield.yieldReport({ dateFrom, dateTo, shopCode }));
+  } catch (e) { err(res, e); }
+}
+
+// ── Portioning: sources, stock sheet, upload, report ────────────────────────
+
+// Managers (admin / shop-admin) follow the shop picked in the admin selector,
+// matching the stock-request screens; everyone else is locked to their shop.
+async function portionShop(req) {
+  if (['admin', 'shop-admin'].includes(req.user.role)) {
+    const h = req.headers['x-shop-code'];
+    if (h) return String(h).trim().toUpperCase();
+    if (req.body?.shopCode) return String(req.body.shopCode).trim().toUpperCase();
+  }
+  return Pos.getUserShopCode(req.user.userId);
+}
+
+export async function portioningSources(req, res) {
+  try {
+    const shopCode = await portionShop(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop selected' });
+    ok(res, await Sheet.portioningSources(shopCode));
+  } catch (e) { err(res, e); }
+}
+
+export async function listSheets(req, res) {
+  try {
+    const shopCode = await portionShop(req);
+    ok(res, await Sheet.listSheets({ shopCode, dateFrom: req.query.dateFrom || null, dateTo: req.query.dateTo || null }));
+  } catch (e) { err(res, e); }
+}
+export async function getSheet(req, res) {
+  try {
+    const s = await Sheet.getSheet(req.params.sheetId);
+    if (!s) return res.status(404).json({ error: 'Not found' });
+    ok(res, s);
+  } catch (e) { err(res, e); }
+}
+export async function createSheet(req, res) {
+  try {
+    const shopCode = await portionShop(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop selected' });
+    ok(res, await Sheet.createSheet({
+      shopCode,
+      asAtDate:   req.body.asAtDate,
+      periodFrom: req.body.periodFrom || null,
+      notes:      req.body.notes || null,
+      scope:      req.body.scope || 'portioned',
+      createdBy:  req.user.userName || req.user.userId,
+    }));
+  } catch (e) { err(res, e, 400); }
+}
+export async function saveSheetLines(req, res) {
+  try {
+    if (!Array.isArray(req.body.lines)) return res.status(400).json({ error: 'lines required' });
+    ok(res, await Sheet.saveSheetLines(req.params.sheetId, req.body.lines, {
+      periodFrom: req.body.periodFrom || null,
+      notes: req.body.notes,
+    }));
+  } catch (e) { err(res, e, 400); }
+}
+export async function postSheet(req, res) {
+  try { ok(res, await Sheet.postSheet(req.params.sheetId, req.user.userName || req.user.userId)); }
+  catch (e) { err(res, e, 400); }
+}
+export async function deleteSheet(req, res) {
+  try { await Sheet.deleteSheet(req.params.sheetId); ok(res, { ok: true }); }
+  catch (e) { err(res, e, 400); }
+}
+export async function uploadSheets(req, res) {
+  try {
+    const shopCode = await portionShop(req);
+    if (!shopCode) return res.status(400).json({ error: 'No shop selected' });
+    ok(res, await Sheet.uploadSheets({
+      shopCode, rows: req.body.rows, autoPost: !!req.body.autoPost,
+      createdBy: req.user.userName || req.user.userId,
+    }));
+  } catch (e) { err(res, e, 400); }
+}
+
+/** GET /pos/reports/portioning — filterable portioning / yield report. */
+export async function portioningReport(req, res) {
+  try {
+    const isManager = ['admin', 'shop-admin'].includes(req.user.role);
+    // Managers may report across all shops (?allShops=1); otherwise the current shop.
+    const shopCode = isManager && req.query.allShops === '1' ? null : await portionShop(req);
+    const { dateFrom, dateTo } = req.query;
+    if (!dateFrom || !dateTo) return res.status(400).json({ error: 'dateFrom, dateTo required' });
+    const itemNos = String(req.query.items || '').split(',').map((s) => s.trim()).filter(Boolean);
+    ok(res, await Sheet.portioningReport({
+      dateFrom, dateTo, shopCode, itemNos,
+      sourceItemNo: req.query.sourceItemNo || null,
+      status: req.query.status || 'posted',
+      q: req.query.q || null,
+    }));
   } catch (e) { err(res, e); }
 }

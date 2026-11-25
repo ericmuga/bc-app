@@ -79,7 +79,12 @@ export const auditApi = {
 
 // ── POS terminal ──────────────────────────────────────────────────────────────
 export const posApi = {
-  getItems:       (company, orderId) => api.get('/pos/items', { params: { company: company || undefined, orderId: orderId || undefined } }),
+  getItems:       (company, orderId, linkedCustomerId) => api.get('/pos/items', { params: {
+    company: company || undefined, orderId: orderId || undefined, linkedCustomerId: linkedCustomerId || undefined,
+  } }),
+  // Bill-to switching: linked customers this shop may sell to (shop + global)
+  listLinkedCustomers: ()      => api.get('/pos/linked-customers'),
+  setOrderCustomer: (id, linkedCustomerId) => api.put(`/pos/orders/${id}/customer`, { linkedCustomerId: linkedCustomerId || null }),
   getPaymentTypes:(shopCode)   => api.get('/pos/payment-types',shopCode?{headers:{'X-Shop-Code':shopCode}}:{}),
   getMyShop:      ()           => api.get('/pos/my-shop'),
   listMyShops:    ()           => api.get('/pos/my-shops'),
@@ -87,7 +92,7 @@ export const posApi = {
   createContact:  (body)       => api.post('/pos/contacts', body),
   getWalkIn:      ()           => api.get('/pos/walk-in'),
   setContact:     (id, contact)=> api.patch(`/pos/orders/${id}/contact`, contact),
-  createOrder:    ()           => api.post('/pos/orders'),
+  createOrder:    (linkedCustomerId) => api.post('/pos/orders', linkedCustomerId ? { linkedCustomerId } : {}),
   listOrders:     (params)     => api.get('/pos/orders',{params}),
   getOrder:       (id)         => api.get(`/pos/orders/${id}`),
   setLines:       (id, lines)  => api.put(`/pos/orders/${id}/lines`, { lines }),
@@ -170,6 +175,17 @@ export const yieldApi = {
   // Report
   report:           (params)        => api.get('/pos/reports/yield', { params }),
 
+  // Portioning: received stock-request lines to cut from, stock sheet, upload, report
+  portioningSources: ()             => api.get('/pos/portioning/sources'),
+  listSheets:       (params)        => api.get('/pos/portion-sheets', { params }),
+  createSheet:      (body)          => api.post('/pos/portion-sheets', body),
+  getSheet:         (id)            => api.get(`/pos/portion-sheets/${id}`),
+  saveSheetLines:   (id, body)      => api.put(`/pos/portion-sheets/${id}/lines`, body),
+  postSheet:        (id)            => api.post(`/pos/portion-sheets/${id}/post`),
+  deleteSheet:      (id)            => api.delete(`/pos/portion-sheets/${id}`),
+  uploadSheets:     (body)          => api.post('/pos/portion-sheets/upload', body),
+  portioningReport: (params)        => api.get('/pos/reports/portioning', { params }),
+
   // CSV export — kind ∈ transfers | portionings | manual-sales | write-offs
   // params: { dateFrom, dateTo, itemNo, q }
   exportCsv:        (kind, params)  => api.get(`/pos/exports/${kind}`, { params, responseType: 'blob' }),
@@ -189,7 +205,7 @@ export const tillApi = {
 // ── Stock (requests / daily report / stock take) ────────────────────────────
 export const stockApi = {
   // Stock requests
-  listRequests:   ()                          => api.get('/pos/stock-requests'),
+  listRequests:   (params)                    => api.get('/pos/stock-requests', { params }),
   requestLines:   (params)                    => api.get('/pos/stock-request-lines', { params }),
   getRequest:     (id)                        => api.get(`/pos/stock-requests/${id}`),
   createRequest:  (body)                      => api.post('/pos/stock-requests', body),
@@ -285,6 +301,14 @@ export const posSetupApi = {
   deletePaymentType:(id)        => api.delete(`/pos/setup/payment-types/${id}`),
 
   // bulk BC sync
+  // Linked customers (sell to another BC customer, e.g. distributor prices)
+  listLinkedCustomers:  (params) => api.get('/pos/setup/linked-customers', { params }),
+  saveLinkedCustomer:   (body)   => body.linkedCustomerId
+    ? api.put(`/pos/setup/linked-customers/${body.linkedCustomerId}`, body)
+    : api.post('/pos/setup/linked-customers', body),
+  deleteLinkedCustomer: (id)     => api.delete(`/pos/setup/linked-customers/${id}`),
+  syncLinkedCustomerPrices: (id) => api.post(id ? `/pos/setup/linked-customers/${id}/sync-prices` : '/pos/setup/linked-customers/sync-prices'),
+  searchBcCustomers:    (company, q) => api.get('/pos/setup/bc-customers', { params: { company, q } }),
   syncFromBc:      (company)    => api.post('/pos/setup/sync-from-bc', { company: company || 'FCL' }),
   syncStepFromBc:  (kind, company, opts = {}) =>
                                     api.post(`/pos/setup/sync-from-bc/${kind}`, { company: company || 'FCL', ...opts }),

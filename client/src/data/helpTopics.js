@@ -300,48 +300,31 @@ Posting decreases stock at origin and increases at destination, with audit rows 
   {
     id: 'portioning',
     section: 'stock-ops',
-    title: 'Portioning (one item → many)',
+    title: 'Portioning (stock request → cuts → stock sheet)',
     roles: ['admin', 'shop-admin'],
     keywords: ['portioning', 'cuts', 'breakdown', 'yield', 'gain loss'],
     body: `
-Use when a single input becomes several outputs (e.g., whole carcass → cuts).
+POS → **Portioning** runs in four steps:
 
-POS → **Yield → Portioning**:
-- **Input card:** item + quantity in.
-- **Output card:** items + quantities out.
-- Footer shows gain/loss kg.
-- **Save & Post** to commit.
-
-Inputs deducted, outputs added. Visible in the Yield report.
+1. **Stock Request** — same flow as POS → Stock Requests: submit, approve (pushes to BC), then **Mark Received** to add the stock.
+2. **Portioning** — pick a received line and enter the cuts produced. The footer shows the cutting gain/loss. **Save & Post** consumes the source and adds the portions.
+3. **Stock Sheet** — one sheet per date: sales (POS sales pre-filled), write-offs and the final count. The unaccounted quantity is the variance; a comment is optional. Posting updates shop stock.
+4. **Yield Report** — filter by date, item, source item, status or text; export to Excel or PDF.
 `.trim(),
   },
   {
     id: 'write-offs',
     section: 'stock-ops',
-    title: 'Write-offs',
+    title: 'Write-offs and sales of portioned items',
     roles: ['admin', 'shop-admin'],
-    keywords: ['write-off', 'damage', 'spoilage', 'loss'],
+    keywords: ['write-off', 'damage', 'spoilage', 'loss', 'manual sale', 'offline', 'batch upload', 'stock sheet'],
     body: `
-POS → **Yield → Write-Off** → item, quantity, reason.
+Record these on **Portioning → Stock Sheet** for the date, alongside the final count.
 
-Stock deducted; reason recorded; reportable in the Yield report.
+To load several days at once, use **Upload sales & stock** (Excel/CSV: date, itemNo, sales, writeOff, finalStock, comment). Each date becomes a stock sheet that works the same as one entered by hand.
 `.trim(),
   },
-  {
-    id: 'manual-sales',
-    section: 'stock-ops',
-    title: 'Manual sales (off-terminal)',
-    roles: ['admin', 'shop-admin'],
-    keywords: ['manual sale', 'offline', 'event', 'batch upload'],
-    body: `
-For sales completed outside the POS terminal (off-site events, etc.).
 
-- **POS → Yield → Manual Sales → New** — record per-line.
-- Or **Batch upload** a CSV.
-
-Resulting orders are tagged \`Source='manual'\` and excluded from till variance.
-`.trim(),
-  },
 
   // ── 5 · Sales tools ───────────────────────────────────────────────────────
   {

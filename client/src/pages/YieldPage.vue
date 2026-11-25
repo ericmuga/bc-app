@@ -2,8 +2,8 @@
   <div class="yield-page">
     <div class="page-header">
       <div>
-        <h2 class="page-title">Yield &amp; Loss</h2>
-        <p class="text-muted text-sm">Track transfers to third parties, the portions cut from them, sales of those portions, and write-offs — all rolled up in the yield report.</p>
+        <h2 class="page-title">Portioning</h2>
+        <p class="text-muted text-sm">Request stock (synced to Business Central, received here), portion it, then account for it on a dated stock sheet — sales, write-offs and the final count, with the unaccounted balance as the variance.</p>
       </div>
     </div>
 
@@ -11,45 +11,16 @@
 
     <Tabs v-model:value="tab">
       <TabList>
-        <Tab value="transfers">Transfers</Tab>
-        <Tab value="portionings">Portioning</Tab>
-        <Tab value="sales">Manual Sales</Tab>
-        <Tab value="writeoffs">Write-offs</Tab>
-        <Tab value="report">Yield Report</Tab>
+        <Tab value="requests">1 · Stock Request</Tab>
+        <Tab value="portionings">2 · Portioning</Tab>
+        <Tab value="sheet">3 · Stock Sheet</Tab>
+        <Tab value="report">4 · Yield Report</Tab>
       </TabList>
 
       <TabPanels>
-        <!-- ── Transfers ────────────────────────────────────────────────── -->
-        <TabPanel value="transfers">
-          <div class="panel-actions">
-            <Button v-if="canManage" label="New Transfer" icon="pi pi-plus" @click="newTransfer" />
-            <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="loadTransfers" :loading="loading.transfers" />
-            <Button label="Export Excel" icon="pi pi-file-excel" severity="secondary" @click="openExport('transfers')" />
-            <span v-if="!canManage" class="text-muted text-sm" style="margin-left:auto">Read-only — only Shop Admins can create / post transfers.</span>
-          </div>
-          <DataTable :value="transfers" dataKey="TransferId" size="small"
-                     responsive-layout="scroll">
-            <Column field="TransferNo"           header="No"            style="width:160px" />
-            <Column field="TransferDate"         header="Date"          style="width:110px">
-              <template #body="{ data }">{{ fmtDate(data.TransferDate) }}</template>
-            </Column>
-            <Column field="ThirdPartyName"       header="Third Party"   style="min-width:180px" />
-            <Column field="DestinationShopCode"  header="Shop"          style="width:90px" />
-            <Column field="LineCount"            header="Lines"         style="width:60px;text-align:right" />
-            <Column field="TotalCost"            header="Total Cost"    style="width:120px;text-align:right">
-              <template #body="{ data }">{{ n(data.TotalCost) }}</template>
-            </Column>
-            <Column field="Status" header="Status" style="width:100px">
-              <template #body="{ data }"><Tag :value="data.Status" :severity="data.Status === 'posted' ? 'success' : 'info'" /></template>
-            </Column>
-            <Column header="" style="width:90px">
-              <template #body="{ data }">
-                <Button :icon="data.Status === 'posted' ? 'pi pi-eye' : 'pi pi-pencil'"
-                        :label="data.Status === 'posted' ? 'View' : 'Edit'"
-                        size="small" text @click="openTransfer({ data })" />
-              </template>
-            </Column>
-          </DataTable>
+        <!-- ── Stock requests: same flow as POS → Stock Requests (approve pushes to BC, receive posts stock) -->
+        <TabPanel value="requests">
+          <StockRequestsPage class="embedded-requests" show-filters />
         </TabPanel>
 
         <!-- ── Portionings ──────────────────────────────────────────────── -->
@@ -88,313 +59,17 @@
           </DataTable>
         </TabPanel>
 
-        <!-- ── Manual Sales ─────────────────────────────────────────────── -->
-        <TabPanel value="sales">
-          <div class="panel-actions">
-            <Button v-if="canManage" label="Record Sale" icon="pi pi-plus" severity="success" @click="newManualSale" />
-            <Button v-if="canManage" label="Upload batch" icon="pi pi-upload" severity="info" @click="openSaleBatch" />
-            <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="loadManualSales" :loading="loading.manualSales" />
-            <Button label="Export Excel" icon="pi pi-file-excel" severity="secondary" @click="openExport('manual-sales')" />
-            <span class="text-muted text-sm" style="margin-left:auto">
-              For sales of portioned items not captured via the POS terminal (e.g. a third party reporting back).
-            </span>
-          </div>
-          <!-- Summary: one row per (date, shop) — lines hidden until you open the card -->
-          <DataTable :value="manualSalesSummary" dataKey="key" size="small" responsive-layout="scroll">
-            <Column field="saleDate" header="Date" style="width:120px">
-              <template #body="{ data }">{{ fmtDate(data.saleDate) }}</template>
-            </Column>
-            <Column field="shopCode"  header="Shop"        style="width:100px" />
-            <Column field="lineCount" header="Lines"       style="width:80px;text-align:right" />
-            <Column field="totalQty"  header="Total Qty"   style="width:120px;text-align:right">
-              <template #body="{ data }">{{ n(data.totalQty) }}</template>
-            </Column>
-            <Column header="Total Value" style="width:140px;text-align:right">
-              <template #body="{ data }"><strong class="num pos">{{ n(data.totalValue) }}</strong></template>
-            </Column>
-            <Column header="" style="width:90px">
-              <template #body="{ data }">
-                <Button icon="pi pi-eye" label="View" size="small" text @click="openManualSaleCard(data)" />
-              </template>
-            </Column>
-          </DataTable>
+        <!-- ── Stock sheet: sales, write-offs, final count → variance (+ upload by date) -->
+        <TabPanel value="sheet">
+          <PortionStockSheet :can-manage="canManage" :catalogue="catalogueItems" />
         </TabPanel>
 
-        <!-- ── Write-offs ───────────────────────────────────────────────── -->
-        <TabPanel value="writeoffs">
-          <div class="panel-actions">
-            <Button v-if="canManage" label="New Write-off" icon="pi pi-plus" severity="danger" @click="newWriteOff" />
-            <Button label="Refresh" icon="pi pi-refresh" severity="secondary" @click="loadWriteOffs" :loading="loading.writeOffs" />
-            <Button label="Export Excel" icon="pi pi-file-excel" severity="secondary" @click="openExport('write-offs')" />
-          </div>
-          <DataTable :value="writeOffs" dataKey="WriteOffId" size="small" responsive-layout="scroll">
-            <Column field="WriteOffNo"     header="No"           style="width:160px" />
-            <Column field="WriteOffDate"   header="Date"         style="width:110px">
-              <template #body="{ data }">{{ fmtDate(data.WriteOffDate) }}</template>
-            </Column>
-            <Column field="ItemNo"         header="Item No"      style="width:100px" />
-            <Column field="Description"    header="Description"  style="min-width:180px" />
-            <Column header="Qty"           style="width:90px;text-align:right">
-              <template #body="{ data }">{{ n(data.Quantity) }} {{ data.UnitOfMeasure }}</template>
-            </Column>
-            <Column header="Cost"          style="width:110px;text-align:right">
-              <template #body="{ data }"><span class="num neg">{{ n(data.TotalCost) }}</span></template>
-            </Column>
-            <Column field="Reason"         header="Reason"       style="width:120px" />
-            <Column field="ShopCode"       header="Shop"         style="width:90px" />
-          </DataTable>
-        </TabPanel>
-
-        <!-- ── Yield Report ─────────────────────────────────────────────── -->
+        <!-- ── Yield report ─────────────────────────────────────────────── -->
         <TabPanel value="report">
-          <div class="filters">
-            <div class="filter-field">
-              <label>From</label>
-              <DatePicker v-model="reportFrom" date-format="yy-mm-dd" />
-            </div>
-            <div class="filter-field">
-              <label>To</label>
-              <DatePicker v-model="reportTo" date-format="yy-mm-dd" />
-            </div>
-            <Button label="Run Report" icon="pi pi-play" @click="runReport" :loading="loading.report" />
-          </div>
-
-          <!-- Vector summary across all portionings in the period -->
-          <div v-if="reportSummary.length" class="summary-block">
-            <div class="summary-head">
-              <strong>Yield summary</strong>
-              <span class="text-muted text-sm">— vector summation across every portioning in the filtered period</span>
-            </div>
-            <DataTable :value="reportSummary" size="small" responsive-layout="scroll">
-              <Column field="itemNo"      header="Item No"     style="width:120px" />
-              <Column field="description" header="Output Item" style="min-width:200px" />
-              <Column field="uom"         header="UoM"         style="width:60px" />
-              <Column header="Produced Qty"  style="width:120px;text-align:right">
-                <template #body="{ data }"><strong>{{ n(data.producedQty) }}</strong></template>
-              </Column>
-              <Column header="Produced Value" style="width:130px;text-align:right">
-                <template #body="{ data }"><strong>{{ n(data.producedValue) }}</strong></template>
-              </Column>
-              <Column header="Sold Qty"   style="width:110px;text-align:right">
-                <template #body="{ data }"><span class="num neg">{{ n(data.salesQty) }}</span></template>
-              </Column>
-              <Column header="Sold Value" style="width:120px;text-align:right">
-                <template #body="{ data }"><span class="num neg">{{ n(data.salesValue) }}</span></template>
-              </Column>
-              <Column header="Written-off Qty"  style="width:120px;text-align:right">
-                <template #body="{ data }">{{ n(data.writeOffQty) }}</template>
-              </Column>
-              <Column header="Stock Qty"  style="width:100px;text-align:right">
-                <template #body="{ data }">{{ n(data.expectedStockQty) }}</template>
-              </Column>
-              <Column header="Stock Value" style="width:110px;text-align:right">
-                <template #body="{ data }">{{ n(data.expectedStockValue) }}</template>
-              </Column>
-              <template #footer>
-                <div class="summary-foot">
-                  <span>Totals:</span>
-                  <span>Produced <strong>{{ n(summaryTotals.producedQty) }}</strong> / <strong>{{ n(summaryTotals.producedValue) }}</strong></span>
-                  <span>Sold <strong>{{ n(summaryTotals.salesQty) }}</strong> / <strong>{{ n(summaryTotals.salesValue) }}</strong></span>
-                  <span>Stock <strong>{{ n(summaryTotals.stockQty) }}</strong> / <strong>{{ n(summaryTotals.stockValue) }}</strong></span>
-                </div>
-              </template>
-            </DataTable>
-          </div>
-
-          <div v-if="!report.length && !reportSummary.length && reportRan" class="empty-report">
-            No portionings or transfers in this period.
-          </div>
-
-          <div v-for="t in report" :key="t.transferId" class="transfer-block">
-            <div class="tb-head">
-              <strong>{{ t.transferNo }}</strong>
-              <span>{{ fmtDate(t.transferDate) }}</span>
-              <span>· {{ t.thirdPartyName || t.destinationShopCode || 'No third party' }}</span>
-              <Tag :value="t.status" :severity="t.status === 'posted' ? 'success' : 'info'" />
-              <span class="tb-total">Cost: <strong>{{ n(t.totalCost) }}</strong></span>
-            </div>
-
-            <!-- Transfers without lines still appear so the operator can see them in context -->
-            <div v-if="!t.lines.length" class="empty-lines">
-              No lines on this transfer yet. Open it from the Transfers tab to add lines.
-            </div>
-
-            <div v-for="ln in t.lines" :key="ln.lineId" class="src-block">
-              <div class="src-head">
-                <i class="pi pi-box" />
-                <span class="src-desc">{{ ln.sourceDescription }}</span>
-                <span class="src-meta">{{ n(ln.sourceQty) }} {{ ln.sourceUom }} @ {{ n(ln.sourceUnitCost) }} = <strong>{{ n(ln.sourceCost) }}</strong></span>
-              </div>
-
-              <!-- Stage 1: Yield variance — source MINUS portioned -->
-              <div class="stage-card stage-yield">
-                <div class="stage-title"><i class="pi pi-cog" /> Yield Variance (cutting / processing loss)</div>
-                <div class="stage-grid">
-                  <div><span class="stage-label">Source qty</span><strong>{{ n(ln.sourceQty) }} {{ ln.sourceUom }}</strong></div>
-                  <div><span class="stage-label">Portioned qty</span><strong>{{ n(ln.totals.portionQty) }}</strong></div>
-                  <div><span class="stage-label">Yield variance qty</span>
-                    <strong :class="ln.totals.yieldVarianceQty > 0 ? 'num neg' : 'num pos'">
-                      {{ n(ln.totals.yieldVarianceQty) }} {{ ln.sourceUom }}
-                    </strong>
-                  </div>
-                  <div><span class="stage-label">Source cost</span><strong>{{ n(ln.sourceCost) }}</strong></div>
-                  <div><span class="stage-label">Portioned cost</span><strong>{{ n(ln.totals.portionCost) }}</strong></div>
-                  <div><span class="stage-label">Yield variance value</span>
-                    <strong :class="ln.totals.yieldVarianceValue > 0 ? 'num neg' : 'num pos'">
-                      {{ n(ln.totals.yieldVarianceValue) }}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Stage 2: Sales / Final variance per portion -->
-              <DataTable :value="ln.portions" size="small" class="portion-table">
-                <Column field="itemNo"       header="Portion"      style="width:110px" />
-                <Column field="description"  header="Description"  style="min-width:160px" />
-                <Column header="Produced" style="width:110px;text-align:right">
-                  <template #body="{ data }">{{ n(data.producedQty) }} {{ data.uom }}</template>
-                </Column>
-                <Column header="Allocated Cost" style="width:120px;text-align:right">
-                  <template #body="{ data }">{{ n(data.allocatedCost) }}</template>
-                </Column>
-                <Column header="Sold Qty" style="width:90px;text-align:right">
-                  <template #body="{ data }"><span class="num pos">{{ n(data.salesQty) }}</span></template>
-                </Column>
-                <Column header="Sold Value" style="width:110px;text-align:right">
-                  <template #body="{ data }"><span class="num pos">{{ n(data.salesValue) }}</span></template>
-                </Column>
-                <Column header="W-Off Qty" style="width:85px;text-align:right">
-                  <template #body="{ data }"><span class="num neg">{{ n(data.writeOffQty) }}</span></template>
-                </Column>
-                <Column header="W-Off Cost" style="width:95px;text-align:right">
-                  <template #body="{ data }"><span class="num neg">{{ n(data.writeOffValue) }}</span></template>
-                </Column>
-                <Column header="Final Var Qty" style="width:100px;text-align:right" v-tooltip.top="'Portioned − Sold − Written off'">
-                  <template #body="{ data }">
-                    <strong :class="data.finalVarianceQty > 0 ? 'num neg' : 'num pos'">{{ n(data.finalVarianceQty) }}</strong>
-                  </template>
-                </Column>
-                <Column header="Final Var Value" style="width:110px;text-align:right">
-                  <template #body="{ data }">
-                    <strong :class="data.finalVarianceValue > 0 ? 'num neg' : 'num pos'">{{ n(data.finalVarianceValue) }}</strong>
-                  </template>
-                </Column>
-              </DataTable>
-
-              <!-- Stage 2 totals — final variance roll-up -->
-              <div class="stage-card stage-final">
-                <div class="stage-title"><i class="pi pi-shopping-cart" /> Final Variance (sales stage)</div>
-                <div class="stage-grid">
-                  <div><span class="stage-label">Sold qty</span><strong class="num pos">{{ n(ln.totals.salesQty) }}</strong></div>
-                  <div><span class="stage-label">Sold value</span><strong class="num pos">{{ n(ln.totals.salesValue) }}</strong></div>
-                  <div><span class="stage-label">Write-offs</span><strong class="num neg">{{ n(ln.totals.writeOffValue) }}</strong></div>
-                  <div><span class="stage-label">Final variance qty</span>
-                    <strong :class="ln.totals.finalVarianceQty > 0 ? 'num neg' : 'num pos'">
-                      {{ n(ln.totals.finalVarianceQty) }}
-                    </strong>
-                  </div>
-                  <div><span class="stage-label">Final variance value</span>
-                    <strong :class="ln.totals.finalVarianceValue > 0 ? 'num neg' : 'num pos'">
-                      {{ n(ln.totals.finalVarianceValue) }}
-                    </strong>
-                  </div>
-                  <div><span class="stage-label">Expected stock value</span><strong>{{ n(ln.totals.stockValue) }}</strong></div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <PortioningReport v-if="tab === 'report' || reportOpened" :catalogue="catalogueItems" :is-manager="canManage" />
         </TabPanel>
       </TabPanels>
     </Tabs>
-
-    <!-- Transfer editor -->
-    <Dialog v-model:visible="transferEditor.visible" :header="transferEditor.title"
-            :modal="true" :style="{ width: '900px' }">
-      <div v-if="transferEditor.data" class="editor">
-        <div class="editor-meta">
-          <span><strong>{{ transferEditor.data.transferNo }}</strong> · {{ fmtDate(transferEditor.data.transferDate) }}</span>
-          <span class="origin-pill"><i class="pi pi-arrow-right" />
-            <strong>{{ transferEditor.data.originLabel || 'HQ dispatch' }}</strong>
-            → {{ transferEditor.data.thirdPartyName || 'Third Party' }}
-            <span v-if="transferEditor.data.destinationShopCode" class="dest-shop">({{ transferEditor.data.destinationShopCode }})</span>
-          </span>
-          <Tag :value="transferEditor.data.status" :severity="transferEditor.data.status === 'posted' ? 'success' : 'info'" />
-        </div>
-
-        <!-- Item picker (auto-fills from PosItem) + manual Add Line -->
-        <div v-if="!isPostedXfer && canManage" class="line-add-row">
-          <div class="line-add">
-            <input v-model="xferItemQuery" type="text" class="line-add-input"
-                   :placeholder="catalogueItems.length ? `Search item (${catalogueItems.length} in catalogue) — Enter to add` : 'Loading items…'"
-                   @input="filterCatalogueXfer"
-                   @focus="showXferDrop=true"
-                   @blur="setTimeout(()=>showXferDrop=false,150)"
-                   @keydown.enter.prevent="addFirstXferSuggestion" />
-            <div v-if="showXferDrop && xferItemSuggestions.length" class="line-add-drop">
-              <div v-for="it in xferItemSuggestions" :key="it.itemNo" class="line-add-opt"
-                   @mousedown.prevent="addXferLineFromItem(it)">
-                <span class="line-add-name">{{ it.description }}</span>
-                <span class="line-add-no">{{ it.itemNo }} · {{ fmtPrice(it.unitPrice) }} · {{ it.unitOfMeasure || 'KG' }}</span>
-              </div>
-            </div>
-            <div v-if="showXferDrop && xferItemQuery && !xferItemSuggestions.length" class="line-add-drop">
-              <div class="co-empty">No matching item — use "Add blank line" to type one in.</div>
-            </div>
-          </div>
-          <Button label="Add blank line" icon="pi pi-plus" size="small" @click="addBlankXferLine" />
-        </div>
-
-        <DataTable :value="transferEditor.data.lines" size="small" :pt="{ table: { class: 'editor-lines' } }">
-          <Column header="Item No" style="width:120px">
-            <template #body="{ data }">
-              <InputText v-if="!isPostedXfer && canManage" v-model="data.itemNo" placeholder="Item No" fluid />
-              <span v-else>{{ data.itemNo }}</span>
-            </template>
-          </Column>
-          <Column header="Description" style="min-width:200px">
-            <template #body="{ data }">
-              <InputText v-if="!isPostedXfer && canManage" v-model="data.description" placeholder="Description" fluid />
-              <span v-else>{{ data.description }}</span>
-            </template>
-          </Column>
-          <Column header="Qty" style="width:110px">
-            <template #body="{ data }">
-              <InputNumber v-if="!isPostedXfer && canManage" v-model="data.quantity" :minFractionDigits="2" mode="decimal" fluid @blur="recalcXferTotals" />
-              <span v-else>{{ n(data.quantity) }}</span>
-            </template>
-          </Column>
-          <Column header="UoM" style="width:70px">
-            <template #body="{ data }">
-              <InputText v-if="!isPostedXfer && canManage" v-model="data.unitOfMeasure" fluid />
-              <span v-else>{{ data.unitOfMeasure || 'KG' }}</span>
-            </template>
-          </Column>
-          <Column header="Unit Cost" style="width:130px">
-            <template #body="{ data }">
-              <InputNumber v-if="!isPostedXfer && canManage" v-model="data.unitCost" :minFractionDigits="2" mode="decimal" fluid @blur="recalcXferTotals" />
-              <span v-else>{{ n(data.unitCost) }}</span>
-            </template>
-          </Column>
-          <Column header="Line Cost" style="width:120px;text-align:right">
-            <template #body="{ data }"><strong>{{ n(data.quantity * data.unitCost) }}</strong></template>
-          </Column>
-          <Column header="" style="width:50px">
-            <template #body="{ data, index }">
-              <Button v-if="!isPostedXfer && canManage" icon="pi pi-times" text severity="danger" size="small" @click="transferEditor.data.lines.splice(index, 1)" />
-            </template>
-          </Column>
-        </DataTable>
-        <div class="editor-totals">
-          <span>Total: <strong>{{ n(xferTotal) }}</strong></span>
-        </div>
-      </div>
-      <template #footer>
-        <Button label="Close" text @click="transferEditor.visible = false" />
-        <Button v-if="!isPostedXfer && canManage" label="Save Draft" icon="pi pi-save" text :loading="saving" @click="saveXferLines" />
-        <Button v-if="!isPostedXfer && canManage" label="Save & Post" icon="pi pi-send" severity="success"
-                :disabled="!transferEditor.data?.lines.length" :loading="saving" @click="postXfer" />
-      </template>
-    </Dialog>
 
     <!-- Portioning editor — Input → Output cards with gain/loss footer -->
     <Dialog v-model:visible="portioningEditor.visible" :header="portioningEditor.title"
@@ -538,44 +213,24 @@
       </template>
     </Dialog>
 
-    <!-- New transfer dialog (HQ → Third Party) -->
-    <Dialog v-model:visible="newXferDlg" header="New Transfer (HQ → Third Party)" :modal="true" :style="{ width: '460px' }">
-      <div class="form-row">
-        <label>Date</label>
-        <DatePicker v-model="newXfer.transferDate" date-format="yy-mm-dd" fluid />
-      </div>
-      <div class="form-row">
-        <label>Third Party <span style="color:#ef4444">*</span></label>
-        <Select v-model="newXfer.thirdPartyId" :options="activeThirdParties" option-label="Name" option-value="ThirdPartyId"
-          placeholder="Select recipient…" fluid />
-        <div v-if="selectedTpShop" class="text-muted text-sm">
-          Stock will be tracked at shop <strong>{{ selectedTpShop }}</strong>
-        </div>
-        <div v-else-if="newXfer.thirdPartyId" class="text-muted text-sm">
-          No shop linked — transfer recorded for traceability only (no stock movement).
-        </div>
-      </div>
-      <div class="form-row">
-        <label>Notes</label>
-        <InputText v-model="newXfer.notes" fluid />
-      </div>
-      <template #footer>
-        <Button label="Cancel" text @click="newXferDlg = false" />
-        <Button label="Create" icon="pi pi-check" :loading="saving"
-                :disabled="!newXfer.thirdPartyId" @click="createXfer" />
-      </template>
-    </Dialog>
-
     <!-- New portioning dialog -->
-    <Dialog v-model:visible="newPortDlg" header="New Portioning" :modal="true" :style="{ width: '520px' }">
-      <p class="text-muted text-sm" style="margin-top:0">Pick the source line that's being portioned. Source qty + cost are captured at creation.</p>
+    <Dialog v-model:visible="newPortDlg" header="New Portioning" :modal="true" :style="{ width: '560px' }">
+      <p class="text-muted text-sm" style="margin-top:0">Pick the received stock you are cutting. Source qty + cost are captured at creation.</p>
       <div class="form-row">
         <label>Date</label>
         <DatePicker v-model="newPort.portioningDate" date-format="yy-mm-dd" fluid />
       </div>
       <div class="form-row">
-        <label>Source transfer line</label>
-        <Select v-model="newPort.sourceTransferLineId" :options="sourceLineOpts" option-label="label" option-value="value" filter fluid />
+        <label>Source (received stock)</label>
+        <Select v-model="newPort.sourceKey" :options="sourceLineOpts" option-label="label" option-value="value" filter fluid
+                :loading="loadingSources" placeholder="Select a received line…" @change="onSourcePicked" />
+        <div v-if="!loadingSources && !sourceLineOpts.length" class="text-muted text-sm">
+          Nothing received to portion yet — raise and receive a Stock Request first.
+        </div>
+      </div>
+      <div v-if="pickedSource" class="form-row">
+        <label>Quantity to portion ({{ pickedSource.uom }}) — {{ n(pickedSource.remainingQty) }} available</label>
+        <InputNumber v-model="newPort.sourceQuantity" :min-fraction-digits="2" :max="pickedSource.remainingQty" mode="decimal" fluid />
       </div>
       <div class="form-row">
         <label>Notes</label>
@@ -583,155 +238,7 @@
       </div>
       <template #footer>
         <Button label="Cancel" text @click="newPortDlg = false" />
-        <Button label="Create" icon="pi pi-check" :loading="saving" @click="createPort" />
-      </template>
-    </Dialog>
-
-    <!-- New manual-sale dialog -->
-    <Dialog v-model:visible="newSaleDlg" header="Record Manual Sale" :modal="true" :style="{ width: '520px' }">
-      <p class="text-muted text-sm" style="margin-top:0">Use this when a portioned item is sold outside the POS terminal — the sale is added to the yield report alongside POS sales.</p>
-      <div class="form-row"><label>Date</label><DatePicker v-model="newSale.saleDate" date-format="yy-mm-dd" fluid /></div>
-      <!-- Item picker -->
-      <div class="form-row" style="position:relative">
-        <label>Item</label>
-        <input v-model="saleItemQuery" type="text" class="line-add-input"
-               placeholder="Search portion item…"
-               @input="filterCatalogueSale"
-               @focus="showSaleDrop=true"
-               @blur="setTimeout(()=>showSaleDrop=false,150)" />
-        <div v-if="showSaleDrop && saleItemSuggestions.length" class="line-add-drop">
-          <div v-for="it in saleItemSuggestions" :key="it.itemNo" class="line-add-opt"
-               @mousedown.prevent="pickSaleItem(it)">
-            <span class="line-add-name">{{ it.description }}</span>
-            <span class="line-add-no">{{ it.itemNo }} · {{ fmtPrice(it.unitPrice) }}</span>
-          </div>
-        </div>
-        <div v-if="newSale.itemNo" class="text-muted text-sm">
-          {{ newSale.itemNo }} — {{ newSale.description }}
-        </div>
-      </div>
-      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <div><label>Qty</label><InputNumber v-model="newSale.quantity" :minFractionDigits="2" mode="decimal" fluid /></div>
-        <div><label>UoM</label><InputText v-model="newSale.unitOfMeasure" fluid /></div>
-        <div><label>Unit Price</label><InputNumber v-model="newSale.unitPrice" :minFractionDigits="2" mode="decimal" fluid /></div>
-      </div>
-      <div class="form-row" style="background:#eff6ff;padding:8px 12px;border-radius:6px">
-        <strong>Total: {{ n((newSale.quantity || 0) * (newSale.unitPrice || 0)) }}</strong>
-      </div>
-      <div class="form-row"><label>Notes</label><InputText v-model="newSale.notes" fluid /></div>
-      <template #footer>
-        <Button label="Cancel" text @click="newSaleDlg = false" />
-        <Button label="Record Sale" icon="pi pi-check" severity="success"
-                :disabled="!newSale.itemNo || !newSale.quantity || !newSale.unitPrice"
-                :loading="saving" @click="recordSale" />
-      </template>
-    </Dialog>
-
-    <!-- New write-off dialog -->
-    <Dialog v-model:visible="newWoDlg" header="New Write-off" :modal="true" :style="{ width: '520px' }">
-      <div class="form-row"><label>Date</label><DatePicker v-model="newWo.writeOffDate" date-format="yy-mm-dd" fluid /></div>
-      <div class="form-row"><label>Item No</label><InputText v-model="newWo.itemNo" fluid /></div>
-      <div class="form-row"><label>Description</label><InputText v-model="newWo.description" fluid /></div>
-      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <div><label>Qty</label><InputNumber v-model="newWo.quantity" :minFractionDigits="2" mode="decimal" fluid /></div>
-        <div><label>UoM</label><InputText v-model="newWo.unitOfMeasure" fluid /></div>
-        <div><label>Unit Cost</label><InputNumber v-model="newWo.unitCost" :minFractionDigits="2" mode="decimal" fluid /></div>
-      </div>
-      <div class="form-row"><label>Reason</label>
-        <Select v-model="newWo.reason" :options="['spoilage','damage','theft','expired','other']" fluid />
-      </div>
-      <div class="form-row"><label>Notes</label><InputText v-model="newWo.notes" fluid /></div>
-      <template #footer>
-        <Button label="Cancel" text @click="newWoDlg = false" />
-        <Button label="Post Write-off" icon="pi pi-check" severity="danger" :loading="saving" @click="createWo" />
-      </template>
-    </Dialog>
-
-    <!-- Manual sale detail card (lines for one day at one shop) -->
-    <Dialog v-model:visible="saleCard.visible" header="Manual Sales — daily detail"
-            :modal="true" :style="{ width: '780px' }">
-      <div v-if="saleCard.group" class="editor">
-        <div class="editor-meta">
-          <span><strong>{{ fmtDate(saleCard.group.saleDate) }}</strong> · Shop {{ saleCard.group.shopCode || '—' }}</span>
-          <span class="tb-total">Total: <strong class="num pos">{{ n(saleCard.group.totalValue) }}</strong></span>
-        </div>
-        <DataTable :value="saleCard.group.lines" size="small" responsive-layout="scroll">
-          <Column field="ManualSaleNo" header="No"          style="width:140px" />
-          <Column field="ItemNo"       header="Item No"     style="width:100px" />
-          <Column field="Description"  header="Description" style="min-width:180px" />
-          <Column header="Qty" style="width:90px;text-align:right">
-            <template #body="{ data }">{{ n(data.Quantity) }} {{ data.UnitOfMeasure }}</template>
-          </Column>
-          <Column header="Unit Price" style="width:110px;text-align:right">
-            <template #body="{ data }">{{ n(data.UnitPrice) }}</template>
-          </Column>
-          <Column header="Total" style="width:120px;text-align:right">
-            <template #body="{ data }"><strong class="num pos">{{ n(data.TotalAmount) }}</strong></template>
-          </Column>
-          <Column field="Notes" header="Notes" style="min-width:140px" />
-        </DataTable>
-      </div>
-      <template #footer>
-        <Button label="Close" text @click="saleCard.visible = false" />
-      </template>
-    </Dialog>
-
-    <!-- Manual Sales — bulk upload (CSV) -->
-    <Dialog v-model:visible="saleBatch.visible" header="Upload manual sales batch (CSV)"
-            :modal="true" :style="{ width: '820px' }">
-      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div><label>Sale Date</label><DatePicker v-model="saleBatch.saleDate" date-format="yy-mm-dd" fluid /></div>
-        <div><label>Notes</label><InputText v-model="saleBatch.notes" placeholder="Optional batch notes" fluid /></div>
-      </div>
-
-      <div class="form-row" style="margin-top:8px">
-        <p class="text-muted text-sm" style="margin-bottom:6px">
-          Upload a CSV with these columns (header row required, in any order):
-          <strong>itemNo, description, quantity, unitOfMeasure, unitPrice</strong>.
-          Lines that fail validation are skipped — successful rows still post.
-        </p>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input ref="saleFileRef" type="file" accept=".csv,text/csv"
-                 @change="onSaleBatchFile" style="flex:1" />
-          <Button label="Download template" icon="pi pi-download" text size="small" @click="downloadSaleTemplate" />
-        </div>
-        <p v-if="saleBatch.parseError" class="text-sm" style="color:#b91c1c;margin-top:4px">{{ saleBatch.parseError }}</p>
-      </div>
-
-      <DataTable v-if="saleBatch.lines.length"
-                 :value="saleBatch.lines" size="small" style="margin-top:10px"
-                 responsive-layout="scroll" :scrollable="true" scrollHeight="280px">
-        <Column header="#" style="width:50px"><template #body="{ index }">{{ index + 1 }}</template></Column>
-        <Column field="itemNo"        header="Item No"     style="width:120px" />
-        <Column field="description"   header="Description" style="min-width:200px" />
-        <Column field="quantity"      header="Qty"         style="width:90px;text-align:right" />
-        <Column field="unitOfMeasure" header="UoM"         style="width:80px" />
-        <Column field="unitPrice"     header="Unit Price"  style="width:100px;text-align:right">
-          <template #body="{ data }">{{ n(data.unitPrice) }}</template>
-        </Column>
-        <Column header="Total" style="width:120px;text-align:right">
-          <template #body="{ data }"><strong>{{ n(Number(data.quantity||0) * Number(data.unitPrice||0)) }}</strong></template>
-        </Column>
-      </DataTable>
-      <div v-if="saleBatch.lines.length" class="editor-meta" style="margin-top:6px">
-        <span class="text-muted text-sm">{{ saleBatch.lines.length }} line(s) ready</span>
-        <span class="tb-total">Batch total: <strong class="num pos">{{ n(saleBatchTotal) }}</strong></span>
-      </div>
-
-      <div v-if="saleBatch.result" class="form-row" style="margin-top:10px">
-        <Message :severity="saleBatch.result.failed ? 'warn' : 'success'" :closable="false">
-          Posted {{ saleBatch.result.posted }} · Failed {{ saleBatch.result.failed }}
-          <ul v-if="saleBatch.result.errors?.length" style="margin:4px 0 0 18px">
-            <li v-for="(e, i) in saleBatch.result.errors" :key="i">Row {{ e.row }} ({{ e.itemNo }}): {{ e.error }}</li>
-          </ul>
-        </Message>
-      </div>
-
-      <template #footer>
-        <Button label="Close" text @click="saleBatch.visible = false" />
-        <Button label="Post batch" icon="pi pi-send" severity="success"
-                :disabled="!saleBatch.lines.length" :loading="saleBatch.posting"
-                @click="postSaleBatch" />
+        <Button label="Create" icon="pi pi-check" :loading="saving" :disabled="!newPort.sourceKey" @click="createPort" />
       </template>
     </Dialog>
 
@@ -770,6 +277,9 @@ import InputText  from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select     from 'primevue/select'
 import DatePicker from 'primevue/datepicker'
+import StockRequestsPage from '@/pages/StockRequestsPage.vue'
+import PortionStockSheet from '@/components/portioning/PortionStockSheet.vue'
+import PortioningReport  from '@/components/portioning/PortioningReport.vue'
 import { yieldApi, posApi } from '@/services/pos.js'
 import { useAuthStore } from '@/stores/auth.js'
 import { canManagePos } from '@/lib/posAccess.js'
@@ -777,239 +287,27 @@ import { canManagePos } from '@/lib/posAccess.js'
 const auth = useAuthStore()
 const canManage = computed(() => canManagePos(auth.user?.role))
 
-const tab = ref('transfers')
+const tab = ref('requests')
+const reportOpened = ref(false)
 const error  = ref('')
 const saving = ref(false)
-const loading = reactive({ transfers: false, portionings: false, writeOffs: false, manualSales: false, report: false })
+const loading = reactive({ portionings: false })
 
-const transfers     = ref([])
 const portionings   = ref([])
-const writeOffs     = ref([])
-const manualSales   = ref([])
-const thirdParties  = ref([])
-const shops         = ref([])
 
 const today = new Date()
-// Default report window: start of the year → today (so existing transfers always appear)
 const yearStart = new Date(today.getFullYear(), 0, 1)
-const reportFrom    = ref(yearStart)
-const reportTo      = ref(today)
-const report        = ref([])
-const reportSummary = ref([])
-const reportRan     = ref(false)
-const summaryTotals = computed(() => {
-  const t = { producedQty: 0, producedValue: 0, salesQty: 0, salesValue: 0,
-              writeOffQty: 0, writeOffValue: 0, stockQty: 0, stockValue: 0,
-              lossQty: 0, lossValue: 0 }
-  for (const r of reportSummary.value) {
-    t.producedQty   += Number(r.producedQty || 0)
-    t.producedValue += Number(r.producedValue || 0)
-    t.salesQty      += Number(r.salesQty || 0)
-    t.salesValue    += Number(r.salesValue || 0)
-    t.writeOffQty   += Number(r.writeOffQty || 0)
-    t.writeOffValue += Number(r.writeOffValue || 0)
-    t.stockQty      += Number(r.expectedStockQty || 0)
-    t.stockValue    += Number(r.expectedStockValue || 0)
-    t.lossQty       += Number(r.lossQty || 0)
-    t.lossValue     += Number(r.lossValue || 0)
-  }
-  return t
-})
-
-const newXferDlg = ref(false)
-const newXfer    = reactive({ transferDate: today, thirdPartyId: null, notes: '' })
-
-const activeThirdParties = computed(() => thirdParties.value.filter(t => t.IsActive))
-const selectedTpShop     = computed(() => {
-  const tp = thirdParties.value.find(t => t.ThirdPartyId === newXfer.thirdPartyId)
-  return tp?.ShopCode || ''
-})
 
 const newPortDlg = ref(false)
-const newPort    = reactive({ portioningDate: today, sourceTransferLineId: '', notes: '' })
-
-const newWoDlg = ref(false)
-const newWo    = reactive({ writeOffDate: today, itemNo: '', description: '', quantity: 0, unitOfMeasure: '', unitCost: 0, reason: 'spoilage', notes: '' })
-
-const newSaleDlg          = ref(false)
-const newSale             = reactive({ saleDate: today, itemNo: '', description: '', quantity: 0, unitOfMeasure: 'KG', unitPrice: 0, notes: '' })
-const saleItemQuery       = ref('')
-const saleItemSuggestions = ref([])
-const showSaleDrop        = ref(false)
-
-function filterCatalogueSale() {
-  const q = saleItemQuery.value.trim().toLowerCase()
-  if (!q) { saleItemSuggestions.value = []; return }
-  saleItemSuggestions.value = catalogueItems.value
-    .filter(i => i.description.toLowerCase().includes(q) || i.itemNo.toLowerCase().includes(q))
-    .slice(0, 8)
-}
-function pickSaleItem(it) {
-  newSale.itemNo        = it.itemNo
-  newSale.description   = it.description
-  newSale.unitOfMeasure = it.unitOfMeasure || 'KG'
-  newSale.unitPrice     = Number(it.unitPrice || 0)
-  saleItemQuery.value      = ''
-  saleItemSuggestions.value = []
-  showSaleDrop.value       = false
-}
-function newManualSale() {
-  Object.assign(newSale, {
-    saleDate: today, itemNo: '', description: '',
-    quantity: 0, unitOfMeasure: 'KG', unitPrice: 0, notes: '',
-  })
-  saleItemQuery.value = ''
-  newSaleDlg.value = true
-}
-async function recordSale() {
-  saving.value = true; error.value = ''
-  try {
-    await yieldApi.recordManualSale({ ...newSale, saleDate: isoDate(newSale.saleDate) })
-    newSaleDlg.value = false
-    await loadManualSales()
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { saving.value = false }
-}
-async function loadManualSales() {
-  loading.manualSales = true
-  try { manualSales.value = (await yieldApi.listManualSales()).data }
-  catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { loading.manualSales = false }
-}
-
-// Group raw manual-sale rows into a daily summary per shop
-const manualSalesSummary = computed(() => {
-  const grouped = new Map()
-  for (const r of manualSales.value || []) {
-    const day = String(r.SaleDate || '').slice(0, 10)
-    const key = `${day}__${r.ShopCode || ''}`
-    let g = grouped.get(key)
-    if (!g) { g = { key, saleDate: r.SaleDate, shopCode: r.ShopCode || '', lines: [], lineCount: 0, totalQty: 0, totalValue: 0 }; grouped.set(key, g) }
-    g.lines.push(r)
-    g.lineCount += 1
-    g.totalQty   += Number(r.Quantity || 0)
-    g.totalValue += Number(r.TotalAmount || 0)
-  }
-  return [...grouped.values()].sort((a, b) => (b.saleDate > a.saleDate ? 1 : -1))
-})
-
-// Manual sale detail card (read-only)
-const saleCard = reactive({ visible: false, group: null })
-function openManualSaleCard(group) {
-  saleCard.group = group
-  saleCard.visible = true
-}
-
-// ── Manual sales — bulk CSV upload ──────────────────────────────────────────
-const saleFileRef = ref(null)
-const saleBatch = reactive({
-  visible: false, saleDate: today, notes: '',
-  lines: [], parseError: '', posting: false, result: null,
-})
-const saleBatchTotal = computed(() =>
-  (saleBatch.lines || []).reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0)
-)
-function openSaleBatch() {
-  saleBatch.visible = true
-  saleBatch.saleDate = today
-  saleBatch.notes = ''
-  saleBatch.lines = []
-  saleBatch.parseError = ''
-  saleBatch.result = null
-  if (saleFileRef.value) saleFileRef.value.value = ''
-}
-function downloadSaleTemplate() {
-  const csv = '﻿itemNo,description,quantity,unitOfMeasure,unitPrice\r\nKG-FIL-RIB,Pork ribs,2.5,KG,650\r\n'
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'manual-sales-template.csv'
-  document.body.appendChild(a); a.click(); a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-function parseCsv(text) {
-  // Strip BOM, split rows respecting quoted fields with commas inside.
-  text = String(text || '').replace(/^﻿/, '')
-  const rows = []
-  let cur = []
-  let buf = ''
-  let inQuote = false
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (inQuote) {
-      if (ch === '"' && text[i + 1] === '"') { buf += '"'; i++ }
-      else if (ch === '"') { inQuote = false }
-      else { buf += ch }
-    } else {
-      if (ch === '"') inQuote = true
-      else if (ch === ',') { cur.push(buf); buf = '' }
-      else if (ch === '\r') { /* skip */ }
-      else if (ch === '\n') { cur.push(buf); rows.push(cur); cur = []; buf = '' }
-      else { buf += ch }
-    }
-  }
-  if (buf.length || cur.length) { cur.push(buf); rows.push(cur) }
-  return rows.filter(r => r.length && r.some(c => String(c).trim() !== ''))
-}
-function onSaleBatchFile(ev) {
-  saleBatch.parseError = ''
-  saleBatch.result = null
-  saleBatch.lines = []
-  const file = ev.target?.files?.[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onerror = () => { saleBatch.parseError = 'Could not read file' }
-  reader.onload = () => {
-    const text = String(reader.result || '')
-    const rows = parseCsv(text)
-    if (rows.length < 2) { saleBatch.parseError = 'CSV must include a header row and at least one data row.'; return }
-    const header = rows[0].map(h => String(h).trim().toLowerCase())
-    const idx = (...names) => names.map(n => header.indexOf(n)).find(i => i >= 0) ?? -1
-    const cItem = idx('itemno', 'item no', 'item_no', 'sku')
-    const cDesc = idx('description', 'desc', 'name')
-    const cQty  = idx('quantity', 'qty')
-    const cUom  = idx('unitofmeasure', 'unit_of_measure', 'uom')
-    const cPrc  = idx('unitprice', 'unit_price', 'price')
-    if (cItem < 0 || cQty < 0) {
-      saleBatch.parseError = 'CSV must include at minimum: itemNo, quantity'
-      return
-    }
-    const out = []
-    for (let r = 1; r < rows.length; r++) {
-      const row = rows[r]
-      const itemNo = String(row[cItem] || '').trim().toUpperCase()
-      if (!itemNo) continue
-      const cat = catalogueItems.value.find(c => c.itemNo === itemNo)
-      out.push({
-        itemNo,
-        description:   String(row[cDesc] || cat?.description || itemNo).trim(),
-        quantity:      Number(row[cQty] || 0),
-        unitOfMeasure: String(row[cUom] || cat?.unitOfMeasure || 'KG').trim().toUpperCase(),
-        unitPrice:     Number(row[cPrc] || cat?.unitPrice || 0),
-      })
-    }
-    saleBatch.lines = out
-    if (!out.length) saleBatch.parseError = 'No usable rows after parsing.'
-  }
-  reader.readAsText(file)
-}
-async function postSaleBatch() {
-  saleBatch.posting = true
-  saleBatch.result = null
-  try {
-    const { data } = await yieldApi.recordManualSaleBatch({
-      saleDate: isoDate(saleBatch.saleDate),
-      notes:    saleBatch.notes || null,
-      lines:    saleBatch.lines,
-    })
-    saleBatch.result = data
-    if (data?.posted) await loadManualSales()
-  } catch (e) {
-    saleBatch.parseError = e.response?.data?.error ?? e.message
-  } finally {
-    saleBatch.posting = false
-  }
-}
+const newPort    = reactive({ portioningDate: today, sourceKey: null, sourceQuantity: null, notes: '' })
+const sources        = ref([])
+const loadingSources = ref(false)
+const sourceLineOpts = computed(() => sources.value.map(s => ({
+  label: `${s.docNo} · ${s.description} — ${n(s.remainingQty)} of ${n(s.quantity)} ${s.uom} left${s.kind === 'transfer' ? ' (legacy transfer)' : ''}`,
+  value: `${s.kind}:${s.id}`,
+})))
+const pickedSource = computed(() => sources.value.find(s => `${s.kind}:${s.id}` === newPort.sourceKey) || null)
+function onSourcePicked() { newPort.sourceQuantity = pickedSource.value?.remainingQty ?? null }
 
 // Export modal — applies to whichever tab triggered it
 const exportDlg = reactive({ visible: false, kind: '', dateFrom: yearStart, dateTo: today, itemNo: '', q: '' })
@@ -1042,14 +340,10 @@ async function runExport() {
   }
 }
 
-const transferEditor   = reactive({ visible: false, title: '', data: null })
 const portioningEditor = reactive({ visible: false, title: '', data: null })
 
-// Catalogue (flat list of PosItems) — used to auto-fill transfer/portion lines
+// Catalogue (flat list of PosItems) — used to auto-fill portion lines, the stock sheet and report filters
 const catalogueItems   = ref([])
-const xferItemQuery    = ref('')
-const xferItemSuggestions = ref([])
-const showXferDrop     = ref(false)
 const portItemQuery    = ref('')
 const portItemSuggestions = ref([])
 const showPortDrop     = ref(false)
@@ -1059,35 +353,6 @@ async function loadCatalogue() {
     const { data } = await posApi.getItems()
     catalogueItems.value = data.flatMap(c => c.items)
   } catch {}
-}
-function filterCatalogueXfer() {
-  const q = xferItemQuery.value.trim().toLowerCase()
-  if (!q) { xferItemSuggestions.value = []; return }
-  xferItemSuggestions.value = catalogueItems.value
-    .filter(i => i.description.toLowerCase().includes(q) || i.itemNo.toLowerCase().includes(q))
-    .slice(0, 8)
-}
-function addFirstXferSuggestion() {
-  if (xferItemSuggestions.value.length) addXferLineFromItem(xferItemSuggestions.value[0])
-}
-function addXferLineFromItem(it) {
-  // Auto-fill: itemNo, description, unitOfMeasure (default KG), unitCost (= item's UnitPrice)
-  const existing = transferEditor.data.lines.find(l => l.itemNo === it.itemNo)
-  if (existing) {
-    existing.quantity = Number(existing.quantity || 0) + 1
-  } else {
-    transferEditor.data.lines.push({
-      lineId: null,
-      itemNo: it.itemNo,
-      description: it.description,
-      quantity: 1,
-      unitOfMeasure: it.unitOfMeasure || 'KG',
-      unitCost: Number(it.unitPrice || 0),
-    })
-  }
-  xferItemQuery.value = ''
-  xferItemSuggestions.value = []
-  showXferDrop.value = false
 }
 
 function filterCataloguePort() {
@@ -1124,13 +389,6 @@ function addPortLineFromItem(it) {
   showPortDrop.value = false
 }
 
-function addBlankXferLine() {
-  if (!transferEditor.data) return
-  transferEditor.data.lines.push({
-    lineId: null, itemNo: '', description: '', quantity: 1,
-    unitOfMeasure: 'KG', unitCost: 0,
-  })
-}
 function addBlankPortLine() {
   if (!portioningEditor.data) return
   portioningEditor.data.lines.push({
@@ -1141,10 +399,8 @@ function addBlankPortLine() {
 
 function fmtPrice(v) { return Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) }
 
-const isPostedXfer = computed(() => transferEditor.data?.status === 'posted')
 const isPostedPort = computed(() => portioningEditor.data?.status === 'posted')
 
-const xferTotal     = computed(() => (transferEditor.data?.lines ?? []).reduce((s, l) => s + (Number(l.quantity || 0) * Number(l.unitCost || 0)), 0))
 const portionQty    = computed(() => (portioningEditor.data?.lines ?? []).reduce((s, l) => s + Number(l.quantity || 0), 0))
 const portionTotal  = computed(() => (portioningEditor.data?.lines ?? []).reduce((s, l) => s + Number(l.allocatedCost || 0), 0))
 const portionVariance = computed(() => Number(portioningEditor.data?.sourceTotalCost || 0) - portionTotal.value)
@@ -1152,30 +408,8 @@ const portionVariance = computed(() => Number(portioningEditor.data?.sourceTotal
 const lossQty       = computed(() => Number(portioningEditor.data?.sourceQuantity   || 0) - portionQty.value)
 const lossValue     = computed(() => Number(portioningEditor.data?.sourceTotalCost || 0) - portionTotal.value)
 
-const sourceLineOpts = computed(() => {
-  // Pull all transfer lines from posted transfers, latest first
-  const out = []
-  for (const t of transfers.value) {
-    if (t.Status !== 'posted') continue
-    out.push({ label: `${t.TransferNo} (placeholder)`, value: t.TransferId, postedTransferId: t.TransferId })
-  }
-  return _flatLines.value
-})
-const _flatLines = ref([])  // populated when newPort dialog opens
-
 async function loadAll() {
-  await Promise.all([
-    loadTransfers(), loadPortionings(), loadWriteOffs(), loadManualSales(),
-    yieldApi.listThirdParties().then(r => thirdParties.value = r.data),
-    posApi.listShops().then(r => shops.value = r.data).catch(() => {}),
-    loadCatalogue(),
-  ])
-}
-async function loadTransfers() {
-  loading.transfers = true
-  try { transfers.value = (await yieldApi.listTransfers()).data }
-  catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { loading.transfers = false }
+  await Promise.all([loadPortionings(), loadCatalogue()])
 }
 async function loadPortionings() {
   loading.portionings = true
@@ -1183,92 +417,25 @@ async function loadPortionings() {
   catch (e) { error.value = e.response?.data?.error ?? e.message }
   finally { loading.portionings = false }
 }
-async function loadWriteOffs() {
-  loading.writeOffs = true
-  try { writeOffs.value = (await yieldApi.listWriteOffs()).data }
-  catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { loading.writeOffs = false }
-}
-
-function newTransfer() {
-  newXfer.transferDate = today
-  newXfer.thirdPartyId = null
-  newXfer.notes = ''
-  newXferDlg.value = true
-}
-async function createXfer() {
-  if (!newXfer.thirdPartyId) { error.value = 'Pick a third party'; return }
-  saving.value = true; error.value = ''
-  try {
-    const { data } = await yieldApi.createTransfer({
-      transferDate: isoDate(newXfer.transferDate),
-      thirdPartyId: newXfer.thirdPartyId,
-      notes:        newXfer.notes,
-    })
-    newXferDlg.value = false
-    await loadTransfers()
-    await openTransfer({ data: { TransferId: data.TransferId || data.transferId } })
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { saving.value = false }
-}
-
-async function openTransfer(e) {
-  const id = e.data.TransferId
-  try {
-    const { data } = await yieldApi.getTransfer(id)
-    transferEditor.data    = data
-    transferEditor.title   = `Transfer ${data.transferNo}`
-    transferEditor.visible = true
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-}
-
-function addXferLine() {
-  transferEditor.data.lines.push({ itemNo: '', description: '', quantity: 0, unitOfMeasure: '', unitCost: 0 })
-}
-function recalcXferTotals() { /* re-evaluates via computed */ }
-async function saveXferLines() {
-  saving.value = true
-  try {
-    await yieldApi.setTransferLines(transferEditor.data.transferId, transferEditor.data.lines)
-    transferEditor.data = (await yieldApi.getTransfer(transferEditor.data.transferId)).data
-    await loadTransfers()
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { saving.value = false }
-}
-async function postXfer() {
-  saving.value = true
-  try {
-    await yieldApi.setTransferLines(transferEditor.data.transferId, transferEditor.data.lines)
-    await yieldApi.postTransfer(transferEditor.data.transferId)
-    transferEditor.data = (await yieldApi.getTransfer(transferEditor.data.transferId)).data
-    await loadTransfers()
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { saving.value = false }
-}
 
 async function newPortioning() {
-  newPort.portioningDate = today; newPort.sourceTransferLineId = ''; newPort.notes = ''
-  // Load all lines from posted transfers
-  _flatLines.value = []
-  for (const t of transfers.value.filter(x => x.Status === 'posted')) {
-    try {
-      const { data } = await yieldApi.getTransfer(t.TransferId)
-      for (const l of data.lines) {
-        _flatLines.value.push({
-          label: `${data.transferNo} · ${l.description} (${l.quantity} ${l.unitOfMeasure || ''})`,
-          value: l.lineId,
-        })
-      }
-    } catch {}
-  }
+  Object.assign(newPort, { portioningDate: today, sourceKey: null, sourceQuantity: null, notes: '' })
   newPortDlg.value = true
+  loadingSources.value = true
+  try { sources.value = (await yieldApi.portioningSources()).data.filter(s => s.remainingQty > 0) }
+  catch (e) { error.value = e.response?.data?.error ?? e.message }
+  finally { loadingSources.value = false }
 }
 async function createPort() {
+  const s = pickedSource.value
+  if (!s) return
   saving.value = true
   try {
     const { data } = await yieldApi.createPortioning({
       portioningDate:       isoDate(newPort.portioningDate),
-      sourceTransferLineId: newPort.sourceTransferLineId,
+      sourceRequestLineId:  s.kind === 'request'  ? s.id : null,
+      sourceTransferLineId: s.kind === 'transfer' ? s.id : null,
+      sourceQuantity:       s.kind === 'request'  ? newPort.sourceQuantity : null,
       notes:                newPort.notes,
     })
     newPortDlg.value = false
@@ -1359,37 +526,6 @@ async function postPort() {
   finally { saving.value = false }
 }
 
-function newWriteOff() {
-  Object.assign(newWo, { writeOffDate: today, itemNo: '', description: '', quantity: 0, unitOfMeasure: '', unitCost: 0, reason: 'spoilage', notes: '' })
-  newWoDlg.value = true
-}
-async function createWo() {
-  saving.value = true
-  try {
-    await yieldApi.postWriteOff({ ...newWo, writeOffDate: isoDate(newWo.writeOffDate) })
-    newWoDlg.value = false
-    await loadWriteOffs()
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { saving.value = false }
-}
-
-async function runReport() {
-  loading.report = true; reportRan.value = false; error.value = ''
-  try {
-    const { data } = await yieldApi.report({ dateFrom: isoDate(reportFrom.value), dateTo: isoDate(reportTo.value) })
-    // Backwards compat: server now returns { transfers, summary }; older callers may still receive a bare array.
-    if (Array.isArray(data)) {
-      report.value = data
-      reportSummary.value = []
-    } else {
-      report.value         = data?.transfers || []
-      reportSummary.value  = data?.summary   || []
-    }
-    reportRan.value = true
-  } catch (e) { error.value = e.response?.data?.error ?? e.message }
-  finally { loading.report = false }
-}
-
 function isoDate(d) {
   if (!d) return null
   if (typeof d === 'string') return d
@@ -1398,15 +534,10 @@ function isoDate(d) {
 function fmtDate(v) { return v ? new Date(v).toLocaleDateString('en-KE') : '' }
 function n(v) { return Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 
-// Auto-run the yield report whenever the user opens the Report tab (and on first mount)
-watch(tab, async (val) => {
-  if (val === 'report' && !reportRan.value) await runReport()
-})
+// Mount the report lazily (it runs on open) and keep it alive afterwards
+watch(tab, (val) => { if (val === 'report') reportOpened.value = true })
 
-onMounted(async () => {
-  await loadAll()
-  if (tab.value === 'report') await runReport()
-})
+onMounted(loadAll)
 </script>
 
 <style scoped>
@@ -1440,6 +571,7 @@ onMounted(async () => {
 .yield-page :deep(.p-message) { color: #111827 !important; }
 .yield-page label { color: #111827; }
 .yield-page .text-muted { color: #6b7280 !important; }
+.embedded-requests { padding: 0 !important; }
 .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
 .page-title { font-size:20px; font-weight:700; margin:0 0 2px; }
 .text-muted { color:#888; }

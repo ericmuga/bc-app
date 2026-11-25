@@ -117,6 +117,23 @@ function paymentSummary(order) {
  * Build the exact eTIMS payload for an order without sending it.
  * Useful for the dry-run / payload-tester UI.
  */
+/**
+ * eTIMS / receipt buyer. A sale billed to a linked customer (e.g. a distributor)
+ * is that customer's tax invoice: its name and KRA PIN (snapshotted on the order
+ * when the cashier switched) win; the typed contact PIN only fills a blank PIN.
+ * Otherwise the typed contact, else walk-in.
+ */
+export function buyerOf(order, walkInName = 'Walk-in') {
+  if (order?.customerNo) {
+    return {
+      name: order.customerName || order.contactName || walkInName,
+      pin:  order.customerPin || order.contactPin || '',
+      no:   order.customerNo,
+    };
+  }
+  return { name: order?.contactName || walkInName, pin: order?.contactPin || '', no: order?.contactNo || '' };
+}
+
 export async function buildEtimsPayload(order, etimsNo = null) {
   const cfg = await loadEtims(order?.shopCode);
   const payments = paymentSummary(order);
@@ -126,8 +143,8 @@ export async function buildEtimsPayload(order, etimsNo = null) {
     invoiceNumber:     etimsNo || '<assigned at send-time>',
     traderInvoiceNo:   order.orderNo,
     customer: {
-      name:    order.contactName || 'Walk-in',
-      pin:     order.contactPin  || '',
+      name:    buyerOf(order).name,
+      pin:     buyerOf(order).pin,
       mobile:  order.contactPhone || '',
       address: '',
     },
@@ -161,8 +178,8 @@ export async function buildEtimsCreditMemoPayload(order, { creditNoteNumber, rea
     creditNoteNumber:      creditNoteNumber || '<assigned at send-time>',
     traderInvoiceNo:       `CN${order.orderNo}`,
     customer: {
-      name:    order.contactName || 'Walk-in',
-      pin:     order.contactPin  || '',
+      name:    buyerOf(order).name,
+      pin:     buyerOf(order).pin,
       mobile:  order.contactPhone || '',
       address: '',
     },
@@ -414,9 +431,10 @@ export async function buildPrintPayload(order, etimsResult) {
     : '';
   return {
     invoice_no:        order.orderNo,
-    customer_name:     order.contactName || 'Walk-in Customer',
-    customer_pin:      order.contactPin  || '',
-    customer_no:       order.contactNo   || '',
+    // A sale billed to a linked customer (e.g. distributor) shows that customer when no contact was typed.
+    customer_name:     buyerOf(order, 'Walk-in Customer').name,
+    customer_pin:      buyerOf(order).pin,
+    customer_no:       buyerOf(order).no,
     lpo_no:            '',
     mpesa_code:        payments.lines.map(p => p.reference).filter(Boolean).join(', '),
     email:             '',

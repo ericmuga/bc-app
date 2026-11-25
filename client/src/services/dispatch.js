@@ -73,6 +73,7 @@ export const dispatchApi = {
   prepackStock:   (company)        => api.get('/dispatch/prepacks/stock', { params: { company } }),
   createPrepacks: (body)           => api.post('/dispatch/prepacks', body),
   voidPrepack:    (id, reason)     => api.post(`/dispatch/prepacks/${id}/void`, { reason }),
+  voidPrepacks:   (body)           => api.post('/dispatch/prepacks/void', body),
   lookupPrepack:  (no, lineId)     => api.get('/dispatch/prepacks/lookup', { params: { no, lineId } }),
   prepackLabels:  (ids)            => api.get('/dispatch/prepacks/labels', { params: { ids: ids.join(',') }, responseType: 'blob' }),
   orderDpl:       (id, chiller)    => api.get(`/dispatch/orders/${id}/dpl`, { params: { chiller: chiller || undefined }, responseType: 'blob' }),
